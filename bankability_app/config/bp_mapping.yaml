@@ -1,0 +1,44 @@
+# Mapping label -> emplacement pour l'onglet resume du BP (Temps 1).
+# "sheet: null" = premiere feuille active du classeur.
+# Les labels sont recherches par correspondance normalisee (accents/casse/espaces
+# ignores) dans la grille de cellules ; la valeur retenue est la premiere cellule
+# non vide a droite du label (scalar_fields) ou la serie alignee sur la ligne
+# "Year" (series_fields).
+#
+# Temps 2 (a completer avec le classeur reel) : ajouter ici les emplacements du
+# detail par flux de revenus (arbitrage DA/ID, ancillary aFRR/FCR, capacite) et
+# du detail CAPEX/OPEX issus des onglets C-SPV / I-Project.
+sheet: null
+
+scalar_fields:
+  name: "Name"
+  location: "Location city"
+  segment: "Segment"
+  cod: "BESS commercial operation date (COD)"
+  operating_years: "BESS operating time"
+  usable_power_mw: "BESS Usable Power"
+  usable_energy_mwh: "BESS Usable Energy"
+  reported_irr: "IRR"
+  reported_wacc: "WACC"
+  reported_npv_keur: "NPV"
+  opex_year1_keur: "OPEX an 1 (live C-SPV, info)"
+  opex_adjustment_keur: "OPEX ajustement (k€, + = cout en plus)"
+  repowering: "Repowering (Oui/Non)"
+  capex_initial_keur: "CAPEX initial (live I-Project)"
+  capex_repowering_keur: "CAPEX repowering (live I-Project)"
+  turpe_fixed_eur_per_kw: "TURPE fixe - Grid charge Aurora (€/kW)"
+
+series_fields:
+  years: "Year"
+  capex_keur: "CAPEX"
+  opex_keur: "OPEX (live = C-SPV)"
+  end_of_life_keur: "End of Life Value"
+  revenues_keur: "Revenues"
+  turpe_keur: "TURPE (variable + fixe)"
+  net_cashflow_keur: "Net Cashflow"
+
+# Emplacements du detail par flux de revenu - non renseignes tant que le
+# classeur multi-onglets reel n'a pas ete fourni. Une fois disponibles, les
+# sensibilites DAM Spread / ID Spread / Cycles / Capacity Price s'activeront
+# automatiquement dans l'UI.
+revenue_detail_fields: {}

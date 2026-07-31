@@ -216,3 +216,8 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Business plans reels (donnees projet confidentielles) - jamais commites
+fichier_excel/
+*.xlsm
+

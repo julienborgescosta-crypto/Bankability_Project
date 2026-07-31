@@ -1,0 +1,42 @@
+# Mapping pour le classeur BP complet (multi-onglets), ex. "260612_BP_Stockage_Standalone__.xlsm".
+# Detecte automatiquement si les onglets series_sheet/scalar_sheet sont presents
+# (voir bp_parser.detect_format). Contrairement a bp_mapping.yaml (onglet resume
+# unique), ce format repartit l'information sur deux onglets :
+#  - scalar_sheet ("O-Control") : hypotheses projet + resultats economiques deja
+#    calcules par le modele (IRR, NPV, DSCR moyen/min, structure de financement).
+#  - series_sheet ("O-Financials") : cashflows annuels (P&L + Cashflows) sur
+#    toute la duree du projet.
+#
+# Chaque valeur peut etre soit une simple chaine (label, offset implicite = 1,
+# c-a-d la 1ere cellule non vide a droite du label), soit un mapping
+# {label: ..., offset: N} pour aller chercher la N-ieme cellule non vide (utile
+# quand plusieurs valeurs suivent le meme label, ex. "Debt" -> montant puis %).
+scalar_sheet: "O-Control"
+series_sheet: "O-Financials"
+
+scalar_fields:
+  name: "Name"
+  location: "Location city"
+  segment: "Segment"
+  cod: "BESS commercial operation date (COD)"
+  operating_years: "BESS operating time"
+  usable_power_mw: "ESS Usable Power @PoC (AC)"
+  usable_energy_mwh: "ESS Usable Energy @PoC BoL (AC)"
+  capex_initial_keur: "CAPEX (w/o DSRA and financing fees)"
+  reported_irr: "IRR"
+  reported_equity_irr: {label: "IRR", offset: 2}
+  reported_npv_keur: "NPV"
+  reported_dscr_avg: "Average DSCR"
+  reported_dscr_min: "Min. DSCR"
+  debt_tenor_years: "Maturity"
+  interest_rate: "All-in rate (fixed part)"
+  gearing_pct: {label: "Debt", offset: 2}
+  equity_discount_factor: "Equity discount factor"
+
+series_fields:
+  years: "Year"
+  capex_keur: "CAPEX (w/o DSRA and financing fees)"
+  opex_keur: "Operating Costs"
+  revenues_keur: "Revenues"
+  turpe_keur: "Operating Taxes"
+  end_of_life_keur: "BESS Repowering cost"
