@@ -7,22 +7,42 @@ en six couches decrite dans l'article de reference
 (Tudor Ionut Grigore) : revenue stack modelling, degradation/availability, bear case stress
 testing, sensitivity architecture, risk assessment layer, dashboard layer.
 
+## Installation
+
+```bash
+# Depuis bankability_app/ - cree un environnement virtuel dedie (une seule fois)
+py -m venv .venv
+
+# Windows
+.venv\Scripts\activate
+# macOS / Linux
+source .venv/bin/activate
+
+pip install -r requirements.txt
+pip install pytest pytest-cov ruff black   # outils de dev/test, pas necessaires pour juste lancer l'app
+```
+
 ## Commandes
+
+A executer avec le venv active (invite de commande prefixee par `(.venv)`) :
 
 ```bash
 # Lancer l'application
-py -m streamlit run app.py
+streamlit run app.py
 
 # Suite de tests
-py -m pytest tests/ -q
+pytest tests/ -q
 
 # Linting et formatage
-py -m ruff check core/ ui/ tests/ app.py --fix
-py -m black --line-length 100 core/ ui/ tests/ app.py
+ruff check core/ ui/ tests/ app.py --fix
+black --line-length 100 core/ ui/ tests/ app.py
 
 # Regenerer le fixture de test (format resume illustratif)
-py sample_data/build_sample_xlsx.py
+python sample_data/build_sample_xlsx.py
 ```
+
+Sans activer le venv, prefixer chaque commande par le chemin de son python
+(`.venv\Scripts\python.exe -m streamlit run app.py` sur Windows).
 
 ## Methodologie et provenance des donnees dans le BP
 
