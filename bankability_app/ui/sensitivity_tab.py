@@ -8,7 +8,9 @@ from core import sensitivity
 from core.models import ProjectInputs
 
 
-def _tornado_chart(rows: list[dict], metric: str, base_value: float, title: str, fmt: str) -> go.Figure:
+def _tornado_chart(
+    rows: list[dict], metric: str, base_value: float, title: str, fmt: str
+) -> go.Figure:
     labels = [r["variable"] for r in rows]
     low = [r[-0.20][metric] - base_value for r in rows]
     high = [r[0.20][metric] - base_value for r in rows]
@@ -26,7 +28,14 @@ def render(inputs: ProjectInputs, debt_kwargs: dict) -> None:
     st.subheader("Base Case Values")
     base_df = pd.DataFrame(
         {
-            "Variable": ["Project Capacity", "CAPEX Total", "OPEX Total", "Revenue Total", "Equity IRR (Base)", "DSCR (Base)"],
+            "Variable": [
+                "Project Capacity",
+                "CAPEX Total",
+                "OPEX Total",
+                "Revenue Total",
+                "Equity IRR (Base)",
+                "DSCR (Base)",
+            ],
             "Value": [
                 f"{inputs.usable_power_mw:.0f} MW",
                 f"{base.capex_total_keur:,.0f} k€".replace(",", " "),
@@ -46,7 +55,8 @@ def render(inputs: ProjectInputs, debt_kwargs: dict) -> None:
             "Variable": [r["variable"] for r in rows],
             **{
                 f"{shock:+.0%}": [
-                    f"{r[shock]['equity_irr']:.1%}" if r[shock]["equity_irr"] is not None else "n/a" for r in rows
+                    f"{r[shock]['equity_irr']:.1%}" if r[shock]["equity_irr"] is not None else "n/a"
+                    for r in rows
                 ]
                 for shock in sensitivity.SHOCKS
             },
@@ -66,7 +76,8 @@ def render(inputs: ProjectInputs, debt_kwargs: dict) -> None:
             "Variable": [r["variable"] for r in rows],
             **{
                 f"{shock:+.0%}": [
-                    f"{r[shock]['dscr_min']:.2f}x" if r[shock]["dscr_min"] is not None else "n/a" for r in rows
+                    f"{r[shock]['dscr_min']:.2f}x" if r[shock]["dscr_min"] is not None else "n/a"
+                    for r in rows
                 ]
                 for shock in sensitivity.SHOCKS
             },

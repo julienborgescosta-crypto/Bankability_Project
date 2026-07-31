@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from typing import Optional
-
 import numpy_financial as npf
 
 from .models import ProjectInputs, ProjectResults, YearlyResult
@@ -18,14 +16,14 @@ def annuity_payment(principal: float, rate: float, n_periods: int) -> float:
 def compute_results(
     inputs: ProjectInputs,
     *,
-    gearing_pct: Optional[float] = None,
-    interest_rate: Optional[float] = None,
-    debt_tenor_years: Optional[int] = None,
+    gearing_pct: float | None = None,
+    interest_rate: float | None = None,
+    debt_tenor_years: int | None = None,
     revenue_multiplier: float = 1.0,
     capex_multiplier: float = 1.0,
     opex_multiplier: float = 1.0,
     interest_rate_adj: float = 0.0,
-    degradation_multipliers: Optional[list[float]] = None,
+    degradation_multipliers: list[float] | None = None,
 ) -> ProjectResults:
     gearing = inputs.gearing_pct if gearing_pct is None else gearing_pct
     rate = (inputs.interest_rate if interest_rate is None else interest_rate) + interest_rate_adj
@@ -35,7 +33,7 @@ def compute_results(
     opex = [o * opex_multiplier for o in inputs.opex_keur]
     revenue = [r * revenue_multiplier for r in inputs.revenues_keur]
     if degradation_multipliers is not None:
-        revenue = [r * m for r, m in zip(revenue, degradation_multipliers)]
+        revenue = [r * m for r, m in zip(revenue, degradation_multipliers, strict=True)]
     turpe = list(inputs.turpe_keur)
     end_of_life = list(inputs.end_of_life_keur)
 
@@ -118,7 +116,7 @@ def compute_results(
     )
 
 
-def _safe_irr(cashflows: list[float]) -> Optional[float]:
+def _safe_irr(cashflows: list[float]) -> float | None:
     if not cashflows or all(c == 0 for c in cashflows):
         return None
     try:

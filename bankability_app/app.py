@@ -32,27 +32,46 @@ if st.session_state.get("bp_filename") != uploaded.name:
 inputs = st.session_state["bp_inputs"]
 bp_format = st.session_state.get("bp_format", "summary")
 st.caption(
-    "Format détecté : classeur complet (O-Financials / O-Control)" if bp_format == "full"
+    "Format détecté : classeur complet (O-Financials / O-Control)"
+    if bp_format == "full"
     else "Format détecté : onglet résumé"
 )
 
 with st.sidebar:
     st.header("Hypothèses de financement")
     if bp_format == "full":
-        st.caption("Valeurs par défaut extraites du BP (gearing, taux, maturité) — ajustables ci-dessous.")
+        st.caption(
+            "Valeurs par défaut extraites du BP (gearing, taux, maturité) — ajustables ci-dessous."
+        )
     else:
         st.caption("Non extraites du BP — à définir ici (ou par défaut).")
-    gearing_pct = st.slider("Gearing (dette / CAPEX)", 0, 95, int(inputs.gearing_pct * 100), step=5) / 100
-    interest_rate = st.slider("Taux d'intérêt de la dette", 1.0, 10.0, inputs.interest_rate * 100, step=0.1) / 100
+    gearing_pct = (
+        st.slider("Gearing (dette / CAPEX)", 0, 95, int(inputs.gearing_pct * 100), step=5) / 100
+    )
+    interest_rate = (
+        st.slider("Taux d'intérêt de la dette", 1.0, 10.0, inputs.interest_rate * 100, step=0.1)
+        / 100
+    )
     debt_tenor = st.slider("Tenor de la dette (années)", 5, 20, inputs.debt_tenor_years, step=1)
     wacc = st.slider("WACC", 1.0, 15.0, inputs.wacc * 100, step=0.1) / 100
     inputs.wacc = wacc
 
-debt_kwargs = dict(gearing_pct=gearing_pct, interest_rate=interest_rate, debt_tenor_years=debt_tenor)
+debt_kwargs = {
+    "gearing_pct": gearing_pct,
+    "interest_rate": interest_rate,
+    "debt_tenor_years": debt_tenor,
+}
 base_result = financial_engine.compute_results(inputs, **debt_kwargs)
 
 tabs = st.tabs(
-    ["Vue Projet", "Cashflow", "Scenario Analysis", "Sensitivity Analysis", "Stress-Test", "Risk Dashboard"]
+    [
+        "Vue Projet",
+        "Cashflow",
+        "Scenario Analysis",
+        "Sensitivity Analysis",
+        "Stress-Test",
+        "Risk Dashboard",
+    ]
 )
 
 with tabs[0]:

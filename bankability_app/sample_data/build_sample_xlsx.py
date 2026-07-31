@@ -13,9 +13,72 @@ import openpyxl
 
 YEARS = list(range(2027, 2060))  # 2027..2059 inclusive, 33 years
 
-OPEX_OP_YEARS = [469, 493, 501, 511, 515, 526, 534, 541, 547, 562, 571, 572, 582, 590, 601, 612, 638, 649, 661, 673]
-REVENUE_OP_YEARS = [3087, 2572, 2373, 2305, 2216, 2148, 2061, 1986, 1987, 1932, 1894, 1863, 1845, 1788, 1812, 1782, 1764, 1722, 1715, 1674]
-TURPE_OP_YEARS = [272, 265, 255, 253, 248, 245, 241, 238, 235, 232, 228, 225, 222, 219, 215, 213, 210, 272, 262, 256]
+OPEX_OP_YEARS = [
+    469,
+    493,
+    501,
+    511,
+    515,
+    526,
+    534,
+    541,
+    547,
+    562,
+    571,
+    572,
+    582,
+    590,
+    601,
+    612,
+    638,
+    649,
+    661,
+    673,
+]
+REVENUE_OP_YEARS = [
+    3087,
+    2572,
+    2373,
+    2305,
+    2216,
+    2148,
+    2061,
+    1986,
+    1987,
+    1932,
+    1894,
+    1863,
+    1845,
+    1788,
+    1812,
+    1782,
+    1764,
+    1722,
+    1715,
+    1674,
+]
+TURPE_OP_YEARS = [
+    272,
+    265,
+    255,
+    253,
+    248,
+    245,
+    241,
+    238,
+    235,
+    232,
+    228,
+    225,
+    222,
+    219,
+    215,
+    213,
+    210,
+    272,
+    262,
+    256,
+]
 
 N_OP_YEARS = len(OPEX_OP_YEARS)  # 20, matches "BESS operating time" = 20 years
 
@@ -63,7 +126,8 @@ def build(path: Path) -> None:
     series(16, "TURPE (variable + fixe)", _padded([-v for v in TURPE_OP_YEARS]))
 
     net_cf_op_years = [
-        rev - opex - turpe for rev, opex, turpe in zip(REVENUE_OP_YEARS, OPEX_OP_YEARS, TURPE_OP_YEARS)
+        rev - opex - turpe
+        for rev, opex, turpe in zip(REVENUE_OP_YEARS, OPEX_OP_YEARS, TURPE_OP_YEARS, strict=True)
     ]
     net_cf_row = _padded([float(v) for v in net_cf_op_years])
     net_cf_row[0] = -14707.0

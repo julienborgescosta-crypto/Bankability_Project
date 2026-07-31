@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 import openpyxl
 import yaml
@@ -9,7 +9,9 @@ import yaml
 from .models import ProjectInputs
 
 DEFAULT_MAPPING_PATH = Path(__file__).resolve().parent.parent / "config" / "bp_mapping.yaml"
-DEFAULT_FULL_MAPPING_PATH = Path(__file__).resolve().parent.parent / "config" / "bp_mapping_full.yaml"
+DEFAULT_FULL_MAPPING_PATH = (
+    Path(__file__).resolve().parent.parent / "config" / "bp_mapping_full.yaml"
+)
 FULL_FORMAT_SHEETS = {"O-Financials", "O-Control"}
 
 
@@ -23,18 +25,16 @@ def _normalize(value: Any) -> str:
 def _is_blank(value: Any) -> bool:
     if value is None:
         return True
-    if isinstance(value, str) and value.strip() in ("", "-"):
-        return True
-    return False
+    return isinstance(value, str) and value.strip() in ("", "-")
 
 
-def load_grid(file_or_path, sheet_name: Optional[str] = None) -> list[list[Any]]:
+def load_grid(file_or_path, sheet_name: str | None = None) -> list[list[Any]]:
     workbook = openpyxl.load_workbook(file_or_path, data_only=True)
     worksheet = workbook[sheet_name] if sheet_name else workbook.active
     return [[cell.value for cell in row] for row in worksheet.iter_rows()]
 
 
-def _find_label(grid: list[list[Any]], label: str) -> tuple[Optional[list[Any]], Optional[int]]:
+def _find_label(grid: list[list[Any]], label: str) -> tuple[list[Any] | None, int | None]:
     target = _normalize(label)
     for row in grid:
         for idx, cell in enumerate(row):
@@ -121,7 +121,7 @@ def parse_summary_bp(file_or_path, mapping_path: Path = DEFAULT_MAPPING_PATH) ->
         value = _scalar_value(grid, scalar_fields[key])
         return default if value is None else value
 
-    def scalar_float(key: str) -> Optional[float]:
+    def scalar_float(key: str) -> float | None:
         value = _scalar_value(grid, scalar_fields[key])
         return None if value is None else float(value)
 
@@ -157,7 +157,7 @@ def parse_summary_bp(file_or_path, mapping_path: Path = DEFAULT_MAPPING_PATH) ->
 
 
 def detect_format(file_or_path) -> str:
-    """"full" = the real multi-tab model (O-Financials + O-Control present),
+    """ "full" = the real multi-tab model (O-Financials + O-Control present),
     "summary" = a single-tab export like the illustrative CSV/xlsx fixture."""
     workbook = openpyxl.load_workbook(file_or_path, read_only=True)
     sheets = set(workbook.sheetnames)
@@ -212,7 +212,7 @@ def parse_full_bp(file_or_path, mapping_path: Path = DEFAULT_FULL_MAPPING_PATH) 
         value = _scalar_value(scalar_grid, label, offset)
         return default if value is None else value
 
-    def scalar_float(key: str) -> Optional[float]:
+    def scalar_float(key: str) -> float | None:
         label, offset = _field_spec(scalar_fields[key])
         value = _scalar_value(scalar_grid, label, offset)
         return None if value is None else float(value)
@@ -223,7 +223,10 @@ def parse_full_bp(file_or_path, mapping_path: Path = DEFAULT_FULL_MAPPING_PATH) 
     revenue_series = series_of("revenues_keur")
     eol_series = series_of("end_of_life_keur", required=False)
     net_cf_series = [
-        c + o + t + r + e for c, o, t, r, e in zip(capex_series, opex_series, turpe_series, revenue_series, eol_series)
+        c + o + t + r + e
+        for c, o, t, r, e in zip(
+            capex_series, opex_series, turpe_series, revenue_series, eol_series, strict=True
+        )
     ]
 
     interest_rate = scalar_float("interest_rate")

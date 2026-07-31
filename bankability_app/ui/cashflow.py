@@ -27,14 +27,32 @@ def render(inputs: ProjectInputs, result: ProjectResults) -> None:
     fig.add_bar(x=df["Année"], y=df["TURPE"], name="TURPE", marker_color="#c98a3b")
     fig.add_bar(x=df["Année"], y=df["CAPEX"], name="CAPEX", marker_color="#555555")
     fig.add_trace(
-        go.Scatter(x=df["Année"], y=df["Net Cashflow"], name="Net Cashflow", mode="lines+markers", line=dict(color="#1f4e79", width=3))
+        go.Scatter(
+            x=df["Année"],
+            y=df["Net Cashflow"],
+            name="Net Cashflow",
+            mode="lines+markers",
+            line={"color": "#1f4e79", "width": 3},
+        )
     )
-    fig.update_layout(barmode="relative", title="Cashflow annuel (k€, réel)", legend=dict(orientation="h"))
+    fig.update_layout(
+        barmode="relative", title="Cashflow annuel (k€, réel)", legend={"orientation": "h"}
+    )
     st.plotly_chart(fig, use_container_width=True)
 
     fig_dscr = go.Figure()
-    fig_dscr.add_trace(go.Scatter(x=df["Année"], y=df["DSCR"], mode="lines+markers", name="DSCR", line=dict(color="#1f4e79")))
-    fig_dscr.add_hline(y=1.30, line_dash="dash", line_color="#c98a3b", annotation_text="Seuil bancaire usuel 1.30x")
+    fig_dscr.add_trace(
+        go.Scatter(
+            x=df["Année"],
+            y=df["DSCR"],
+            mode="lines+markers",
+            name="DSCR",
+            line={"color": "#1f4e79"},
+        )
+    )
+    fig_dscr.add_hline(
+        y=1.30, line_dash="dash", line_color="#c98a3b", annotation_text="Seuil bancaire usuel 1.30x"
+    )
     fig_dscr.update_layout(title="DSCR annuel", yaxis_title="DSCR (x)")
     st.plotly_chart(fig_dscr, use_container_width=True)
 

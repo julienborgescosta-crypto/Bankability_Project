@@ -9,7 +9,9 @@ _RENDER = {"red": st.error, "amber": st.warning, "green": st.success}
 
 
 def render(inputs: ProjectInputs, result: ProjectResults) -> None:
-    st.caption("Alertes générées automatiquement par franchissement de seuils (config/risk_thresholds.yaml).")
+    st.caption(
+        "Alertes générées automatiquement par franchissement de seuils (config/risk_thresholds.yaml)."
+    )
     thresholds = risk_rules.load_thresholds()
     flags = risk_rules.evaluate_risks(inputs, result, thresholds)
     for flag in flags:

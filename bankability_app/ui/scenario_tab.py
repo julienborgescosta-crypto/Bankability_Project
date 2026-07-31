@@ -24,7 +24,12 @@ def render(inputs: ProjectInputs, debt_kwargs: dict) -> None:
             ]
             for name, factors in defaults.items()
         },
-        index=["Revenue Multiplier (x)", "CAPEX Multiplier (x)", "OPEX Multiplier (x)", "Interest Rate Adj (+/-)"],
+        index=[
+            "Revenue Multiplier (x)",
+            "CAPEX Multiplier (x)",
+            "OPEX Multiplier (x)",
+            "Interest Rate Adj (+/-)",
+        ],
     )[SCENARIO_ORDER]
 
     edited = st.data_editor(factor_df, use_container_width=True, key="scenario_factor_editor")
@@ -51,7 +56,8 @@ def render(inputs: ProjectInputs, debt_kwargs: dict) -> None:
             "Total Revenue (Y1, k€)": first_op_year.revenue_keur if first_op_year else 0.0,
             "Total CAPEX (k€)": result.capex_total_keur,
             "Total OPEX (Y1, k€)": abs(first_op_year.opex_keur) if first_op_year else 0.0,
-            "Interest Rate": debt_kwargs.get("interest_rate", inputs.interest_rate) + factors.interest_rate_adj,
+            "Interest Rate": debt_kwargs.get("interest_rate", inputs.interest_rate)
+            + factors.interest_rate_adj,
             "Debt Amount (k€)": result.debt_amount_keur,
             "Equity Amount (k€)": result.equity_amount_keur,
         }
@@ -64,11 +70,25 @@ def render(inputs: ProjectInputs, debt_kwargs: dict) -> None:
     st.divider()
     st.subheader("Résultats par scénario")
     cols = st.columns(len(SCENARIO_ORDER))
-    for col, name in zip(cols, SCENARIO_ORDER):
+    for col, name in zip(cols, SCENARIO_ORDER, strict=True):
         _, result = results[name]
         with col:
             st.markdown(f"**{name}**")
-            st.metric("Equity IRR", f"{result.equity_irr:.1%}" if result.equity_irr is not None else "n/a")
-            st.metric("Project IRR", f"{result.project_irr:.1%}" if result.project_irr is not None else "n/a")
-            st.metric("DSCR min", f"{result.dscr_min:.2f}x" if result.dscr_min is not None else "n/a")
-            st.metric("NPV (k€)", f"{result.npv_keur:,.0f}".replace(",", " ") if result.npv_keur is not None else "n/a")
+            st.metric(
+                "Equity IRR", f"{result.equity_irr:.1%}" if result.equity_irr is not None else "n/a"
+            )
+            st.metric(
+                "Project IRR",
+                f"{result.project_irr:.1%}" if result.project_irr is not None else "n/a",
+            )
+            st.metric(
+                "DSCR min", f"{result.dscr_min:.2f}x" if result.dscr_min is not None else "n/a"
+            )
+            st.metric(
+                "NPV (k€)",
+                (
+                    f"{result.npv_keur:,.0f}".replace(",", " ")
+                    if result.npv_keur is not None
+                    else "n/a"
+                ),
+            )

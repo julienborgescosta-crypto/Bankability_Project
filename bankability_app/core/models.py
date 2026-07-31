@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Optional
+from dataclasses import dataclass
 
 
 @dataclass
@@ -9,9 +8,9 @@ class RevenueBreakdown:
     """Per-stream revenue series (k€). Populated only once a detailed multi-tab
     BP (C-SPV / I-Project) is parsed; None when only the summary tab is available."""
 
-    arbitrage_keur: Optional[list[float]] = None
-    contracted_keur: Optional[list[float]] = None
-    ancillary_keur: Optional[list[float]] = None
+    arbitrage_keur: list[float] | None = None
+    contracted_keur: list[float] | None = None
+    ancillary_keur: list[float] | None = None
 
 
 @dataclass
@@ -39,12 +38,12 @@ class ProjectInputs:
     turpe_keur: list[float]
     net_cashflow_keur: list[float]
 
-    reported_irr: Optional[float] = None
-    reported_equity_irr: Optional[float] = None
-    reported_wacc: Optional[float] = None
-    reported_npv_keur: Optional[float] = None
-    reported_dscr_avg: Optional[float] = None
-    reported_dscr_min: Optional[float] = None
+    reported_irr: float | None = None
+    reported_equity_irr: float | None = None
+    reported_wacc: float | None = None
+    reported_npv_keur: float | None = None
+    reported_dscr_avg: float | None = None
+    reported_dscr_min: float | None = None
 
     # Financing assumptions are not extracted from the BP (it reports project-level
     # cashflows, not a debt schedule) - these are editable defaults set in the UI.
@@ -53,7 +52,7 @@ class ProjectInputs:
     interest_rate: float = 0.05
     debt_tenor_years: int = 15
 
-    revenue_detail: Optional[RevenueBreakdown] = None
+    revenue_detail: RevenueBreakdown | None = None
 
 
 @dataclass
@@ -67,19 +66,19 @@ class YearlyResult:
     cfads_keur: float
     net_cashflow_keur: float
     debt_service_keur: float
-    dscr: Optional[float]
+    dscr: float | None
     equity_cashflow_keur: float
 
 
 @dataclass
 class ProjectResults:
     yearly: list[YearlyResult]
-    project_irr: Optional[float]
-    equity_irr: Optional[float]
-    npv_keur: Optional[float]
+    project_irr: float | None
+    equity_irr: float | None
+    npv_keur: float | None
     capex_total_keur: float
     debt_amount_keur: float
     equity_amount_keur: float
     debt_service_keur: float
-    dscr_min: Optional[float]
-    dscr_avg: Optional[float]
+    dscr_min: float | None
+    dscr_avg: float | None
