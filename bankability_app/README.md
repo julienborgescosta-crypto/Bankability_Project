@@ -9,35 +9,42 @@ testing, sensitivity architecture, risk assessment layer, dashboard layer.
 
 ## Installation
 
+Toujours depuis `bankability_app/` (pas la racine du repo) :
+
 ```bash
-# Depuis bankability_app/ - cree un environnement virtuel dedie (une seule fois)
 py -m venv .venv
-
-# Windows
-.venv\Scripts\activate
-# macOS / Linux
-source .venv/bin/activate
-
-pip install -r requirements.txt
-pip install pytest pytest-cov ruff black   # outils de dev/test, pas necessaires pour juste lancer l'app
+.venv\Scripts\python.exe -m pip install -r requirements.txt
+.venv\Scripts\python.exe -m pip install pytest pytest-cov ruff black   # outils dev/test, optionnels pour juste lancer l'app
 ```
 
 ## Commandes
 
-A executer avec le venv active (invite de commande prefixee par `(.venv)`) :
+**Sans activer le venv** (fonctionne toujours, y compris si PowerShell bloque les scripts
+`.ps1` non signes — erreur "l'execution de scripts est desactivee sur ce systeme") : prefixer
+chaque commande par `.venv\Scripts\python.exe -m`.
 
 ```bash
-# Lancer l'application
+.venv\Scripts\python.exe -m streamlit run app.py
+.venv\Scripts\python.exe -m pytest tests/ -q
+.venv\Scripts\python.exe -m ruff check core/ ui/ tests/ app.py --fix
+.venv\Scripts\python.exe -m black --line-length 100 core/ ui/ tests/ app.py
+.venv\Scripts\python.exe sample_data/build_sample_xlsx.py
+```
+
+**En activant le venv** (invite de commande prefixee par `(.venv)`, commandes plus courtes
+ensuite) — necessite que l'execution de scripts PowerShell soit autorisee :
+
+```powershell
+# Une seule fois par utilisateur, si l'activation echoue avec une erreur de execution policy
+Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+
+.venv\Scripts\activate       # PowerShell/cmd, Windows
+source .venv/bin/activate    # macOS / Linux
+
 streamlit run app.py
-
-# Suite de tests
 pytest tests/ -q
-
-# Linting et formatage
 ruff check core/ ui/ tests/ app.py --fix
 black --line-length 100 core/ ui/ tests/ app.py
-
-# Regenerer le fixture de test (format resume illustratif)
 python sample_data/build_sample_xlsx.py
 ```
 
