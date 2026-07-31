@@ -41,6 +41,23 @@ def test_project_irr_below_wacc_is_red(simple_inputs):
     assert wacc_flag.level == "red"
 
 
+def test_target_dscr_overrides_generic_amber_threshold(simple_inputs):
+    """DSCR ~1.41 (gearing 50%, defaut de simple_inputs) est vert sous le seuil
+    generique (1.30x) mais doit devenir orange si le covenant du projet
+    (I-Project "Target DSCR") est plus strict (1.5x)."""
+    result = financial_engine.compute_results(simple_inputs)
+    assert result.dscr_min == pytest.approx(1.4132, abs=0.001)
+
+    flags_generic = risk_rules.evaluate_risks(simple_inputs, result, THRESHOLDS)
+    assert _flag(flags_generic, "DSCR min").level == "green"
+
+    simple_inputs.target_dscr = 1.5
+    flags_with_target = risk_rules.evaluate_risks(simple_inputs, result, THRESHOLDS)
+    dscr_flag = _flag(flags_with_target, "DSCR min")
+    assert dscr_flag.level == "amber"
+    assert "cible du projet" in dscr_flag.message
+
+
 def test_load_thresholds_reads_the_config_file():
     thresholds = risk_rules.load_thresholds()
     assert thresholds["dscr_min_amber"] == pytest.approx(1.30)

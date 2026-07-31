@@ -91,6 +91,37 @@ def test_parse_bp_dispatches_on_detected_format(sample_summary_bp_path, sample_f
     assert full_inputs.name == "Synthetic Project"
 
 
+def test_parse_full_bp_tolerates_missing_i_project_sheet(sample_full_bp_path):
+    """sample_full_bp_path n'a pas d'onglet I-Project - les champs correspondants
+    doivent retomber sur leurs defauts plutot que faire planter le parsing."""
+    inputs = bp_parser.parse_full_bp(sample_full_bp_path)
+
+    assert inputs.target_dscr is None
+    assert inputs.reported_capex_i_project_keur is None
+    assert inputs.repowering_gearing_pct == pytest.approx(0.70)
+    assert inputs.repowering_interest_rate == pytest.approx(0.05)
+    assert inputs.repowering_debt_tenor_years == 10
+
+
+def test_parse_full_bp_extracts_i_project_fields_with_occurrence(
+    sample_full_bp_with_i_project_path,
+):
+    """I-Project repete "Maturity" et "All-in rate (fixed part)" une fois pour la
+    dette senior (occurrence 1, deja lue depuis O-Control) et une fois pour la
+    dette de repowering (occurrence 2) - verifie qu'on lit bien la bonne."""
+    inputs = bp_parser.parse_full_bp(sample_full_bp_with_i_project_path)
+
+    assert inputs.target_dscr == pytest.approx(1.5)
+    assert inputs.reported_capex_i_project_keur == pytest.approx(-1050.0)
+    assert inputs.repowering_gearing_pct == pytest.approx(0.6)
+    assert inputs.repowering_interest_rate == pytest.approx(0.09)  # occurrence 2, pas 0.07
+    assert inputs.repowering_debt_tenor_years == 8  # occurrence 2, pas 10
+
+    # La dette senior (issue de O-Control, pas d'I-Project) reste inchangee.
+    assert inputs.interest_rate == pytest.approx(0.05)
+    assert inputs.debt_tenor_years == 2
+
+
 def test_parse_summary_bp_raises_on_missing_year_row(tmp_path):
     import openpyxl
 

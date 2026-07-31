@@ -28,6 +28,18 @@ def evaluate_risks(
     thresholds = thresholds or load_thresholds()
     flags: list[RiskFlag] = []
 
+    # Le covenant DSCR cible du projet (I-Project "Target DSCR - Period 1"), quand
+    # il est extrait du BP, remplace le seuil "confortable" generique de la config -
+    # c'est le vrai chiffre negocie par ce projet avec son preteur, plus specifique
+    # que notre defaut 1.30x. Le seuil "critique" (dscr_min_red), lui, reste generique
+    # : le BP n'expose pas de covenant de defaut distinct du target DSCR de sizing.
+    dscr_min_amber = (
+        inputs.target_dscr if inputs.target_dscr is not None else thresholds["dscr_min_amber"]
+    )
+    amber_label = (
+        "cible du projet (I-Project)" if inputs.target_dscr is not None else "bancaire usuel"
+    )
+
     dscr_min = result.dscr_min
     if dscr_min is None:
         flags.append(
@@ -45,12 +57,12 @@ def evaluate_risks(
                 f"DSCR min {dscr_min:.2f}x sous le seuil critique {thresholds['dscr_min_red']:.2f}x.",
             )
         )
-    elif dscr_min < thresholds["dscr_min_amber"]:
+    elif dscr_min < dscr_min_amber:
         flags.append(
             RiskFlag(
                 "DSCR min",
                 "amber",
-                f"DSCR min {dscr_min:.2f}x sous le seuil bancaire usuel {thresholds['dscr_min_amber']:.2f}x.",
+                f"DSCR min {dscr_min:.2f}x sous le seuil {amber_label} {dscr_min_amber:.2f}x.",
             )
         )
     else:

@@ -56,11 +56,43 @@ with st.sidebar:
     wacc = st.slider("WACC", 1.0, 15.0, inputs.wacc * 100, step=0.1) / 100
     inputs.wacc = wacc
 
-debt_kwargs = {
-    "gearing_pct": gearing_pct,
-    "interest_rate": interest_rate,
-    "debt_tenor_years": debt_tenor,
-}
+    debt_kwargs = {
+        "gearing_pct": gearing_pct,
+        "interest_rate": interest_rate,
+        "debt_tenor_years": debt_tenor,
+    }
+
+    has_repowering_capex = sum(1 for c in inputs.capex_keur if c < 0) > 1
+    if has_repowering_capex:
+        st.divider()
+        st.header("Dette de repowering")
+        st.caption(
+            "Facility séparée de la dette initiale (2e sortie de CAPEX détectée dans le BP)."
+        )
+        repowering_gearing_pct = (
+            st.slider("Gearing repowering", 0, 95, int(inputs.repowering_gearing_pct * 100), step=5)
+            / 100
+        )
+        repowering_interest_rate = (
+            st.slider(
+                "Taux d'intérêt repowering",
+                1.0,
+                10.0,
+                inputs.repowering_interest_rate * 100,
+                step=0.1,
+            )
+            / 100
+        )
+        repowering_debt_tenor = st.slider(
+            "Tenor repowering (années)", 5, 20, inputs.repowering_debt_tenor_years, step=1
+        )
+        debt_kwargs.update(
+            {
+                "repowering_gearing_pct": repowering_gearing_pct,
+                "repowering_interest_rate": repowering_interest_rate,
+                "repowering_debt_tenor_years": repowering_debt_tenor,
+            }
+        )
 base_result = financial_engine.compute_results(inputs, **debt_kwargs)
 
 tabs = st.tabs(

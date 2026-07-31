@@ -52,6 +52,21 @@ class ProjectInputs:
     interest_rate: float = 0.05
     debt_tenor_years: int = 15
 
+    # Repowering debt is a separate facility from the initial senior debt (own
+    # closing date, gearing, rate, maturity - see I-Project section 6 "Financing").
+    # Defaults mirror the initial tranche's when not extracted from the BP.
+    repowering_gearing_pct: float = 0.70
+    repowering_interest_rate: float = 0.05
+    repowering_debt_tenor_years: int = 10
+
+    # Project-specific DSCR covenant target (I-Project "Target DSCR"), used by
+    # risk_rules.py in place of the generic config threshold when available.
+    target_dscr: float | None = None
+    # CAPEX total as stated in I-Project, for cross-check against the CAPEX series
+    # sourced from O-Financials/O-Control - a discrepancy has been observed on at
+    # least one real project and is not yet explained (docs/specs/bp_parsing.md).
+    reported_capex_i_project_keur: float | None = None
+
     revenue_detail: RevenueBreakdown | None = None
 
 
@@ -82,3 +97,13 @@ class ProjectResults:
     debt_service_keur: float
     dscr_min: float | None
     dscr_avg: float | None
+
+    # Breakdown between the initial senior debt tranche and the repowering debt
+    # tranche (0.0 when there is no repowering CAPEX year in the series). The
+    # aggregate fields above are the sum of both tranches.
+    capex_total_initial_keur: float = 0.0
+    capex_total_repowering_keur: float = 0.0
+    debt_amount_initial_keur: float = 0.0
+    debt_amount_repowering_keur: float = 0.0
+    debt_service_initial_keur: float = 0.0
+    debt_service_repowering_keur: float = 0.0

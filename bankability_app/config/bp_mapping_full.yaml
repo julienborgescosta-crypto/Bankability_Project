@@ -8,11 +8,19 @@
 #    toute la duree du projet.
 #
 # Chaque valeur peut etre soit une simple chaine (label, offset implicite = 1,
-# c-a-d la 1ere cellule non vide a droite du label), soit un mapping
-# {label: ..., offset: N} pour aller chercher la N-ieme cellule non vide (utile
-# quand plusieurs valeurs suivent le meme label, ex. "Debt" -> montant puis %).
+# occurrence implicite = 1), soit un mapping {label: ..., offset: N, occurrence: M} :
+#  - offset = N-ieme cellule non vide a droite du label (utile quand plusieurs
+#    valeurs suivent le meme label, ex. "Debt" -> montant puis %)
+#  - occurrence = N-ieme ligne portant ce libelle (utile quand le meme libelle
+#    est repete sous plusieurs sections, ex. "All-in rate (fixed part)" apparait
+#    une fois pour la dette senior et une fois pour la dette de repowering dans
+#    I-Project)
 scalar_sheet: "O-Control"
 series_sheet: "O-Financials"
+# Optionnel : onglet d'hypotheses source (le plus detaille - CAPEX poste par
+# poste, financing terms complets). Tolere si absent du classeur (parse_full_bp
+# continue avec les champs i_project_fields a None).
+i_project_sheet: "I-Project"
 
 scalar_fields:
   name: "Name"
@@ -40,3 +48,19 @@ series_fields:
   revenues_keur: "Revenues"
   turpe_keur: "Operating Taxes"
   end_of_life_keur: "BESS Repowering cost"
+
+# Champs lus dans i_project_sheet (2e tranche de dette repowering, DSCR cible du
+# projet, CAPEX de reference pour recoupement avec celui de O-Control/O-Financials
+# - un ecart entre les deux a ete observe sur au moins un projet reel, non
+# encore explique, voir docs/specs/bp_parsing.md).
+#
+# IMPORTANT : contrairement a O-Control (libelle | valeur | unite), les lignes
+# d'I-Project sont structurees libelle | unite | valeur (ex. "Maturity | years | 10")
+# - la valeur est donc la 2e cellule non vide apres le libelle, pas la 1ere.
+# Tous les champs ci-dessous ont donc offset: 2.
+i_project_fields:
+  reported_capex_i_project_keur: {label: "CAPEX (w/o DSRA and financing fees)", offset: 2}
+  target_dscr: {label: "Target DSCR - Period 1", offset: 2}
+  repowering_gearing_pct: {label: "Gearing", offset: 2}
+  repowering_interest_rate: {label: "All-in rate (fixed part)", offset: 2, occurrence: 2}
+  repowering_debt_tenor_years: {label: "Maturity", offset: 2, occurrence: 2}

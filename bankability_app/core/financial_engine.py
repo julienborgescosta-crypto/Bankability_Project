@@ -19,6 +19,9 @@ def compute_results(
     gearing_pct: float | None = None,
     interest_rate: float | None = None,
     debt_tenor_years: int | None = None,
+    repowering_gearing_pct: float | None = None,
+    repowering_interest_rate: float | None = None,
+    repowering_debt_tenor_years: int | None = None,
     revenue_multiplier: float = 1.0,
     capex_multiplier: float = 1.0,
     opex_multiplier: float = 1.0,
@@ -28,6 +31,19 @@ def compute_results(
     gearing = inputs.gearing_pct if gearing_pct is None else gearing_pct
     rate = (inputs.interest_rate if interest_rate is None else interest_rate) + interest_rate_adj
     tenor = inputs.debt_tenor_years if debt_tenor_years is None else debt_tenor_years
+    rep_gearing = (
+        inputs.repowering_gearing_pct if repowering_gearing_pct is None else repowering_gearing_pct
+    )
+    rep_rate = (
+        inputs.repowering_interest_rate
+        if repowering_interest_rate is None
+        else repowering_interest_rate
+    ) + interest_rate_adj
+    rep_tenor = (
+        inputs.repowering_debt_tenor_years
+        if repowering_debt_tenor_years is None
+        else repowering_debt_tenor_years
+    )
 
     capex = [c * capex_multiplier for c in inputs.capex_keur]
     opex = [o * opex_multiplier for o in inputs.opex_keur]
@@ -37,15 +53,40 @@ def compute_results(
     turpe = list(inputs.turpe_keur)
     end_of_life = list(inputs.end_of_life_keur)
 
-    capex_total = -sum(c for c in capex if c < 0)
-    debt_amount = gearing * capex_total
-    equity_amount = capex_total - debt_amount
-    debt_service = annuity_payment(debt_amount, rate, tenor)
+    # Repowering CAPEX is a separate debt facility from the initial senior debt
+    # (own gearing/rate/tenor - see I-Project section 6 "Financing"). Detected as
+    # the 2nd CAPEX outflow year in the series, if any; a 3rd+ outflow (unusual)
+    # is bundled into the repowering tranche rather than adding a 3rd facility.
+    capex_out_indices = [i for i, c in enumerate(capex) if c < 0]
+    repowering_index = capex_out_indices[1] if len(capex_out_indices) > 1 else None
+
+    def _is_repowering_year(i: int) -> bool:
+        return repowering_index is not None and i >= repowering_index
+
+    capex_total_initial = -sum(
+        c for i, c in enumerate(capex) if c < 0 and not _is_repowering_year(i)
+    )
+    capex_total_repowering = -sum(
+        c for i, c in enumerate(capex) if c < 0 and _is_repowering_year(i)
+    )
+
+    debt_amount_initial = gearing * capex_total_initial
+    equity_amount_initial = capex_total_initial - debt_amount_initial
+    debt_service_initial = annuity_payment(debt_amount_initial, rate, tenor)
+
+    debt_amount_repowering = rep_gearing * capex_total_repowering
+    equity_amount_repowering = capex_total_repowering - debt_amount_repowering
+    debt_service_repowering = annuity_payment(debt_amount_repowering, rep_rate, rep_tenor)
+
+    capex_total = capex_total_initial + capex_total_repowering
+    debt_amount = debt_amount_initial + debt_amount_repowering
+    equity_amount = equity_amount_initial + equity_amount_repowering
 
     yearly: list[YearlyResult] = []
     net_cashflow_series: list[float] = []
     equity_cashflow_series: list[float] = []
     op_year_counter = 0
+    op_year_counter_repowering = 0
     # Debt service must only start once operations actually begin - a construction/
     # ramp-up year with no CAPEX outflow but zero revenue yet (e.g. COD falls a year
     # after the last CAPEX disbursement) must not be mistaken for an operating year,
@@ -61,7 +102,13 @@ def compute_results(
 
         if capex_out != 0:
             # capex_out is negative -> equity_share comes out negative (an outflow), as required for IRR.
-            equity_share = equity_amount * (capex_out / capex_total) if capex_total else 0.0
+            tranche_total = (
+                capex_total_repowering if _is_repowering_year(i) else capex_total_initial
+            )
+            tranche_equity = (
+                equity_amount_repowering if _is_repowering_year(i) else equity_amount_initial
+            )
+            equity_share = tranche_equity * (capex_out / tranche_total) if tranche_total else 0.0
             dscr = None
             ds_year = 0.0
             equity_cf = equity_share
@@ -71,7 +118,11 @@ def compute_results(
             equity_cf = cfads
         else:
             op_year_counter += 1
-            ds_year = debt_service if op_year_counter <= tenor else 0.0
+            ds_year = debt_service_initial if op_year_counter <= tenor else 0.0
+            if repowering_index is not None and i > repowering_index:
+                op_year_counter_repowering += 1
+                if op_year_counter_repowering <= rep_tenor:
+                    ds_year += debt_service_repowering
             dscr = (cfads / ds_year) if ds_year > 0 else None
             equity_cf = cfads - ds_year
 
@@ -110,9 +161,15 @@ def compute_results(
         capex_total_keur=capex_total,
         debt_amount_keur=debt_amount,
         equity_amount_keur=equity_amount,
-        debt_service_keur=debt_service,
+        debt_service_keur=debt_service_initial + debt_service_repowering,
         dscr_min=dscr_min,
         dscr_avg=dscr_avg,
+        capex_total_initial_keur=capex_total_initial,
+        capex_total_repowering_keur=capex_total_repowering,
+        debt_amount_initial_keur=debt_amount_initial,
+        debt_amount_repowering_keur=debt_amount_repowering,
+        debt_service_initial_keur=debt_service_initial,
+        debt_service_repowering_keur=debt_service_repowering,
     )
 
 

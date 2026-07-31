@@ -60,7 +60,9 @@ L'app supporte deux formats de classeur Excel, detectes automatiquement
   `config/bp_mapping.yaml`. Illustre par `sample_data/260612_BP_Stockage_Standalone__Claude.xlsx`.
 - **Format complet** — classeur reel multi-onglets, reconnu a la presence des onglets
   `O-Financials` (P&L + cashflows annuels) et `O-Control` (hypotheses + resultats deja calcules).
-  Mapping : `config/bp_mapping_full.yaml`.
+  Un 3e onglet, `I-Project` (hypotheses source les plus detaillees : CAPEX poste par poste,
+  termes de financement complets, dette de repowering separee), est lu s'il est present -
+  tolere s'il est absent. Mapping : `config/bp_mapping_full.yaml`.
 
 Dans les deux cas, le parsing se fait **par recherche de libelle** dans la grille de cellules
 (pas par adresse de cellule fixe) — voir `docs/specs/bp_parsing.md` pour le detail de cette
@@ -117,6 +119,7 @@ limitation que le detail par flux de la couche 1.
 | Donnee | Format resume | Format complet |
 |---|---|---|
 | CAPEX (total) | ligne `CAPEX` (onglet unique) | ligne `CAPEX (w/o DSRA and financing fees)` de `O-Financials` |
+| CAPEX (recoupement) | — | libelle `CAPEX (w/o DSRA and financing fees)` de `I-Project` (offset 2 — voir piege libelle/unite/valeur ci-dessous). Un ecart d'~1000 k€ avec la valeur ci-dessus a ete observe sur un projet reel, non explique — les deux valeurs sont affichees cote a cote (`docs/specs/bp_parsing.md`) |
 | OPEX (total) | ligne `OPEX (live = C-SPV)` | ligne `Operating Costs` de `O-Financials` |
 | TURPE / taxes d'exploitation | ligne `TURPE (variable + fixe)` | ligne `Operating Taxes` de `O-Financials` (regroupe TURPE + IFER/TFPB/CFE/CVAE) |
 
@@ -135,10 +138,19 @@ pour DSCR/Equity IRR) :
 
 | Donnee | Format resume | Format complet |
 |---|---|---|
-| Gearing (% dette) | non disponible (defaut UI 70%) | 2e valeur non-vide apres le libelle `Debt` de `O-Control` |
-| Taux d'interet | non disponible (defaut UI 5%) | libelle `All-in rate (fixed part)` de `O-Control` |
-| Maturite de la dette | non disponible (defaut UI 15 ans) | libelle `Maturity` de `O-Control` |
+| Gearing (% dette, tranche initiale) | non disponible (defaut UI 70%) | 2e valeur non-vide apres le libelle `Debt` de `O-Control` |
+| Taux d'interet (tranche initiale) | non disponible (defaut UI 5%) | libelle `All-in rate (fixed part)` de `O-Control` |
+| Maturite de la dette (tranche initiale) | non disponible (defaut UI 15 ans) | libelle `Maturity` de `O-Control` |
 | WACC | libelle `WACC` (onglet unique, si present) | absent du BP — approxime par un blend `gearing x taux dette + (1-gearing) x "Equity discount factor"` (voir `docs/specs/bp_parsing.md`) |
+| DSCR cible du projet (covenant) | non disponible | libelle `Target DSCR - Period 1` de `I-Project` (offset 2) — remplace le seuil orange generique dans le Risk Dashboard quand present |
+| Gearing / taux / maturite (tranche repowering) | non disponible (defauts UI 70%/5%/10 ans) | section "BESS Repowering debt" de `I-Project` : libelles `Gearing`, `All-in rate (fixed part)` (occurrence 2), `Maturity` (occurrence 2), tous offset 2 |
+
+La dette de repowering est une **2e tranche independante** de la dette initiale (voir
+`docs/specs/financial_engine.md`) : detectee automatiquement comme la 2e sortie de CAPEX dans
+la serie annuelle (`capex_keur`), avec son propre gearing/taux/tenor. Sans 2e sortie de CAPEX
+dans la serie, cette tranche reste a 0 quel que soit le contenu d'`I-Project` (ex. Belle Epine a
+des termes de dette repowering definis dans `I-Project` mais `Repowering: Non` dans sa serie
+CAPEX — la tranche repowering ne s'active donc pas).
 
 ### 6. Dashboard Layer
 
@@ -191,8 +203,8 @@ Modules (`core/`) :
 | Module | Role | Couche(s) de la methodologie |
 |---|---|---|
 | `models.py` | Dataclasses pivot : `ProjectInputs`, `YearlyResult`, `ProjectResults` | — |
-| `bp_parser.py` | Lecture Excel -> `ProjectInputs` (2 formats, detection automatique) | 1, 5bis, techniques |
-| `financial_engine.py` | IRR / NPV / dette a gearing fixe / DSCR annuel | 1, 5bis |
+| `bp_parser.py` | Lecture Excel -> `ProjectInputs` (2 formats, detection automatique, `I-Project` optionnel) | 1, 5bis, techniques |
+| `financial_engine.py` | IRR / NPV / dette a 2 tranches (initiale + repowering) / DSCR annuel | 1, 5bis |
 | `degradation.py` | Courbes de degradation additionnelle (Base / Conservative) | 2 |
 | `scenarios.py` | Scenarios Bear (P10) / Base (P50) / Bull (P90) | 3 (variante) |
 | `sensitivity.py` | Sensibilite one-way (tornado) ±10%/±20% | 4 |
@@ -203,7 +215,7 @@ Configuration (`config/`) :
 
 - `bp_mapping.yaml` — mapping libelle -> emplacement pour le format resume (1 onglet)
 - `bp_mapping_full.yaml` — mapping libelle -> emplacement pour le format complet
-  (`O-Financials` + `O-Control`)
+  (`O-Financials` + `O-Control` + `I-Project` optionnel)
 - `risk_thresholds.yaml` — seuils du dashboard de risques (DSCR, hurdle rate, marge WACC)
 
 Chaque module ci-dessus a sa spec retrospective dans `docs/specs/` (objectif, decisions,
@@ -227,15 +239,18 @@ positives** (valeurs d'info, pas des flux de cashflow) — ne pas les confondre 
 
 ## Limites connues
 
-- **Dette a gearing fixe, pas de dette sculptee** : le moteur financier utilise une annuite
-  constante, pas le vrai echeancier de dette senior (DSRA, commitment fees, cash sweep) que
-  contient le format complet. Le DSCR "reel" du BP (`ProjectInputs.reported_dscr_avg/min`) est
-  affiche cote a cote avec le DSCR recalcule pour comparaison, jamais masque.
+- **Dette a gearing fixe (par tranche), pas de dette sculptee** : chaque tranche (initiale et
+  repowering, voir couche 5bis) utilise une annuite constante, pas le vrai echeancier de dette
+  senior (DSRA, commitment fees, cash sweep) que contient le format complet. Le DSCR "reel" du
+  BP (`ProjectInputs.reported_dscr_avg/min`) est affiche cote a cote avec le DSCR recalcule pour
+  comparaison, jamais masque.
 - **Detail des revenus par flux de marche non implemente** — voir couche 1 ci-dessus et
   `docs/specs/bp_parsing.md`, section "Questions ouvertes".
 - **Ecart NPV** (format resume) : le NPV recalcule ne correspond pas exactement au NPV du BP
   source (IRR, lui, correspond quasi exactement) — hypothese non confirmee de convention de
   taux (reel vs nominal) differente.
+- **Ecart CAPEX entre `O-Control` et `I-Project`** (~1000 k€ sur un projet reel observe) — voir
+  couche 4 ci-dessus et `docs/specs/bp_parsing.md`, section "Questions ouvertes".
 
 ## Donnees confidentielles
 

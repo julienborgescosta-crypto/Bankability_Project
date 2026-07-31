@@ -34,31 +34,42 @@ def load_grid(file_or_path, sheet_name: str | None = None) -> list[list[Any]]:
     return [[cell.value for cell in row] for row in worksheet.iter_rows()]
 
 
-def _find_label(grid: list[list[Any]], label: str) -> tuple[list[Any] | None, int | None]:
+def _find_label(
+    grid: list[list[Any]], label: str, occurrence: int = 1
+) -> tuple[list[Any] | None, int | None]:
+    """Some sheets (I-Project) repeat the same label under different sections
+    (e.g. "All-in rate (fixed part)" for both the senior debt and the repowering
+    debt). `occurrence` picks the Nth match (1-indexed, in grid/row-then-column
+    scan order) rather than always the first."""
     target = _normalize(label)
-    for row in grid:
-        for idx, cell in enumerate(row):
-            if _normalize(cell) == target:
-                return row, idx
-    for row in grid:
-        for idx, cell in enumerate(row):
-            norm = _normalize(cell)
-            if norm and norm.startswith(target):
-                return row, idx
+    matches = [
+        (row, idx) for row in grid for idx, cell in enumerate(row) if _normalize(cell) == target
+    ]
+    if not matches:
+        matches = [
+            (row, idx)
+            for row in grid
+            for idx, cell in enumerate(row)
+            if _normalize(cell) and _normalize(cell).startswith(target)
+        ]
+    if len(matches) >= occurrence:
+        return matches[occurrence - 1]
     return None, None
 
 
-def _field_spec(entry: Any) -> tuple[str, int]:
+def _field_spec(entry: Any) -> tuple[str, int, int]:
     """A mapping entry is either a plain label string (offset=1: the first non-blank
-    cell to the right of the label) or {label, offset} to pick the Nth such cell -
-    e.g. a row like "Debt | 19251 (k€) | 70% (gearing)" needs offset=2 for the %."""
+    cell to the right of the label, occurrence=1: the first row bearing that label)
+    or {label, offset, occurrence} - e.g. a row like "Debt | 19251 (k€) | 70% (gearing)"
+    needs offset=2 for the %, and a label repeated across sections (senior vs
+    repowering debt) needs occurrence=2 to reach the second one."""
     if isinstance(entry, dict):
-        return entry["label"], int(entry.get("offset", 1))
-    return entry, 1
+        return entry["label"], int(entry.get("offset", 1)), int(entry.get("occurrence", 1))
+    return entry, 1, 1
 
 
-def _scalar_value(grid: list[list[Any]], label: str, offset: int = 1) -> Any:
-    row, idx = _find_label(grid, label)
+def _scalar_value(grid: list[list[Any]], label: str, offset: int = 1, occurrence: int = 1) -> Any:
+    row, idx = _find_label(grid, label, occurrence)
     if row is None:
         return None
     seen = 0
@@ -174,17 +185,33 @@ def parse_bp(file_or_path) -> ProjectInputs:
     return parse_summary_bp(file_or_path)
 
 
+def _load_optional_grid(file_or_path, sheet_name: str | None) -> list[list[Any]] | None:
+    """Like load_grid, but returns None (instead of raising) when the sheet is
+    absent - used for I-Project, which is a nice-to-have source, not required
+    for parse_full_bp to succeed."""
+    if not sheet_name:
+        return None
+    if hasattr(file_or_path, "seek"):
+        file_or_path.seek(0)
+    try:
+        return load_grid(file_or_path, sheet_name=sheet_name)
+    except KeyError:
+        return None
+
+
 def parse_full_bp(file_or_path, mapping_path: Path = DEFAULT_FULL_MAPPING_PATH) -> ProjectInputs:
     mapping = load_mapping(mapping_path)
     scalar_grid = load_grid(file_or_path, sheet_name=mapping["scalar_sheet"])
     if hasattr(file_or_path, "seek"):
         file_or_path.seek(0)
     series_grid = load_grid(file_or_path, sheet_name=mapping["series_sheet"])
+    i_project_grid = _load_optional_grid(file_or_path, mapping.get("i_project_sheet"))
+    i_project_fields = mapping.get("i_project_fields", {})
 
     scalar_fields = mapping["scalar_fields"]
     series_fields = mapping["series_fields"]
 
-    years_label, _ = _field_spec(series_fields["years"])
+    years_label, _, _ = _field_spec(series_fields["years"])
     year_row, year_col = _find_label(series_grid, years_label)
     if year_row is None:
         raise ValueError(
@@ -204,17 +231,24 @@ def parse_full_bp(file_or_path, mapping_path: Path = DEFAULT_FULL_MAPPING_PATH) 
     start_col = year_col + 1
 
     def series_of(key: str, required: bool = True) -> list[float]:
-        label, _ = _field_spec(series_fields[key])
+        label, _, _ = _field_spec(series_fields[key])
         return _series_values(series_grid, label, start_col, length, required=required)
 
     def scalar_of(key: str, default: Any = None) -> Any:
-        label, offset = _field_spec(scalar_fields[key])
-        value = _scalar_value(scalar_grid, label, offset)
+        label, offset, occurrence = _field_spec(scalar_fields[key])
+        value = _scalar_value(scalar_grid, label, offset, occurrence)
         return default if value is None else value
 
     def scalar_float(key: str) -> float | None:
-        label, offset = _field_spec(scalar_fields[key])
-        value = _scalar_value(scalar_grid, label, offset)
+        label, offset, occurrence = _field_spec(scalar_fields[key])
+        value = _scalar_value(scalar_grid, label, offset, occurrence)
+        return None if value is None else float(value)
+
+    def i_project_float(key: str) -> float | None:
+        if i_project_grid is None or key not in i_project_fields:
+            return None
+        label, offset, occurrence = _field_spec(i_project_fields[key])
+        value = _scalar_value(i_project_grid, label, offset, occurrence)
         return None if value is None else float(value)
 
     capex_series = series_of("capex_keur")
@@ -274,4 +308,9 @@ def parse_full_bp(file_or_path, mapping_path: Path = DEFAULT_FULL_MAPPING_PATH) 
         gearing_pct=gearing_pct if gearing_pct is not None else 0.70,
         interest_rate=interest_rate if interest_rate is not None else 0.05,
         debt_tenor_years=int(tenor) if tenor else 15,
+        repowering_gearing_pct=i_project_float("repowering_gearing_pct") or 0.70,
+        repowering_interest_rate=i_project_float("repowering_interest_rate") or 0.05,
+        repowering_debt_tenor_years=(int(i_project_float("repowering_debt_tenor_years") or 10)),
+        target_dscr=i_project_float("target_dscr"),
+        reported_capex_i_project_keur=i_project_float("reported_capex_i_project_keur"),
     )
