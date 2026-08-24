@@ -296,6 +296,52 @@ def test_dscr_sizing_two_tranches_sequential(repowering_inputs):
         assert result.yearly[i].dscr is None
 
 
+def test_repowering_ramp_up_gap_not_counted_as_operating_year_dscr_mode(
+    repowering_with_ramp_up_inputs,
+):
+    """Regression : une annee sans CAPEX mais aussi sans revenu APRES le
+    repowering (chantier qui deborde sur l'annee suivante) ne doit pas etre
+    comptee comme la 1ere annee d'exploitation de la tranche repowering - meme
+    bug que le ramp-up initial (test_ramp_up_year_...), reintroduit ici avant
+    correction (first_op_index_after_repowering)."""
+    repowering_with_ramp_up_inputs.target_dscr = 1.3
+    result = financial_engine.compute_results(
+        repowering_with_ramp_up_inputs, debt_sizing_mode="dscr"
+    )
+
+    ramp_up_year = result.yearly[7]  # 2032 : pas de CAPEX, pas encore de revenu.
+    assert ramp_up_year.capex_keur == 0.0
+    assert ramp_up_year.revenue_keur == 0.0
+    assert ramp_up_year.debt_service_keur == 0.0
+    assert ramp_up_year.dscr is None
+
+    # Le service de la tranche repowering demarre a la 1ere vraie annee
+    # d'exploitation apres le flottement (2033, index 8), pas des 2032.
+    for i in (8, 9, 10):
+        assert result.yearly[i].debt_service_keur > 0
+        assert result.yearly[i].dscr is not None
+    # Tenor repowering (3 ans, indices 8-10) expire ensuite.
+    assert result.yearly[11].debt_service_keur == 0.0
+    assert result.yearly[11].dscr is None
+
+
+def test_repowering_ramp_up_gap_not_counted_as_operating_year_gearing_mode(
+    repowering_with_ramp_up_inputs,
+):
+    """Meme protection attendue en mode gearing fixe (la fenetre de service
+    depend de _tranche_service_schedule, commune aux deux modes)."""
+    result = financial_engine.compute_results(
+        repowering_with_ramp_up_inputs, debt_sizing_mode="gearing"
+    )
+
+    ramp_up_year = result.yearly[7]
+    assert ramp_up_year.debt_service_keur == 0.0
+    assert ramp_up_year.dscr is None
+    for i in (8, 9, 10):
+        assert result.yearly[i].debt_service_keur > 0
+    assert result.yearly[11].debt_service_keur == 0.0
+
+
 def test_no_repowering_tranche_when_single_capex_year(simple_inputs):
     """simple_inputs n'a qu'une seule sortie de CAPEX -> pas de tranche repowering,
     comportement identique a avant l'introduction de la 2e tranche (non-regression)."""

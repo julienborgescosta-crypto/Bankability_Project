@@ -155,6 +155,54 @@ def repowering_inputs() -> ProjectInputs:
 
 
 @pytest.fixture
+def repowering_with_ramp_up_inputs() -> ProjectInputs:
+    """Comme repowering_inputs, mais avec une annee de flottement APRES le CAPEX
+    de repowering (2032 : pas de CAPEX, mais pas encore de revenu non plus -
+    chantier de repowering qui deborde sur l'annee suivante). Sert a verifier
+    que la tranche repowering beneficie de la meme protection anti-flottement
+    que la tranche initiale (first_op_index_after_repowering), au lieu de
+    demarrer son service de dette des repowering_index + 1 sans verification."""
+    years = list(range(2025, 2037))  # 2025..2036
+    capex = [-1000.0] + [0.0] * 5 + [-600.0] + [0.0] * 5
+    # 2032 (index 7) : flottement post-repowering, revenu nul, petit cout de
+    # chantier -> CFADS legerement negatif, comme le ramp-up initial.
+    revenues = [0.0] + [500.0] * 5 + [0.0, 0.0] + [500.0] * 4
+    opex = [0.0] + [-100.0] * 5 + [0.0, -10.0] + [-100.0] * 4
+    turpe = [0.0] + [-20.0] * 5 + [0.0, 0.0] + [-20.0] * 4
+    return ProjectInputs(
+        name="Repowering Ramp-up Project",
+        location="Testville",
+        segment="HTB1",
+        cod="2026-01-01",
+        operating_years=10,
+        usable_power_mw=10.0,
+        usable_energy_mwh=20.0,
+        capex_initial_keur=1000.0,
+        capex_repowering_keur=600.0,
+        repowering=True,
+        opex_year1_keur=100.0,
+        opex_adjustment_keur=0.0,
+        turpe_fixed_eur_per_kw=0.0,
+        years=years,
+        capex_keur=capex,
+        opex_keur=opex,
+        end_of_life_keur=[0.0] * len(years),
+        revenues_keur=revenues,
+        turpe_keur=turpe,
+        net_cashflow_keur=[
+            c + o + t + r for c, o, t, r in zip(capex, opex, turpe, revenues, strict=True)
+        ],
+        wacc=0.10,
+        gearing_pct=0.7,
+        interest_rate=0.05,
+        debt_tenor_years=3,
+        repowering_gearing_pct=0.6,
+        repowering_interest_rate=0.08,
+        repowering_debt_tenor_years=3,
+    )
+
+
+@pytest.fixture
 def sample_summary_bp_path() -> Path:
     path = SAMPLE_DATA_DIR / "260612_BP_Stockage_Standalone__Claude.xlsx"
     assert path.exists(), "Fixture manquante - lancer sample_data/build_sample_xlsx.py"

@@ -150,6 +150,16 @@ resultat est negatif (une sortie de cash pour l'actionnaire), pas positif.
    annee de construction tardive sans CAPEX ni revenu — le service de la dette s'appliquait
    alors a un CFADS negatif, donnant un DSCR negatif absurde. Regression coverte par
    `tests/test_financial_engine.py::test_ramp_up_year_without_capex_or_revenue_has_no_debt_service`.
+4. **Meme bug que #3, reintroduit pour la tranche repowering.** L'introduction de la dette a 2
+   tranches a demarre la fenetre/planning de service de la tranche repowering directement a
+   `repowering_index + 1`, sans verifier qu'un revenu y etait deja present — un chantier de
+   repowering qui deborde sur l'annee suivante (CAPEX fini, exploitation pas encore reprise)
+   aurait ete traite comme la 1ere annee d'exploitation de cette tranche. Corrige par
+   `first_op_index_after_repowering` (miroir exact de `first_op_index` pour la tranche
+   repowering). Signale par l'utilisateur ("dette avec repowering simplifiee"). Regression
+   couverte par `test_repowering_ramp_up_gap_not_counted_as_operating_year_dscr_mode` et
+   `..._gearing_mode` (fixture dediee `repowering_with_ramp_up_inputs`, la seule des fixtures
+   existantes a avoir un flottement post-repowering).
 
 ## Tests
 
@@ -180,6 +190,9 @@ Dimensionnement par DSCR :
   directs (formule, cas limites : taux nul, cible nulle/negative, aucun tirage)
 - `test_upfront_fee_increases_the_gearing_cap`, `test_gearing_mode_ignores_upfront_fee_and_idc`
   (isolation confirmee : le mode gearing reste identique avec ou sans frais renseignes)
+- Fixture dediee `repowering_with_ramp_up_inputs` (flottement d'un an apres le CAPEX de
+  repowering) + `test_repowering_ramp_up_gap_not_counted_as_operating_year_dscr_mode` /
+  `..._gearing_mode` : regression du bug #4 ci-dessus, verifiee dans les deux modes
 
 ## Questions ouvertes
 

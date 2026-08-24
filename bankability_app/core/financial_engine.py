@@ -200,6 +200,16 @@ def compute_results(
     # after the last CAPEX disbursement) must not be mistaken for an operating year,
     # or DSCR comes out spuriously negative for that year.
     first_op_index = next((i for i, r in enumerate(revenue) if r != 0), length)
+    # Same ramp-up protection for the repowering tranche: operations don't
+    # necessarily resume the very year after the repowering CAPEX outflow (e.g.
+    # a repowering construction spanning into the following year) - without this,
+    # repowering debt service could start against a still-zero CFADS year, same
+    # bug class as the initial tranche's ramp-up (see financial_engine.md).
+    first_op_index_after_repowering = (
+        next((i for i in range(repowering_index + 1, length) if revenue[i] != 0), length)
+        if repowering_index is not None
+        else None
+    )
 
     if debt_sizing_mode == "dscr":
         effective_target_dscr = inputs.target_dscr if target_dscr is None else target_dscr
@@ -249,7 +259,10 @@ def compute_results(
         ]
         rep_window = [
             cfads_list[i] - initial_schedule[i]
-            for i in range(repowering_index + 1, min(repowering_index + 1 + rep_tenor, length))
+            for i in range(
+                first_op_index_after_repowering,
+                min(first_op_index_after_repowering + rep_tenor, length),
+            )
         ]
         # No upfront-fee field is extracted for the repowering tranche (not
         # present in I-Project's repowering debt section).
@@ -267,7 +280,9 @@ def compute_results(
         debt_amount_repowering = rep_gearing * capex_total_repowering
         repowering_service = annuity_payment(debt_amount_repowering, rep_rate, rep_tenor)
     repowering_schedule = (
-        _tranche_service_schedule(length, capex, repowering_index, repowering_service, rep_tenor)
+        _tranche_service_schedule(
+            length, capex, first_op_index_after_repowering - 1, repowering_service, rep_tenor
+        )
         if repowering_index is not None
         else [0.0] * length
     )
