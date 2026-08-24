@@ -20,6 +20,26 @@ CORE_VARIABLES: dict[str, dict] = {
 DETAILED_VARIABLES = ["DAM Spread", "ID Spread", "Cycles", "Capacity Price"]
 
 
+def shocked_compute_kwargs(
+    kind: str, shock: float, debt_kwargs: dict, base_gearing: float, base_interest: float
+) -> dict:
+    """Builds the financial_engine.compute_results() kwargs for one shocked variable -
+    shared by run_sensitivity() and acquisition.run_acquisition_sensitivity() so both
+    shock the same variables the same way."""
+    kwargs = dict(debt_kwargs)
+    if kind == "revenue_multiplier":
+        kwargs["revenue_multiplier"] = 1 + shock
+    elif kind == "capex_multiplier":
+        kwargs["capex_multiplier"] = 1 + shock
+    elif kind == "opex_multiplier":
+        kwargs["opex_multiplier"] = 1 + shock
+    elif kind == "interest_rate_relative":
+        kwargs["interest_rate"] = base_interest * (1 + shock)
+    elif kind == "gearing_relative":
+        kwargs["gearing_pct"] = min(max(base_gearing * (1 + shock), 0.0), 0.95)
+    return kwargs
+
+
 def run_sensitivity(inputs: ProjectInputs, debt_kwargs: dict) -> tuple[ProjectResults, list[dict]]:
     base = financial_engine.compute_results(inputs, **debt_kwargs)
     base_gearing = debt_kwargs.get("gearing_pct", inputs.gearing_pct)
@@ -29,18 +49,9 @@ def run_sensitivity(inputs: ProjectInputs, debt_kwargs: dict) -> tuple[ProjectRe
     for label, spec in CORE_VARIABLES.items():
         row = {"variable": label}
         for shock in SHOCKS:
-            kwargs = dict(debt_kwargs)
-            kind = spec["kind"]
-            if kind == "revenue_multiplier":
-                kwargs["revenue_multiplier"] = 1 + shock
-            elif kind == "capex_multiplier":
-                kwargs["capex_multiplier"] = 1 + shock
-            elif kind == "opex_multiplier":
-                kwargs["opex_multiplier"] = 1 + shock
-            elif kind == "interest_rate_relative":
-                kwargs["interest_rate"] = base_interest * (1 + shock)
-            elif kind == "gearing_relative":
-                kwargs["gearing_pct"] = min(max(base_gearing * (1 + shock), 0.0), 0.95)
+            kwargs = shocked_compute_kwargs(
+                spec["kind"], shock, debt_kwargs, base_gearing, base_interest
+            )
             result = financial_engine.compute_results(inputs, **kwargs)
             row[shock] = {"equity_irr": result.equity_irr, "dscr_min": result.dscr_min}
         rows.append(row)

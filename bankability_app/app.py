@@ -8,7 +8,15 @@ import streamlit as st
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from core import bp_parser, financial_engine
-from ui import cashflow, overview, risk_tab, scenario_tab, sensitivity_tab, stress_tab
+from ui import (
+    acquisition_tab,
+    cashflow,
+    overview,
+    risk_tab,
+    scenario_tab,
+    sensitivity_tab,
+    stress_tab,
+)
 
 st.set_page_config(page_title="Bancabilité BESS", layout="wide")
 st.title("Outil de bancabilité BESS")
@@ -103,6 +111,7 @@ tabs = st.tabs(
         "Sensitivity Analysis",
         "Stress-Test",
         "Risk Dashboard",
+        "Acquisition (M&A)",
     ]
 )
 
@@ -118,3 +127,5 @@ with tabs[4]:
     stress_tab.render(inputs, debt_kwargs)
 with tabs[5]:
     risk_tab.render(inputs, base_result)
+with tabs[6]:
+    acquisition_tab.render(inputs, base_result, debt_kwargs)

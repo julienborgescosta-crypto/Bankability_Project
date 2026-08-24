@@ -154,11 +154,29 @@ CAPEX — la tranche repowering ne s'active donc pas).
 
 ### 6. Dashboard Layer
 
-Implemente : les six onglets Streamlit (`app.py` + `ui/*.py`) — Vue Projet, Cashflow, Scenario
+Implemente : les onglets Streamlit (`app.py` + `ui/*.py`) — Vue Projet, Cashflow, Scenario
 Analysis, Sensitivity Analysis, Stress-Test, Risk Dashboard — chacun affichant les flags/valeurs
 produits par les couches precedentes, avec pour chaque metrique cle la valeur recalculee **et**
 la valeur deja presente dans le BP source quand elle existe (`ProjectInputs.reported_*`), pour
 comparaison directe plutot que remplacement silencieux.
+
+### Extension hors 6 couches : Acquisition (M&A)
+
+Pas une des six couches de l'article, mais une reformulation de la meme sortie (le moteur
+financier) pour une question differente : *combien peut-on payer pour acquerir ce projet (SPV)
+plutot que de le developper en interne, tout en tenant un rendement equity cible ?* Onglet
+"Acquisition (M&A)", derriere une case a cocher (`ui/acquisition_tab.py`).
+
+Implemente (`core/acquisition.py`) : la prime d'acquisition maximale n'est jamais une
+hypothese — elle se resout comme `NPV(rendement cible, serie de cashflows equity)`, qui equivaut
+a `PV(flux equity futurs @ rendement cible) - Equity de base requis`. Reutilise directement
+`ProjectResults.equity_amount_keur` et `YearlyResult.equity_cashflow_keur` deja calcules par la
+couche 5bis — aucune nouvelle donnee BP necessaire. Sensibilite de cette prime sur les 5 memes
+variables que la couche 4 (Revenue, CAPEX, OPEX, Interest Rate, Debt Ratio — OPEX sert de proxy
+au "grid cost" de la methode source, qui n'a pas d'equivalent isole dans ce modele). Complete
+par une table de reperes de marche par stade de developpement (droits de developpement, RTB,
+actifs en exploitation) — purement informative, jamais utilisee dans le calcul. Voir
+`docs/specs/acquisition_valuation.md` pour la formule detaillee et sa source.
 
 ### Hypotheses techniques / projet (hors 6 couches)
 
@@ -190,12 +208,14 @@ flowchart TB
     E --> I[sensitivity.run_sensitivity]
     E --> J[stress_test.run_stress_matrix]
     G --> K[risk_rules.evaluate_risks]
+    G --> L[acquisition.compute_acquisition_valuation]
 
     G --> UI1[Vue Projet / Cashflow]
     H --> UI2[Scenario Analysis]
     I --> UI3[Sensitivity Analysis]
     J --> UI4[Stress-Test]
     K --> UI5[Risk Dashboard]
+    L --> UI6[Acquisition M&A]
 ```
 
 Modules (`core/`) :
@@ -210,6 +230,7 @@ Modules (`core/`) :
 | `sensitivity.py` | Sensibilite one-way (tornado) ±10%/±20% | 4 |
 | `stress_test.py` | Matrice de stress combine (revenu x degradation) | 3 |
 | `risk_rules.py` | Regles de seuils -> flags rouge/orange/vert | 5 |
+| `acquisition.py` | Prime d'acquisition maximale (M&A) + sensibilite | extension hors 6 couches |
 
 Configuration (`config/`) :
 
