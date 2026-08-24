@@ -19,6 +19,41 @@ def test_annuity_payment_no_principal_or_no_tenor_is_zero():
     assert financial_engine.annuity_payment(500.0, 0.05, 0) == 0.0
 
 
+def test_present_value_matches_manual_discounting():
+    pv = financial_engine.present_value([100.0, 100.0], 0.10)
+    assert pv == pytest.approx(100 / 1.10 + 100 / 1.10**2)
+
+
+def test_present_value_zero_rate_is_plain_sum():
+    assert financial_engine.present_value([50.0, 30.0, 20.0], 0.0) == pytest.approx(100.0)
+
+
+def test_sculpt_debt_service_hits_target_every_year():
+    service = financial_engine.sculpt_debt_service([300.0, 600.0], 1.5)
+    assert service == pytest.approx([200.0, 400.0])
+
+
+def test_sculpt_debt_service_non_positive_target_is_zero():
+    assert financial_engine.sculpt_debt_service([300.0, 600.0], 0.0) == [0.0, 0.0]
+
+
+def test_capitalized_construction_interest_single_year_is_half_year_convention():
+    idc = financial_engine.capitalized_construction_interest([1000.0], 0.05)
+    assert idc == pytest.approx(1000.0 * ((1.05**0.5) - 1))
+
+
+def test_capitalized_construction_interest_earlier_draws_accrue_more():
+    idc = financial_engine.capitalized_construction_interest([500.0, 500.0], 0.05)
+    idc_first_only = 500.0 * ((1.05**1.5) - 1)
+    idc_second_only = 500.0 * ((1.05**0.5) - 1)
+    assert idc == pytest.approx(idc_first_only + idc_second_only)
+    assert idc_first_only > idc_second_only
+
+
+def test_capitalized_construction_interest_no_draws_is_zero():
+    assert financial_engine.capitalized_construction_interest([], 0.05) == 0.0
+
+
 def test_compute_results_yearly_breakdown(simple_inputs):
     result = financial_engine.compute_results(simple_inputs)
     expected_ds = 500.0 * 0.05 / (1 - 1.05**-2)
@@ -161,12 +196,16 @@ def test_dscr_sizing_hits_target_exactly_when_not_gearing_capped(simple_inputs):
 
 def test_dscr_sizing_capped_by_gearing_when_target_is_lax(simple_inputs):
     """Un target_dscr tres bas impliquerait une dette superieure au plafond de
-    gearing (50%) -> la dette est plafonnee, et le DSCR resultant est alors
-    MEILLEUR que le target (puisqu'on ne peut pas lever plus)."""
+    gearing (50%) -> la dette est plafonnee (au plafond gearing x (CAPEX + IDC),
+    pas juste gearing x CAPEX), et le DSCR resultant est alors MEILLEUR que le
+    target (puisqu'on ne peut pas lever plus)."""
     result = financial_engine.compute_results(
         simple_inputs, debt_sizing_mode="dscr", target_dscr=0.5
     )
-    assert result.debt_amount_initial_keur == pytest.approx(0.5 * result.capex_total_initial_keur)
+    draw = 0.5 * 1000.0  # gearing x CAPEX de l'annee de construction
+    idc = financial_engine.capitalized_construction_interest([draw], 0.05)
+    expected_cap = 0.5 * (result.capex_total_initial_keur + idc)
+    assert result.debt_amount_initial_keur == pytest.approx(expected_cap)
     assert result.dscr_min > 0.5
 
 
@@ -180,6 +219,57 @@ def test_dscr_sizing_matches_gearing_mode_debt_amount_at_equivalent_target(simpl
     gearing_equiv = dscr_result.debt_amount_initial_keur / dscr_result.capex_total_initial_keur
     gearing_result = financial_engine.compute_results(simple_inputs, gearing_pct=gearing_equiv)
     assert gearing_result.dscr_min == pytest.approx(dscr_result.dscr_min)
+
+
+def test_dscr_sculpting_tracks_varying_cfads(varying_cfads_inputs):
+    """CFADS varie chaque annee (200, 400, 300) - le service de la dette doit
+    suivre cette variation (sculpting reel : CFADS_annee / target chaque annee),
+    pas rester plat comme le ferait une annuite constante plafonnee par la pire
+    annee. DSCR doit rester exactement egal a la cible chaque annee, meme si le
+    service, lui, varie."""
+    result = financial_engine.compute_results(
+        varying_cfads_inputs, debt_sizing_mode="dscr", target_dscr=1.5
+    )
+    services = [y.debt_service_keur for y in result.yearly[1:4]]
+    assert services[0] == pytest.approx(200.0 / 1.5)
+    assert services[1] == pytest.approx(400.0 / 1.5)
+    assert services[2] == pytest.approx(300.0 / 1.5)
+    # Le service N'EST PAS constant : preuve que ce n'est pas une annuite deguisee.
+    assert len({round(s, 2) for s in services}) == 3
+
+    for year_result in result.yearly[1:4]:
+        assert year_result.dscr == pytest.approx(1.5)
+
+    # Verifie que ce n'est pas plafonne par le gearing (sinon DSCR > 1.5 partout).
+    draw = 0.7 * 1000.0
+    idc = financial_engine.capitalized_construction_interest([draw], 0.05)
+    expected_principal = financial_engine.present_value(services, 0.05)
+    assert expected_principal < 0.7 * (1000.0 + idc)
+    assert result.debt_amount_initial_keur == pytest.approx(expected_principal)
+
+
+def test_upfront_fee_increases_the_gearing_cap(simple_inputs):
+    """Avec un target_dscr assez bas pour etre plafonne par le gearing, un
+    upfront fee non nul doit AUGMENTER le plafond : le fee est finance au meme
+    ratio de gearing que le CAPEX, donc gonfle le besoin de financement total."""
+    without_fee = financial_engine.compute_results(
+        simple_inputs, debt_sizing_mode="dscr", target_dscr=0.5
+    )
+    simple_inputs.senior_debt_upfront_fee_pct = 0.02
+    with_fee = financial_engine.compute_results(
+        simple_inputs, debt_sizing_mode="dscr", target_dscr=0.5
+    )
+    assert with_fee.debt_amount_initial_keur > without_fee.debt_amount_initial_keur
+
+
+def test_gearing_mode_ignores_upfront_fee_and_idc(simple_inputs):
+    """Le mode gearing fixe doit rester totalement insensible aux frais/IDC
+    ajoutes pour le mode dscr - aucune regression de comportement attendue."""
+    baseline = financial_engine.compute_results(simple_inputs, gearing_pct=0.5)
+    simple_inputs.senior_debt_upfront_fee_pct = 0.05
+    still_same = financial_engine.compute_results(simple_inputs, gearing_pct=0.5)
+    assert still_same.debt_amount_initial_keur == pytest.approx(baseline.debt_amount_initial_keur)
+    assert still_same.dscr_min == pytest.approx(baseline.dscr_min)
 
 
 def test_dscr_sizing_two_tranches_sequential(repowering_inputs):

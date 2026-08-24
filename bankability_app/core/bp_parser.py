@@ -325,5 +325,6 @@ def parse_full_bp(file_or_path, mapping_path: Path = DEFAULT_FULL_MAPPING_PATH) 
         repowering_debt_tenor_years=(int(i_project_float("repowering_debt_tenor_years") or 10)),
         target_dscr=i_project_float("target_dscr"),
         reported_capex_i_project_keur=i_project_float("reported_capex_i_project_keur"),
+        senior_debt_upfront_fee_pct=i_project_float("senior_debt_upfront_fee_pct"),
         revenue_detail=revenue_detail,
     )

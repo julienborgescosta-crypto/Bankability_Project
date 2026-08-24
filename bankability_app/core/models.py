@@ -71,6 +71,11 @@ class ProjectInputs:
     # sourced from O-Financials/O-Control - a discrepancy has been observed on at
     # least one real project and is not yet explained (docs/specs/bp_parsing.md).
     reported_capex_i_project_keur: float | None = None
+    # One-off senior debt arrangement fee (% of the amount drawn), I-Project
+    # "Senior Debt Upfront fee" - folded into the financing need in debt_sizing_mode
+    # "dscr" only (see financial_engine.py). No equivalent field is extracted for
+    # the repowering tranche (not present in I-Project's repowering debt section).
+    senior_debt_upfront_fee_pct: float | None = None
 
     revenue_detail: RevenueBreakdown | None = None
 

@@ -71,3 +71,4 @@ i_project_fields:
   repowering_gearing_pct: {label: "Gearing", offset: 2}
   repowering_interest_rate: {label: "All-in rate (fixed part)", offset: 2, occurrence: 2}
   repowering_debt_tenor_years: {label: "Maturity", offset: 2, occurrence: 2}
+  senior_debt_upfront_fee_pct: {label: "Senior Debt Upfront fee", offset: 2}

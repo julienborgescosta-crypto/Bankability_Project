@@ -154,6 +154,7 @@ pour DSCR/Equity IRR) :
 | WACC | libelle `WACC` (onglet unique, si present) | absent du BP — approxime par un blend `gearing x taux dette + (1-gearing) x "Equity discount factor"` (voir `docs/specs/bp_parsing.md`) |
 | DSCR cible du projet (covenant) | non disponible | libelle `Target DSCR - Period 1` de `I-Project` (offset 2) — voir ci-dessous |
 | Gearing / taux / maturite (tranche repowering) | non disponible (defauts UI 70%/5%/10 ans) | section "BESS Repowering debt" de `I-Project` : libelles `Gearing`, `All-in rate (fixed part)` (occurrence 2), `Maturity` (occurrence 2), tous offset 2 |
+| Frais upfront de la dette senior | non disponible | libelle `Senior Debt Upfront fee` de `I-Project` (offset 2) — utilise uniquement en mode "Dimensionne par DSCR" |
 
 La dette de repowering est une **2e tranche independante** de la dette initiale (voir
 `docs/specs/financial_engine.md`) : detectee automatiquement comme la 2e sortie de CAPEX dans
@@ -163,13 +164,17 @@ des termes de dette repowering definis dans `I-Project` mais `Repowering: Non` d
 CAPEX — la tranche repowering ne s'active donc pas).
 
 **Deux modes de dimensionnement de la dette**, basculables dans la sidebar (`debt_sizing_mode`) :
-- **Gearing fixe** (defaut) : `Debt = gearing_pct x CAPEX`, le DSCR est un resultat.
+- **Gearing fixe** (defaut) : `Debt = gearing_pct x CAPEX`, annuite constante, le DSCR est un
+  resultat.
 - **Dimensionne par DSCR** (visible seulement si `Target DSCR` est extrait d'`I-Project`) : la
-  dette est calculee pour que `CFADS / service >= Target DSCR` sur toute la duree, plafonnee par
-  le gearing — reproduit la logique reelle utilisee par de nombreux BP (dette sculptee, pas
-  gearing fixe). Le gearing devient alors un plafond, pas un montant impose. **N'egale pas pour
-  autant le DSCR reel rapporte dans le BP** : voir `docs/specs/financial_engine.md`,
-  "Questions ouvertes", pour l'explication (la dette reelle a ete dimensionnee une fois, a la
+  dette est **sculptee** — `service_annee = CFADS_annee / Target DSCR` **chaque annee** (pas
+  juste dans la pire), en forme fermee (pas d'iteration necessaire malgre le fait que le BP
+  source resout le meme probleme par une macro VBA a iteration circulaire). Le principal est
+  plafonne par `gearing x (CAPEX + interets intercalaires capitalises + frais upfront de la
+  dette senior)` plutot que juste `gearing x CAPEX`. Le gearing devient alors un plafond, pas un
+  montant impose. **N'egale pas pour autant le DSCR reel rapporte dans le BP** (DSRA, commitment
+  fees et cash sweep restent non modelises) : voir `docs/specs/financial_engine.md`, "Questions
+  ouvertes", pour le detail (la dette reelle a par ailleurs ete dimensionnee une fois, a la
   cloture financiere, sur un cas de revenus potentiellement different de la serie actuelle).
 
 ### 6. Dashboard Layer
@@ -281,14 +286,17 @@ positives** (valeurs d'info, pas des flux de cashflow) — ne pas les confondre 
 
 ## Limites connues
 
-- **Annuite constante par tranche, pas de vrai echeancier de dette senior** : meme en mode
-  "dimensionne par DSCR" (voir couche 5bis), chaque tranche reste une annuite constante — pas
-  de DSRA, commitment fees, ni cash sweep, que contient le format complet. Le DSCR "reel" du BP
-  (`ProjectInputs.reported_dscr_avg/min`) est affiche cote a cote avec le DSCR recalcule pour
-  comparaison, jamais masque. Le mode "dimensionne par DSCR" **rapproche** les chiffres de la
-  realite sans les reproduire exactement — la dette reelle du BP a ete dimensionnee une seule
-  fois, a la cloture financiere, potentiellement sur un cas de revenus different de la serie
-  actuelle du fichier charge (voir `docs/specs/financial_engine.md`, "Questions ouvertes").
+- **Pas de vrai echeancier de dette senior, meme en mode "dimensionne par DSCR"** (voir couche
+  5bis) : ce mode sculpte le remboursement (variable par annee, formule fermee) et tient compte
+  des interets intercalaires capitalises et des frais upfront de la dette senior, mais pas de
+  DSRA (en tant que facility separee), de commitment fees, ni de cash sweep — que la vraie macro
+  de dimensionnement du BP source (VBA, resolue par iteration circulaire) prend en compte. Le
+  DSCR "reel" du BP (`ProjectInputs.reported_dscr_avg/min`) est affiche cote a cote avec le DSCR
+  recalcule pour comparaison, jamais masque. Le mode "dimensionne par DSCR" **rapproche** les
+  chiffres de la realite sans les reproduire exactement — la dette reelle du BP a par ailleurs
+  ete dimensionnee une seule fois, a la cloture financiere, potentiellement sur un cas de
+  revenus different de la serie actuelle du fichier charge (voir
+  `docs/specs/financial_engine.md`, "Questions ouvertes").
 - **Detail des revenus par flux de marche non implemente** — voir couche 1 ci-dessus et
   `docs/specs/bp_parsing.md`, section "Questions ouvertes".
 - **Ecart NPV** (format resume) : le NPV recalcule ne correspond pas exactement au NPV du BP

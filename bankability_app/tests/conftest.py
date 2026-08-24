@@ -42,6 +42,41 @@ def simple_inputs() -> ProjectInputs:
 
 
 @pytest.fixture
+def varying_cfads_inputs() -> ProjectInputs:
+    """4 annees : construction (CAPEX -1000) puis 3 annees d'exploitation avec un
+    CFADS DIFFERENT chaque annee (200, 400, 300) - contrairement a simple_inputs
+    (CFADS constant), sert a prouver que le dimensionnement DSCR sculpte vraiment
+    le remboursement (variable par annee) plutot que de plafonner une annuite
+    constante par la pire annee."""
+    return ProjectInputs(
+        name="Varying CFADS Project",
+        location="Testville",
+        segment="HTB1",
+        cod="2026-01-01",
+        operating_years=3,
+        usable_power_mw=10.0,
+        usable_energy_mwh=20.0,
+        capex_initial_keur=1000.0,
+        capex_repowering_keur=0.0,
+        repowering=False,
+        opex_year1_keur=80.0,
+        opex_adjustment_keur=0.0,
+        turpe_fixed_eur_per_kw=0.0,
+        years=[2025, 2026, 2027, 2028],
+        capex_keur=[-1000.0, 0.0, 0.0, 0.0],
+        opex_keur=[0.0, -80.0, -80.0, -80.0],
+        end_of_life_keur=[0.0, 0.0, 0.0, 0.0],
+        revenues_keur=[0.0, 300.0, 500.0, 400.0],
+        turpe_keur=[0.0, -20.0, -20.0, -20.0],
+        net_cashflow_keur=[-1000.0, 200.0, 400.0, 300.0],
+        wacc=0.10,
+        gearing_pct=0.7,
+        interest_rate=0.05,
+        debt_tenor_years=3,
+    )
+
+
+@pytest.fixture
 def ramp_up_inputs() -> ProjectInputs:
     """4 annees : construction, une annee de ramp-up SANS CAPEX ni revenu (COD
     tombe apres le dernier decaissement CAPEX), puis 2 annees d'exploitation.

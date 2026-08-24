@@ -15,8 +15,7 @@ def annuity_payment(principal: float, rate: float, n_periods: int) -> float:
 
 def debt_amount_from_annuity(payment: float, rate: float, n_periods: int) -> float:
     """Inverse of annuity_payment(): the principal that this constant annual
-    payment services over n_periods at rate. Used by DSCR-based debt sizing to
-    turn "the most we can pay each year" into "the most we can borrow"."""
+    payment services over n_periods at rate."""
     if n_periods <= 0 or payment <= 0:
         return 0.0
     if rate == 0:
@@ -24,25 +23,100 @@ def debt_amount_from_annuity(payment: float, rate: float, n_periods: int) -> flo
     return payment * (1 - (1 + rate) ** -n_periods) / rate
 
 
+def present_value(cashflows: list[float], rate: float) -> float:
+    """PV of cashflows occurring at t=1, 2, ... (not t=0 - unlike numpy_financial.npv,
+    which treats cashflows[0] as an undiscounted t=0 flow)."""
+    if rate == 0:
+        return sum(cashflows)
+    return sum(cf / (1 + rate) ** (t + 1) for t, cf in enumerate(cashflows))
+
+
+def sculpt_debt_service(cfads_window: list[float], target_dscr: float) -> list[float]:
+    """True cash-flow sculpting: debt service each year = CFADS_year / target_dscr,
+    hitting the target DSCR exactly every year - not just in the single worst
+    year like a level annuity would. This is the standard project-finance
+    definition of a sculpted repayment profile, and what real models converge
+    to via circular-reference iteration (see docs/specs/financial_engine.md)."""
+    if target_dscr <= 0:
+        return [0.0] * len(cfads_window)
+    return [max(0.0, c / target_dscr) for c in cfads_window]
+
+
+def capitalized_construction_interest(draws: list[float], rate: float) -> float:
+    """Interest accruing on debt drawn during construction, capitalised (added
+    to principal) rather than paid cash since there's no CFADS yet to service
+    it. `draws` are chronological, one entry per construction year (last entry
+    = the year immediately before COD). Mid-year drawdown convention (each draw
+    accrues half a year of interest in its own year, then compounds for every
+    full subsequent construction year) since only annual - not monthly -
+    drawdown timing is available."""
+    n = len(draws)
+    total = 0.0
+    for i, draw in enumerate(draws):
+        years_to_cod = (n - 1 - i) + 0.5
+        total += draw * ((1 + rate) ** years_to_cod - 1)
+    return total
+
+
+def _size_tranche_by_dscr(
+    cfads_window: list[float],
+    target_dscr: float,
+    rate: float,
+    tenor: int,
+    gearing: float,
+    capex_total: float,
+    draws: list[float],
+    upfront_fee_pct: float,
+) -> tuple[list[float], float]:
+    """Sculpts debt service to hit target_dscr every year of cfads_window, then
+    caps the resulting principal by a gearing ceiling inflated by capitalised
+    construction interest (IDC) and the upfront arrangement fee - both assumed
+    financed pro-rata via the same gearing ratio as CAPEX (single-pass
+    approximation off the CAPEX-driven draw, not resolved as a fully
+    simultaneous system - fees/IDC are typically a few % of CAPEX, so this
+    second-order feedback is negligible; see docs/specs/financial_engine.md).
+    Returns (service_schedule_for_the_window, principal)."""
+    sculpted = sculpt_debt_service(cfads_window, target_dscr)
+    principal_uncapped = present_value(sculpted, rate)
+
+    idc = capitalized_construction_interest(draws, rate)
+    upfront_fee_amount = upfront_fee_pct * sum(draws)
+    gearing_cap = gearing * (capex_total + idc + upfront_fee_amount)
+
+    if principal_uncapped > gearing_cap:
+        scale = (gearing_cap / principal_uncapped) if principal_uncapped else 0.0
+        return [s * scale for s in sculpted], gearing_cap
+    return sculpted, principal_uncapped
+
+
 def _tranche_service_schedule(
     length: int,
     capex: list[float],
     start_after_index: int,
-    annuity: float,
+    service: float | list[float],
     tenor: int,
 ) -> list[float]:
     """Per-year debt service for one tranche: 0 during CAPEX years and years at
-    or before start_after_index, then `annuity` for the next `tenor` operating
-    years (years where this tranche's CAPEX is not being drawn), 0 after."""
+    or before start_after_index, then `service` for the next `tenor` operating
+    years (years where this tranche's CAPEX is not being drawn), 0 after.
+    `service` is either a constant annuity (float, gearing mode) or a sculpted
+    per-year list (dscr mode - service[0] is this tranche's 1st operating year,
+    service[1] its 2nd, ...)."""
+    service_list = [service] * tenor if isinstance(service, (int, float)) else service
     schedule = [0.0] * length
     counter = 0
     for i in range(length):
         if capex[i] != 0 or i <= start_after_index:
             continue
+        if counter < len(service_list):
+            schedule[i] = service_list[counter]
         counter += 1
-        if counter <= tenor:
-            schedule[i] = annuity
     return schedule
+
+
+def _mean_active(schedule: list[float]) -> float:
+    active = [s for s in schedule if s > 0]
+    return sum(active) / len(active) if active else 0.0
 
 
 def compute_results(
@@ -63,13 +137,17 @@ def compute_results(
     target_dscr: float | None = None,
 ) -> ProjectResults:
     """debt_sizing_mode:
-    - "gearing" (default): debt = gearing_pct x CAPEX, DSCR is an output. Matches
-      a simple fixed-leverage assumption when no real covenant is known.
-    - "dscr": debt is sized (sculpted) so CFADS / debt service >= target_dscr in
-      every year of the tranche's tenor, capped by gearing_pct x CAPEX as a
-      ceiling - mirrors how the real BP (I-Project "Target DSCR" + "Gearing max")
-      actually sizes its senior debt, so results become comparable to the BP's
-      own reported DSCR/Equity IRR instead of structurally diverging from them.
+    - "gearing" (default): debt = gearing_pct x CAPEX, constant annuity, DSCR is
+      an output. Simple fixed-leverage assumption when no real covenant is known -
+      entirely unaffected by the "dscr" mode below (zero behaviour change).
+    - "dscr": debt is sculpted (core/sculpt_debt_service) so CFADS / debt service
+      == target_dscr every year of the tenor (not just >= in the worst year),
+      capped by a gearing ceiling that also accounts for capitalised construction
+      interest and the senior debt upfront fee when available (_size_tranche_by_dscr).
+      Mirrors how the real BP (I-Project "Target DSCR" + "Gearing max" + "Senior
+      Debt Upfront fee") actually sizes its senior debt - see docs/specs/financial_engine.md
+      for what is and is not reproduced (no DSRA, commitment fees, or cash sweep;
+      fees/IDC affect the debt ceiling only, not modeled as cash costs elsewhere).
       Requires target_dscr (this kwarg or inputs.target_dscr) - raises otherwise.
     """
     gearing = inputs.gearing_pct if gearing_pct is None else gearing_pct
@@ -130,54 +208,70 @@ def compute_results(
                 "debt_sizing_mode='dscr' necessite un target_dscr positif "
                 "(ni fourni en argument, ni present dans ProjectInputs.target_dscr)."
             )
-
         # Sized sequentially, in chronological order: the initial tranche is
         # closed before repowering happens, so it's sized first, in isolation.
+        initial_draws = [
+            gearing * -capex[i]
+            for i in range(length)
+            if capex[i] < 0 and not _is_repowering_year(i)
+        ]
         initial_window = cfads_list[first_op_index : first_op_index + tenor]
-        max_annuity_initial = (
-            max(0.0, min(initial_window) / effective_target_dscr) if initial_window else 0.0
-        )
-        debt_amount_initial = min(
-            debt_amount_from_annuity(max_annuity_initial, rate, tenor),
-            gearing * capex_total_initial,
+        initial_service, debt_amount_initial = _size_tranche_by_dscr(
+            initial_window,
+            effective_target_dscr,
+            rate,
+            tenor,
+            gearing,
+            capex_total_initial,
+            initial_draws,
+            inputs.senior_debt_upfront_fee_pct or 0.0,
         )
     elif debt_sizing_mode == "gearing":
         debt_amount_initial = gearing * capex_total_initial
+        initial_service = annuity_payment(debt_amount_initial, rate, tenor)
     else:
         raise ValueError(
             f"debt_sizing_mode inconnu : '{debt_sizing_mode}' (attendu 'gearing' ou 'dscr')."
         )
-    debt_service_initial = annuity_payment(debt_amount_initial, rate, tenor)
     initial_schedule = _tranche_service_schedule(
-        length, capex, first_op_index - 1, debt_service_initial, tenor
+        length, capex, first_op_index - 1, initial_service, tenor
     )
+    debt_service_initial = _mean_active(initial_schedule)
 
     if debt_sizing_mode == "dscr" and repowering_index is not None:
-        # The repowering tranche is sized against CFADS net of whatever initial
-        # debt service is still running during the overlap (initial_schedule,
-        # just computed, already reflects the final - possibly gearing-capped -
-        # initial debt service).
+        # Sized against CFADS net of whatever initial debt service is still
+        # running during the overlap (initial_schedule, just computed, already
+        # reflects the final - possibly capped - initial debt service).
+        repowering_draws = [
+            rep_gearing * -capex[i]
+            for i in range(length)
+            if capex[i] < 0 and _is_repowering_year(i)
+        ]
         rep_window = [
             cfads_list[i] - initial_schedule[i]
             for i in range(repowering_index + 1, min(repowering_index + 1 + rep_tenor, length))
         ]
-        max_annuity_repowering = (
-            max(0.0, min(rep_window) / effective_target_dscr) if rep_window else 0.0
-        )
-        debt_amount_repowering = min(
-            debt_amount_from_annuity(max_annuity_repowering, rep_rate, rep_tenor),
-            rep_gearing * capex_total_repowering,
+        # No upfront-fee field is extracted for the repowering tranche (not
+        # present in I-Project's repowering debt section).
+        repowering_service, debt_amount_repowering = _size_tranche_by_dscr(
+            rep_window,
+            effective_target_dscr,
+            rep_rate,
+            rep_tenor,
+            rep_gearing,
+            capex_total_repowering,
+            repowering_draws,
+            0.0,
         )
     else:
         debt_amount_repowering = rep_gearing * capex_total_repowering
-    debt_service_repowering = annuity_payment(debt_amount_repowering, rep_rate, rep_tenor)
+        repowering_service = annuity_payment(debt_amount_repowering, rep_rate, rep_tenor)
     repowering_schedule = (
-        _tranche_service_schedule(
-            length, capex, repowering_index, debt_service_repowering, rep_tenor
-        )
+        _tranche_service_schedule(length, capex, repowering_index, repowering_service, rep_tenor)
         if repowering_index is not None
         else [0.0] * length
     )
+    debt_service_repowering = _mean_active(repowering_schedule)
 
     equity_amount_initial = capex_total_initial - debt_amount_initial
     equity_amount_repowering = capex_total_repowering - debt_amount_repowering
