@@ -84,6 +84,15 @@ depuis `capex_keur` : la 2e annee avec une sortie de CAPEX non nulle (s'il y en 
 debut de la tranche repowering. Format-agnostique (fonctionne meme sans `I-Project`, avec des
 termes de financement par defaut) — voir `financial_engine.md`.
 
+**Detail de revenu contracte vs merchant, construit a partir de sous-lignes de `O-Financials`.**
+`revenue_ppa_keur`/`revenue_capacity_keur`/`revenue_merchant_keur` (mappes sur les sous-lignes
+`PPA Revenues`/`Capacity market`/`Merchant revenues (net of energy costs)`, toutes optionnelles)
+alimentent `ProjectInputs.revenue_detail` (`RevenueBreakdown.contracted_keur` = PPA + Capacity
+market, `merchant_keur` = Merchant revenues). Reste `None` si les trois series sont absentes ou
+nulles — jamais rempli de zeros silencieux. Consomme par `risk_rules.py` pour ponderer le seuil
+DSCR par qualite de revenu (voir `risk_dashboard.md`) — pas par `financial_engine.py`, qui
+continue d'utiliser `revenues_keur` (le total) pour le calcul du CFADS/IRR.
+
 ## Risques de regression
 
 - Un nouveau format de BP (3e variante) casserait silencieusement si son schema de libelles
@@ -103,6 +112,8 @@ par `conftest.py`, donnees entierement fabriquees — jamais les vraies donnees 
   tolerant sur les defauts quand cet onglet est absent)
 - `sample_full_bp_with_i_project_path` (ajoute un onglet `I-Project` reproduisant le piege
   libelle/unite/valeur et les libelles repetes senior/repowering — verifie `offset`/`occurrence`)
+- `sample_full_bp_with_revenue_mix_path` (ajoute les sous-lignes PPA/Capacity/Merchant a
+  `O-Financials` — verifie la construction de `revenue_detail`)
 
 Validation croisee cle : `test_parse_summary_bp_reported_metrics_match_engine_unlevered_irr`
 verifie que l'IRR recalcule par `financial_engine` (gearing=0%) retombe a ~0.1% pres sur l'IRR

@@ -5,11 +5,16 @@ from dataclasses import dataclass
 
 @dataclass
 class RevenueBreakdown:
-    """Per-stream revenue series (k€). Populated only once a detailed multi-tab
-    BP (C-SPV / I-Project) is parsed; None when only the summary tab is available."""
+    """Per-stream revenue series (k€). `contracted_keur`/`merchant_keur` come from
+    O-Financials (PPA Revenues + Capacity market vs Merchant revenues) when the
+    full-format BP is parsed - used by risk_rules.py to weight the DSCR threshold
+    by revenue quality (contracted cashflow is more bankable than merchant).
+    `arbitrage_keur`/`ancillary_keur` (DA/ID vs FCR/aFRR split) remain unpopulated -
+    blocked on the Annual cashflows 1 MW `configuration` key, see bp_parsing.md."""
 
     arbitrage_keur: list[float] | None = None
     contracted_keur: list[float] | None = None
+    merchant_keur: list[float] | None = None
     ancillary_keur: list[float] | None = None
 
 

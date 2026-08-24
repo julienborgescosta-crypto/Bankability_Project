@@ -1,5 +1,7 @@
 # Seuils utilises par core/risk_rules.py pour classer les resultats.
 dscr_min_red: 1.10 # DSCR min sous ce seuil = covenant probablement rompu
-dscr_min_amber: 1.30 # DSCR min sous ce seuil = marge de securite faible (seuil bancaire usuel BESS)
+dscr_min_amber: 1.30 # DSCR min sous ce seuil = marge de securite faible (seuil bancaire usuel BESS, si ni target_dscr ni mix de revenu disponibles)
+dscr_min_amber_contracted: 1.30 # seuil DSCR applique a la part de revenu contracte (PPA + Capacity market) quand le mix de revenu est disponible
+dscr_min_amber_merchant: 1.50 # seuil DSCR applique a la part de revenu merchant (plus exigeant : moins visible/predictible pour un preteur)
 equity_irr_hurdle: 0.08 # rendement actionnaire minimum attendu
 project_irr_vs_wacc_margin: 0.0 # marge minimale exigee entre Project IRR et WACC

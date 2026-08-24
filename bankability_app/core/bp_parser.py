@@ -6,7 +6,7 @@ from typing import Any
 import openpyxl
 import yaml
 
-from .models import ProjectInputs
+from .models import ProjectInputs, RevenueBreakdown
 
 DEFAULT_MAPPING_PATH = Path(__file__).resolve().parent.parent / "config" / "bp_mapping.yaml"
 DEFAULT_FULL_MAPPING_PATH = (
@@ -263,6 +263,18 @@ def parse_full_bp(file_or_path, mapping_path: Path = DEFAULT_FULL_MAPPING_PATH) 
         )
     ]
 
+    revenue_ppa = series_of("revenue_ppa_keur", required=False)
+    revenue_capacity = series_of("revenue_capacity_keur", required=False)
+    revenue_merchant = series_of("revenue_merchant_keur", required=False)
+    revenue_detail = None
+    if any(v != 0 for v in revenue_ppa + revenue_capacity + revenue_merchant):
+        # Capacity market payments are bucketed with PPA as "contracted-like" (fixed,
+        # predictable) - see risk_rules.py for how this feeds the DSCR threshold.
+        revenue_detail = RevenueBreakdown(
+            contracted_keur=[a + b for a, b in zip(revenue_ppa, revenue_capacity, strict=True)],
+            merchant_keur=revenue_merchant,
+        )
+
     interest_rate = scalar_float("interest_rate")
     gearing_pct = scalar_float("gearing_pct")
     equity_discount = scalar_float("equity_discount_factor")
@@ -313,4 +325,5 @@ def parse_full_bp(file_or_path, mapping_path: Path = DEFAULT_FULL_MAPPING_PATH) 
         repowering_debt_tenor_years=(int(i_project_float("repowering_debt_tenor_years") or 10)),
         target_dscr=i_project_float("target_dscr"),
         reported_capex_i_project_keur=i_project_float("reported_capex_i_project_keur"),
+        revenue_detail=revenue_detail,
     )

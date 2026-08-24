@@ -22,23 +22,56 @@ def load_thresholds(path: Path = DEFAULT_THRESHOLDS_PATH) -> dict:
         return yaml.safe_load(handle)
 
 
+def revenue_weighted_dscr_threshold(inputs: ProjectInputs, thresholds: dict) -> float | None:
+    """Lenders don't credit contracted and merchant revenue equally when sizing
+    debt: a euro of PPA/capacity revenue is more bankable than a euro of merchant
+    (arbitrage/ancillary) revenue. In the absence of a real per-tranche covenant,
+    blend the DSCR comfort threshold by revenue mix: dscr_min_amber_contracted
+    (1.30x default) weighted by the contracted revenue share, dscr_min_amber_merchant
+    (1.50x default) weighted by the merchant share - a 100% merchant project is held
+    to a stricter DSCR floor than a 100% contracted one, proportionally in between
+    otherwise. Requires the full-format BP's revenue_detail (PPA/Capacity/Merchant
+    sub-lines of O-Financials) - None when unavailable (summary format, or the
+    sub-lines are all zero)."""
+    detail = inputs.revenue_detail
+    if detail is None or detail.contracted_keur is None or detail.merchant_keur is None:
+        return None
+    total_contracted = sum(detail.contracted_keur)
+    total_merchant = sum(detail.merchant_keur)
+    total = total_contracted + total_merchant
+    if total <= 0:
+        return None
+    contracted_share = total_contracted / total
+    merchant_share = total_merchant / total
+    return (
+        contracted_share * thresholds["dscr_min_amber_contracted"]
+        + merchant_share * thresholds["dscr_min_amber_merchant"]
+    )
+
+
 def evaluate_risks(
     inputs: ProjectInputs, result: ProjectResults, thresholds: dict | None = None
 ) -> list[RiskFlag]:
     thresholds = thresholds or load_thresholds()
     flags: list[RiskFlag] = []
 
-    # Le covenant DSCR cible du projet (I-Project "Target DSCR - Period 1"), quand
-    # il est extrait du BP, remplace le seuil "confortable" generique de la config -
-    # c'est le vrai chiffre negocie par ce projet avec son preteur, plus specifique
-    # que notre defaut 1.30x. Le seuil "critique" (dscr_min_red), lui, reste generique
-    # : le BP n'expose pas de covenant de defaut distinct du target DSCR de sizing.
-    dscr_min_amber = (
-        inputs.target_dscr if inputs.target_dscr is not None else thresholds["dscr_min_amber"]
-    )
-    amber_label = (
-        "cible du projet (I-Project)" if inputs.target_dscr is not None else "bancaire usuel"
-    )
+    # Seuil DSCR "confortable" (amber), par ordre de priorite decroissant :
+    # 1. Target DSCR du projet (I-Project) - le vrai covenant negocie avec le preteur.
+    # 2. Seuil pondere par mix de revenus contracte/merchant (O-Financials) - a
+    #    defaut du vrai covenant, une estimation tenant compte de la qualite du revenu.
+    # 3. Seuil generique de la config (dscr_min_amber).
+    # Le seuil "critique" (dscr_min_red), lui, reste toujours generique : le BP
+    # n'expose pas de covenant de defaut distinct du target DSCR de sizing.
+    weighted_threshold = revenue_weighted_dscr_threshold(inputs, thresholds)
+    if inputs.target_dscr is not None:
+        dscr_min_amber = inputs.target_dscr
+        amber_label = "cible du projet (I-Project)"
+    elif weighted_threshold is not None:
+        dscr_min_amber = weighted_threshold
+        amber_label = "pondere par mix de revenu contracte/merchant"
+    else:
+        dscr_min_amber = thresholds["dscr_min_amber"]
+        amber_label = "bancaire usuel"
 
     dscr_min = result.dscr_min
     if dscr_min is None:
@@ -68,7 +101,9 @@ def evaluate_risks(
     else:
         flags.append(
             RiskFlag(
-                "DSCR min", "green", f"DSCR min {dscr_min:.2f}x au-dessus des seuils bancaires."
+                "DSCR min",
+                "green",
+                f"DSCR min {dscr_min:.2f}x au-dessus du seuil {amber_label} {dscr_min_amber:.2f}x.",
             )
         )
 

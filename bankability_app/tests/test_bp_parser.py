@@ -103,6 +103,22 @@ def test_parse_full_bp_tolerates_missing_i_project_sheet(sample_full_bp_path):
     assert inputs.repowering_debt_tenor_years == 10
 
 
+def test_parse_full_bp_revenue_detail_is_none_without_sub_lines(sample_full_bp_path):
+    """sample_full_bp_path n'a pas les sous-lignes PPA/Capacity/Merchant -
+    revenue_detail doit rester None plutot que d'etre rempli de zeros."""
+    inputs = bp_parser.parse_full_bp(sample_full_bp_path)
+    assert inputs.revenue_detail is None
+
+
+def test_parse_full_bp_extracts_revenue_detail_when_present(sample_full_bp_with_revenue_mix_path):
+    inputs = bp_parser.parse_full_bp(sample_full_bp_with_revenue_mix_path)
+
+    assert inputs.revenue_detail is not None
+    # contracted = PPA (100) + Capacity market (50) = 150/an.
+    assert inputs.revenue_detail.contracted_keur == pytest.approx([0.0, 150.0, 150.0])
+    assert inputs.revenue_detail.merchant_keur == pytest.approx([0.0, 350.0, 350.0])
+
+
 def test_parse_full_bp_extracts_i_project_fields_with_occurrence(
     sample_full_bp_with_i_project_path,
 ):

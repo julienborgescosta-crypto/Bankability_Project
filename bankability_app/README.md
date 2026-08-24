@@ -79,7 +79,7 @@ Implemente : le total des revenus annuels, utilise tel quel par le moteur financ
 | Donnee | Format resume | Format complet |
 |---|---|---|
 | Revenus annuels (total) | ligne `Revenues` (onglet unique) | ligne `Revenues` de `O-Financials` |
-| Detail PPA / Merchant / Capacite | non disponible | sous-lignes `PPA Revenues`, `Merchant revenues (net of energy costs)`, `Capacity market` de `O-Financials` (non extraites individuellement pour l'instant) |
+| Detail contracte (PPA + Capacite) vs merchant | non disponible | sous-lignes `PPA Revenues` + `Capacity market` (contracte) et `Merchant revenues (net of energy costs)` (merchant) de `O-Financials`, dans `ProjectInputs.revenue_detail`. Consomme par le Risk Dashboard (couche 5) pour ponderer le seuil DSCR par qualite de revenu — pas encore par le moteur financier (IRR/CFADS restent sur le total) |
 | Detail par flux (DA, ID, aFRR, FCR isoles) | non disponible | **non implemente** — existe dans l'onglet `Annual cashflows 1 MW` (lignes `wholesale_storage_*`, `intraday_revenue`, `afrr_*`, `fcr_revenue`), mais la cle `configuration` a utiliser pour un projet donne (fonction de `Type TURPE` + duree + segment, definis dans `I-Project`) n'est pas encore fiabilisee — voir `docs/specs/bp_parsing.md`, "Questions ouvertes" |
 
 ### 2. Degradation and Availability
@@ -129,9 +129,19 @@ Article : *"Embedded commentary inside the model, triggering when certain median
 thresholds are not met"*, avec severite, envoye a la couche Dashboard.
 
 Implemente : `core/risk_rules.py` + `config/risk_thresholds.yaml` — 3 regles (DSCR min, Equity
-IRR vs hurdle rate, Project IRR vs WACC), chacune produisant un flag rouge/orange/vert. **Seuils
-non extraits du BP** (config app : DSCR 1.30x/1.10x, hurdle 8%) ; les metriques evaluees (DSCR,
-IRR) sont, elles, calculees par `financial_engine.py` a partir des donnees BP (couches 1 et 5bis).
+IRR vs hurdle rate, Project IRR vs WACC), chacune produisant un flag rouge/orange/vert. Les
+metriques evaluees (DSCR, IRR) sont calculees par `financial_engine.py` a partir des donnees BP
+(couches 1 et 5bis).
+
+Le seuil DSCR "confortable" (palier orange/vert) n'est pas une simple constante : par ordre de
+priorite, l'app utilise (1) le covenant reel du projet (`Target DSCR` d'`I-Project`) si present,
+(2) sinon un seuil **pondere par le mix de revenu contracte/merchant** (`dscr_min_amber_contracted`
+1.30x / `dscr_min_amber_merchant` 1.50x de `config/risk_thresholds.yaml`, ponderes par la part de
+chaque type de revenu dans `revenue_detail` — couche 1) — un euro de revenu merchant n'a pas la
+meme valeur bancaire qu'un euro de revenu contracte, donc un projet tres merchant est tenu a un
+DSCR plus exigeant, (3) sinon le seuil generique `dscr_min_amber` (1.30x). Le seuil "critique"
+(`dscr_min_red`, 1.10x) reste toujours generique. Le message de chaque flag precise la source du
+seuil applique.
 
 **5bis. Hypotheses de financement** (non nommee explicitement dans l'article, mais necessaire
 pour DSCR/Equity IRR) :
@@ -237,7 +247,8 @@ Configuration (`config/`) :
 - `bp_mapping.yaml` — mapping libelle -> emplacement pour le format resume (1 onglet)
 - `bp_mapping_full.yaml` — mapping libelle -> emplacement pour le format complet
   (`O-Financials` + `O-Control` + `I-Project` optionnel)
-- `risk_thresholds.yaml` — seuils du dashboard de risques (DSCR, hurdle rate, marge WACC)
+- `risk_thresholds.yaml` — seuils du dashboard de risques (DSCR generique + pondere par mix de
+  revenu, hurdle rate, marge WACC)
 
 Chaque module ci-dessus a sa spec retrospective dans `docs/specs/` (objectif, decisions,
 bugs corriges, questions ouvertes) — a lire avant de le modifier.

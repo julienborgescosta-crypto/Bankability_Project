@@ -48,6 +48,13 @@ series_fields:
   revenues_keur: "Revenues"
   turpe_keur: "Operating Taxes"
   end_of_life_keur: "BESS Repowering cost"
+  # Sous-lignes de "Revenues" - servent a construire ProjectInputs.revenue_detail
+  # (contracted = PPA + Capacity market, merchant = Merchant revenues), utilise par
+  # risk_rules.py pour ponderer le seuil DSCR par qualite de revenu. Tolerantes si
+  # absentes (required=False dans parse_full_bp).
+  revenue_ppa_keur: "PPA Revenues"
+  revenue_capacity_keur: "Capacity market"
+  revenue_merchant_keur: "Merchant revenues (net of energy costs)"
 
 # Champs lus dans i_project_sheet (2e tranche de dette repowering, DSCR cible du
 # projet, CAPEX de reference pour recoupement avec celui de O-Control/O-Financials
