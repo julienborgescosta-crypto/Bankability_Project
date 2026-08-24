@@ -124,6 +124,88 @@ def test_equity_irr_is_none_without_equity(simple_inputs):
     assert result.equity_irr is None
 
 
+def test_annuity_inversion_round_trip():
+    principal = financial_engine.debt_amount_from_annuity(183.60, 0.05, 3)
+    assert financial_engine.annuity_payment(principal, 0.05, 3) == pytest.approx(183.60)
+
+
+def test_debt_amount_from_annuity_zero_payment_or_tenor():
+    assert financial_engine.debt_amount_from_annuity(0.0, 0.05, 5) == 0.0
+    assert financial_engine.debt_amount_from_annuity(100.0, 0.05, 0) == 0.0
+
+
+def test_dscr_sizing_requires_target_dscr(simple_inputs):
+    assert simple_inputs.target_dscr is None
+    with pytest.raises(ValueError, match="target_dscr"):
+        financial_engine.compute_results(simple_inputs, debt_sizing_mode="dscr")
+
+
+def test_unknown_debt_sizing_mode_raises(simple_inputs):
+    with pytest.raises(ValueError, match="debt_sizing_mode"):
+        financial_engine.compute_results(simple_inputs, debt_sizing_mode="sculpted-ish")
+
+
+def test_dscr_sizing_hits_target_exactly_when_not_gearing_capped(simple_inputs):
+    """CFADS constant (380) sur les 2 annees d'exploitation -> la dette dimensionnee
+    pour target_dscr=1.5 doit produire un DSCR strictement egal a 1.5 chaque annee
+    (pas juste >=), puisque le pire CFADS de la fenetre EST le CFADS de chaque annee."""
+    result = financial_engine.compute_results(
+        simple_inputs, debt_sizing_mode="dscr", target_dscr=1.5
+    )
+    assert result.dscr_min == pytest.approx(1.5)
+    assert result.dscr_avg == pytest.approx(1.5)
+    # Le gearing (50%) n'est pas la contrainte active ici : la dette dimensionnee
+    # par DSCR doit rester sous le plafond de gearing.
+    assert result.debt_amount_initial_keur < 0.5 * result.capex_total_initial_keur
+
+
+def test_dscr_sizing_capped_by_gearing_when_target_is_lax(simple_inputs):
+    """Un target_dscr tres bas impliquerait une dette superieure au plafond de
+    gearing (50%) -> la dette est plafonnee, et le DSCR resultant est alors
+    MEILLEUR que le target (puisqu'on ne peut pas lever plus)."""
+    result = financial_engine.compute_results(
+        simple_inputs, debt_sizing_mode="dscr", target_dscr=0.5
+    )
+    assert result.debt_amount_initial_keur == pytest.approx(0.5 * result.capex_total_initial_keur)
+    assert result.dscr_min > 0.5
+
+
+def test_dscr_sizing_matches_gearing_mode_debt_amount_at_equivalent_target(simple_inputs):
+    """Sanity check inter-mode : au meme montant de dette, les deux modes doivent
+    produire le meme DSCR (le DSCR est une propriete du montant de dette, pas de
+    la maniere dont on l'a choisi)."""
+    dscr_result = financial_engine.compute_results(
+        simple_inputs, debt_sizing_mode="dscr", target_dscr=1.5
+    )
+    gearing_equiv = dscr_result.debt_amount_initial_keur / dscr_result.capex_total_initial_keur
+    gearing_result = financial_engine.compute_results(simple_inputs, gearing_pct=gearing_equiv)
+    assert gearing_result.dscr_min == pytest.approx(dscr_result.dscr_min)
+
+
+def test_dscr_sizing_two_tranches_sequential(repowering_inputs):
+    """target_dscr assez strict (3.0) pour ne pas etre plafonne par le gearing sur
+    aucune des deux tranches -> les deux doivent atteindre exactement ce DSCR
+    dans leur fenetre respective (CFADS constant = 380 dans les deux fenetres)."""
+    repowering_inputs.target_dscr = 3.0
+    result = financial_engine.compute_results(repowering_inputs, debt_sizing_mode="dscr")
+
+    assert result.debt_amount_initial_keur < 0.5 * result.capex_total_initial_keur
+    assert result.debt_amount_repowering_keur < 0.6 * result.capex_total_repowering_keur
+
+    # Annees 2026-2028 (indices 1-3) : tranche initiale active, DSCR == target.
+    for i in (1, 2, 3):
+        assert result.yearly[i].dscr == pytest.approx(3.0)
+    # Annees 2029-2030 (indices 4-5) : tenor initial (3 ans) expire, pas encore de repowering.
+    for i in (4, 5):
+        assert result.yearly[i].dscr is None
+    # Annees 2032-2033 (indices 7-8) : tranche repowering active, DSCR == target.
+    for i in (7, 8):
+        assert result.yearly[i].dscr == pytest.approx(3.0)
+    # Annees 2034-2035 (indices 9-10) : tenor repowering (2 ans) expire.
+    for i in (9, 10):
+        assert result.yearly[i].dscr is None
+
+
 def test_no_repowering_tranche_when_single_capex_year(simple_inputs):
     """simple_inputs n'a qu'une seule sortie de CAPEX -> pas de tranche repowering,
     comportement identique a avant l'introduction de la 2e tranche (non-regression)."""

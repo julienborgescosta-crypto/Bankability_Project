@@ -13,6 +13,38 @@ def annuity_payment(principal: float, rate: float, n_periods: int) -> float:
     return principal * rate / (1 - (1 + rate) ** -n_periods)
 
 
+def debt_amount_from_annuity(payment: float, rate: float, n_periods: int) -> float:
+    """Inverse of annuity_payment(): the principal that this constant annual
+    payment services over n_periods at rate. Used by DSCR-based debt sizing to
+    turn "the most we can pay each year" into "the most we can borrow"."""
+    if n_periods <= 0 or payment <= 0:
+        return 0.0
+    if rate == 0:
+        return payment * n_periods
+    return payment * (1 - (1 + rate) ** -n_periods) / rate
+
+
+def _tranche_service_schedule(
+    length: int,
+    capex: list[float],
+    start_after_index: int,
+    annuity: float,
+    tenor: int,
+) -> list[float]:
+    """Per-year debt service for one tranche: 0 during CAPEX years and years at
+    or before start_after_index, then `annuity` for the next `tenor` operating
+    years (years where this tranche's CAPEX is not being drawn), 0 after."""
+    schedule = [0.0] * length
+    counter = 0
+    for i in range(length):
+        if capex[i] != 0 or i <= start_after_index:
+            continue
+        counter += 1
+        if counter <= tenor:
+            schedule[i] = annuity
+    return schedule
+
+
 def compute_results(
     inputs: ProjectInputs,
     *,
@@ -27,7 +59,19 @@ def compute_results(
     opex_multiplier: float = 1.0,
     interest_rate_adj: float = 0.0,
     degradation_multipliers: list[float] | None = None,
+    debt_sizing_mode: str = "gearing",
+    target_dscr: float | None = None,
 ) -> ProjectResults:
+    """debt_sizing_mode:
+    - "gearing" (default): debt = gearing_pct x CAPEX, DSCR is an output. Matches
+      a simple fixed-leverage assumption when no real covenant is known.
+    - "dscr": debt is sized (sculpted) so CFADS / debt service >= target_dscr in
+      every year of the tranche's tenor, capped by gearing_pct x CAPEX as a
+      ceiling - mirrors how the real BP (I-Project "Target DSCR" + "Gearing max")
+      actually sizes its senior debt, so results become comparable to the BP's
+      own reported DSCR/Equity IRR instead of structurally diverging from them.
+      Requires target_dscr (this kwarg or inputs.target_dscr) - raises otherwise.
+    """
     gearing = inputs.gearing_pct if gearing_pct is None else gearing_pct
     rate = (inputs.interest_rate if interest_rate is None else interest_rate) + interest_rate_adj
     tenor = inputs.debt_tenor_years if debt_tenor_years is None else debt_tenor_years
@@ -52,6 +96,9 @@ def compute_results(
         revenue = [r * m for r, m in zip(revenue, degradation_multipliers, strict=True)]
     turpe = list(inputs.turpe_keur)
     end_of_life = list(inputs.end_of_life_keur)
+    length = len(inputs.years)
+
+    cfads_list = [revenue[i] + opex[i] + turpe[i] + end_of_life[i] for i in range(length)]
 
     # Repowering CAPEX is a separate debt facility from the initial senior debt
     # (own gearing/rate/tenor - see I-Project section 6 "Financing"). Detected as
@@ -70,14 +117,70 @@ def compute_results(
         c for i, c in enumerate(capex) if c < 0 and _is_repowering_year(i)
     )
 
-    debt_amount_initial = gearing * capex_total_initial
-    equity_amount_initial = capex_total_initial - debt_amount_initial
+    # Debt service must only start once operations actually begin - a construction/
+    # ramp-up year with no CAPEX outflow but zero revenue yet (e.g. COD falls a year
+    # after the last CAPEX disbursement) must not be mistaken for an operating year,
+    # or DSCR comes out spuriously negative for that year.
+    first_op_index = next((i for i, r in enumerate(revenue) if r != 0), length)
+
+    if debt_sizing_mode == "dscr":
+        effective_target_dscr = inputs.target_dscr if target_dscr is None else target_dscr
+        if not effective_target_dscr or effective_target_dscr <= 0:
+            raise ValueError(
+                "debt_sizing_mode='dscr' necessite un target_dscr positif "
+                "(ni fourni en argument, ni present dans ProjectInputs.target_dscr)."
+            )
+
+        # Sized sequentially, in chronological order: the initial tranche is
+        # closed before repowering happens, so it's sized first, in isolation.
+        initial_window = cfads_list[first_op_index : first_op_index + tenor]
+        max_annuity_initial = (
+            max(0.0, min(initial_window) / effective_target_dscr) if initial_window else 0.0
+        )
+        debt_amount_initial = min(
+            debt_amount_from_annuity(max_annuity_initial, rate, tenor),
+            gearing * capex_total_initial,
+        )
+    elif debt_sizing_mode == "gearing":
+        debt_amount_initial = gearing * capex_total_initial
+    else:
+        raise ValueError(
+            f"debt_sizing_mode inconnu : '{debt_sizing_mode}' (attendu 'gearing' ou 'dscr')."
+        )
     debt_service_initial = annuity_payment(debt_amount_initial, rate, tenor)
+    initial_schedule = _tranche_service_schedule(
+        length, capex, first_op_index - 1, debt_service_initial, tenor
+    )
 
-    debt_amount_repowering = rep_gearing * capex_total_repowering
-    equity_amount_repowering = capex_total_repowering - debt_amount_repowering
+    if debt_sizing_mode == "dscr" and repowering_index is not None:
+        # The repowering tranche is sized against CFADS net of whatever initial
+        # debt service is still running during the overlap (initial_schedule,
+        # just computed, already reflects the final - possibly gearing-capped -
+        # initial debt service).
+        rep_window = [
+            cfads_list[i] - initial_schedule[i]
+            for i in range(repowering_index + 1, min(repowering_index + 1 + rep_tenor, length))
+        ]
+        max_annuity_repowering = (
+            max(0.0, min(rep_window) / effective_target_dscr) if rep_window else 0.0
+        )
+        debt_amount_repowering = min(
+            debt_amount_from_annuity(max_annuity_repowering, rep_rate, rep_tenor),
+            rep_gearing * capex_total_repowering,
+        )
+    else:
+        debt_amount_repowering = rep_gearing * capex_total_repowering
     debt_service_repowering = annuity_payment(debt_amount_repowering, rep_rate, rep_tenor)
+    repowering_schedule = (
+        _tranche_service_schedule(
+            length, capex, repowering_index, debt_service_repowering, rep_tenor
+        )
+        if repowering_index is not None
+        else [0.0] * length
+    )
 
+    equity_amount_initial = capex_total_initial - debt_amount_initial
+    equity_amount_repowering = capex_total_repowering - debt_amount_repowering
     capex_total = capex_total_initial + capex_total_repowering
     debt_amount = debt_amount_initial + debt_amount_repowering
     equity_amount = equity_amount_initial + equity_amount_repowering
@@ -85,19 +188,10 @@ def compute_results(
     yearly: list[YearlyResult] = []
     net_cashflow_series: list[float] = []
     equity_cashflow_series: list[float] = []
-    op_year_counter = 0
-    op_year_counter_repowering = 0
-    # Debt service must only start once operations actually begin - a construction/
-    # ramp-up year with no CAPEX outflow but zero revenue yet (e.g. COD falls a year
-    # after the last CAPEX disbursement) must not be mistaken for an operating year,
-    # or DSCR comes out spuriously negative for that year.
-    first_op_index = next((i for i, r in enumerate(revenue) if r != 0), len(revenue))
 
     for i, year in enumerate(inputs.years):
         capex_out = capex[i]
-        # opex/turpe series carry their own sign in the BP (already negative outflows),
-        # revenue and end_of_life are positive inflows - CFADS is a plain sum.
-        cfads = revenue[i] + opex[i] + turpe[i] + end_of_life[i]
+        cfads = cfads_list[i]
         net_cf = cfads + capex_out
 
         if capex_out != 0:
@@ -117,12 +211,7 @@ def compute_results(
             ds_year = 0.0
             equity_cf = cfads
         else:
-            op_year_counter += 1
-            ds_year = debt_service_initial if op_year_counter <= tenor else 0.0
-            if repowering_index is not None and i > repowering_index:
-                op_year_counter_repowering += 1
-                if op_year_counter_repowering <= rep_tenor:
-                    ds_year += debt_service_repowering
+            ds_year = initial_schedule[i] + repowering_schedule[i]
             dscr = (cfads / ds_year) if ds_year > 0 else None
             equity_cf = cfads - ds_year
 

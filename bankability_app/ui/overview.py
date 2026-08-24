@@ -15,7 +15,9 @@ def _fmt_pct(value: float | None) -> str:
     return "n/a" if value is None else f"{value:.2%}"
 
 
-def render(inputs: ProjectInputs, result: ProjectResults) -> None:
+def render(
+    inputs: ProjectInputs, result: ProjectResults, debt_sizing_mode: str = "gearing"
+) -> None:
     col1, col2, col3 = st.columns(3)
     with col1:
         st.metric("Projet", inputs.name or "n/a")
@@ -33,7 +35,8 @@ def render(inputs: ProjectInputs, result: ProjectResults) -> None:
         st.metric("Repowering prévu", "Oui" if inputs.repowering else "Non")
 
     st.divider()
-    st.subheader("Résultats économiques (hypothèses de financement actuelles)")
+    mode_label = "dette dimensionnée par DSCR" if debt_sizing_mode == "dscr" else "gearing fixe"
+    st.subheader(f"Résultats économiques ({mode_label})")
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Project IRR", _fmt_pct(result.project_irr))
     if inputs.reported_irr is not None:

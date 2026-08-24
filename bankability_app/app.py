@@ -70,6 +70,30 @@ with st.sidebar:
         "debt_tenor_years": debt_tenor,
     }
 
+    st.divider()
+    if inputs.target_dscr is not None:
+        debt_sizing_mode = st.radio(
+            "Dimensionnement de la dette",
+            options=["gearing", "dscr"],
+            format_func=lambda m: (
+                "Gearing fixe"
+                if m == "gearing"
+                else f"Dimensionné par DSCR (cible {inputs.target_dscr:.2f}x)"
+            ),
+        )
+        if debt_sizing_mode == "dscr":
+            st.caption(
+                "La dette est calculée (sculptée) pour que CFADS / service ≥ DSCR cible chaque "
+                "année, plafonnée par le gearing ci-dessus — comme dans votre BP source. Le "
+                "gearing devient un plafond, pas un montant fixe."
+            )
+        debt_kwargs["debt_sizing_mode"] = debt_sizing_mode
+    else:
+        st.caption(
+            "Dimensionnement par DSCR indisponible (pas de Target DSCR extrait du BP) — "
+            "gearing fixe utilisé."
+        )
+
     has_repowering_capex = sum(1 for c in inputs.capex_keur if c < 0) > 1
     if has_repowering_capex:
         st.divider()
@@ -116,7 +140,7 @@ tabs = st.tabs(
 )
 
 with tabs[0]:
-    overview.render(inputs, base_result)
+    overview.render(inputs, base_result, debt_kwargs.get("debt_sizing_mode", "gearing"))
 with tabs[1]:
     cashflow.render(inputs, base_result)
 with tabs[2]:

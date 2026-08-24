@@ -11,17 +11,45 @@ Sert de socle a `scenarios.py`, `sensitivity.py`, `stress_test.py` (tous appelle
 
 ## Fichiers impactes
 
-- `core/financial_engine.py` — `annuity_payment`, `compute_results`
+- `core/financial_engine.py` — `annuity_payment`, `debt_amount_from_annuity`, `compute_results`
 - `core/models.py` — `YearlyResult`, `ProjectResults`
 
 ## Logique metier
 
-**Dette a gearing fixe (decision produit)** : pas de dette sculptee iterative (contrairement au
-vrai modele du classeur complet, qui a une dette senior avec DSRA/commitment fees/cash sweep).
-`Debt = gearing_pct x CAPEX total`, `Equity = CAPEX total - Debt`, service de la dette en
-**annuite constante** sur `debt_tenor_years` au taux `interest_rate`. Ecart assume avec le
-"DSCR reel" du BP source pour les classeurs complets — affiche cote a cote dans l'UI
-(`ProjectInputs.reported_dscr_avg/min`) plutot que masque.
+**Deux modes de dimensionnement de la dette**, choisis via `debt_sizing_mode` ("gearing" par
+defaut, ou "dscr") :
+
+1. **`"gearing"`** : `Debt = gearing_pct x CAPEX total`, `Equity = CAPEX total - Debt`, service
+   de la dette en **annuite constante** sur `debt_tenor_years` au taux `interest_rate`. Le DSCR
+   est un pur *output*.
+2. **`"dscr"`** : la dette est **sculptee** pour que `CFADS / service >= target_dscr` sur toute
+   la fenetre de tenor, plafonnee par `gearing_pct x CAPEX` — reproduit la logique reelle du BP
+   (`I-Project` : "Target DSCR" + "Gearing max"), ou c'est l'utilisateur qui dimensionne deja sa
+   dette en fonction du DSCR plutot que l'inverse. Le DSCR devient (en partie) un *input*.
+   Necessite `target_dscr` (parametre, ou `ProjectInputs.target_dscr` extrait d'`I-Project`) —
+   leve `ValueError` si absent des deux.
+
+   Calcul : `debt_amount_from_annuity` est l'inverse exact de `annuity_payment` (memes
+   parametres rate/n_periods, resout le principal a partir du paiement au lieu de l'inverse).
+   Le paiement maximal soutenable = `min(CFADS de la fenetre de tenor) / target_dscr` — le
+   **pire** CFADS observe dans la fenetre determine la dette maximale, pas la moyenne. Quand ce
+   pire CFADS est constant sur toute la fenetre (cas de test), le DSCR resultant est **exactement**
+   egal a `target_dscr` chaque annee de la fenetre — proprete verifiee en test
+   (`test_dscr_sizing_hits_target_exactly_when_not_gearing_capped`).
+
+   **Sequencement chronologique pour la 2e tranche.** La tranche initiale est fermee avant que
+   le repowering n'existe : elle est donc dimensionnee **en isolation**, sans se soucier d'un
+   futur repowering. La tranche repowering, elle, est dimensionnee ensuite contre le CFADS **net**
+   du service de la dette initiale encore actif pendant les annees de chevauchement — pas de
+   dependance circulaire, et ca correspond a l'ordre reel des evenements (le repowering
+   n'existe pas encore quand la dette initiale est structuree).
+
+Quel que soit le mode, le service de la dette resultant (constant par tranche) est ensuite
+applique par `_tranche_service_schedule` sur sa fenetre de tenor, exactement comme avant.
+Ecart assume avec le "DSCR reel" du BP source (DSRA, commitment fees, cash sweep, non
+modelises) — affiche cote a cote dans l'UI (`ProjectInputs.reported_dscr_avg/min`) plutot que
+masque, meme en mode `"dscr"` (voir "Questions ouvertes" ci-dessous : le mode `"dscr"` rapproche
+les chiffres du BP reel, il ne les reproduit pas exactement).
 
 **Dette de repowering = 2e tranche independante.** Le classeur complet montre (`I-Project`
 section 6 "Financing") que la dette de repowering est une facility a part entiere — sa propre
@@ -33,12 +61,13 @@ dette senior initiale. `compute_results` reproduit ce decoupage :
   tranche plutot qu'a l'initiale.
 - Chaque tranche a son propre `capex_total_*`, `debt_amount_*`, `equity_amount_*`,
   `debt_service_*` (annuite independante, propre gearing/taux/tenor -
-  `repowering_gearing_pct`/`repowering_interest_rate`/`repowering_debt_tenor_years`).
+  `repowering_gearing_pct`/`repowering_interest_rate`/`repowering_debt_tenor_years`, et en mode
+  `"dscr"` le meme `target_dscr` pour les deux tranches).
 - Le service de la dette total d'une annee d'exploitation = service initial (s'il reste dans sa
   fenetre de `debt_tenor_years` depuis la 1ere annee d'exploitation) + service repowering (s'il
   reste dans sa fenetre de `repowering_debt_tenor_years` depuis la 1ere annee d'exploitation
-  *apres* le repowering) — les deux compteurs (`op_year_counter` / `op_year_counter_repowering`)
-  sont independants et peuvent se chevaucher.
+  *apres* le repowering) — les deux fenetres (`_tranche_service_schedule`, une par tranche) sont
+  independantes et peuvent se chevaucher.
 - Retro-compatible : sans 2e sortie de CAPEX dans la serie, `capex_total_repowering_keur` et
   tous les champs `*_repowering_keur` de `ProjectResults` restent a 0 — comportement identique
   a avant l'introduction de cette logique (voir `test_no_repowering_tranche_when_single_capex_year`).
@@ -88,12 +117,35 @@ dette a 2 tranches : `test_repowering_tranche_uses_its_own_financing_terms`,
 fenetre de tenor s'applique independamment, y compris les annees ou aucune des deux dettes ne
 sert), `test_no_repowering_tranche_when_single_capex_year` (non-regression sans repowering).
 
+Dimensionnement par DSCR : `test_dscr_sizing_requires_target_dscr` (leve sans target),
+`test_unknown_debt_sizing_mode_raises`, `test_dscr_sizing_hits_target_exactly_when_not_gearing_capped`
+(CFADS constant -> DSCR resultant exactement egal a la cible), `test_dscr_sizing_capped_by_gearing_when_target_is_lax`
+(la dette DSCR-sizee reste plafonnee par le gearing max), `test_dscr_sizing_matches_gearing_mode_debt_amount_at_equivalent_target`
+(sanity check inter-modes : meme dette -> meme DSCR, quel que soit le mode qui l'a produite),
+`test_dscr_sizing_two_tranches_sequential` (sur `repowering_inputs`, verifie le sequencement
+chronologique initiale-puis-repowering).
+
 ## Questions ouvertes
 
 - Le moteur ne modelise pas de DSRA, commitment fees, ni cash sweep — le DSCR calcule est donc
   structurellement different (souvent plus favorable) que celui d'un vrai financement senior
-  sculpte. Documente dans l'UI (`ui/overview.py` affiche les deux valeurs), pas cache.
+  sculpte, **meme en mode `"dscr"`**. Documente dans l'UI (`ui/overview.py` affiche les deux
+  valeurs), pas cache.
+- **Le mode `"dscr"` rapproche les chiffres du BP reel sans les reproduire exactement.** Valide
+  sur Belle Epine (`target_dscr` = 1.5x) : le DSCR min resultant vaut exactement 1.5x (par
+  construction), tres different du DSCR min reellement rapporte dans le BP (0.10x). Hypothese
+  la plus probable : la dette reelle du BP a ete dimensionnee **une seule fois, a la cloture
+  financiere**, sur un cas de revenus different (probablement plus favorable) de celui que
+  reflete aujourd'hui la serie `O-Financials` — les covenants DSCR sont testes contre les
+  previsions **live/actualisees**, qui peuvent avoir diverge du cas de sizing initial. Notre
+  moteur, lui, dimensionne toujours contre la serie de revenus **courante** (celle du fichier
+  charge), donc les deux ne peuvent structurellement pas coincider sauf si le cas de sizing
+  d'origine est identique au cas actuel. Pas un bug ; une limite methodologique documentee.
 - La detection de la tranche repowering (2e sortie de CAPEX dans la serie) suppose une seule
   operation de repowering. Un projet avec 2+ repowering successifs verrait tous les CAPEX a
   partir du 2e regroupes dans une seule et meme tranche "repowering" (simplification, cas non
   observe dans les fichiers reels a ce jour).
+- La fenetre de dimensionnement DSCR (`cfads_list[first_op_index : first_op_index + tenor]`)
+  suppose qu'aucune sortie de CAPEX n'interrompt la fenetre de la tranche initiale — vrai pour
+  tous les fichiers reels vus a ce jour (CAPEX initial isole, repowering eventuel bien plus
+  tard), mais non verifie explicitement si ce n'etait pas le cas.
