@@ -13,9 +13,14 @@ Sert de socle a `scenarios.py`, `sensitivity.py`, `stress_test.py` (tous appelle
 
 - `core/financial_engine.py` — `annuity_payment`, `debt_amount_from_annuity`, `present_value`,
   `sculpt_debt_service`, `capitalized_construction_interest`, `compute_results`
-- `core/models.py` — `YearlyResult`, `ProjectResults`, `ProjectInputs.senior_debt_upfront_fee_pct`
+- `core/models.py` — `YearlyResult`, `ProjectResults`, `ProjectInputs.senior_debt_upfront_fee_pct`,
+  `ProjectInputs.reported_dsra_keur`/`reported_financing_fees_construction_keur`/
+  `reported_opex_during_construction_keur`/`reported_minimum_cash_keur`,
+  `ProjectResults.funding_uses_addon_initial_keur`
 - `config/bp_mapping_full.yaml` — `i_project_fields.senior_debt_upfront_fee_pct` ("Senior Debt
-  Upfront fee" d'`I-Project`, offset 2)
+  Upfront fee" d'`I-Project`, offset 2) ; `scalar_fields.reported_dsra_keur` et consorts (bloc
+  "Uses & Sources" d'`O-Control`)
+- `ui/overview.py` — caption "Structure de financement" quand l'addon est non nul
 
 ## Logique metier
 
@@ -24,9 +29,29 @@ defaut, ou "dscr"). Le mode `"gearing"` est **totalement insensible** a tout ce 
 IDC, sculpting) — zero risque de regression sur son comportement existant, verifie en test
 (`test_gearing_mode_ignores_upfront_fee_and_idc`).
 
-1. **`"gearing"`** : `Debt = gearing_pct x CAPEX total`, `Equity = CAPEX total - Debt`, service
-   de la dette en **annuite constante** sur `debt_tenor_years` au taux `interest_rate`. Le DSCR
-   est un pur *output*.
+1. **`"gearing"`** : `Debt = gearing_pct x funding_uses_initial`, `Equity = funding_uses_initial -
+   Debt`, service de la dette en **annuite constante** sur `debt_tenor_years` au taux
+   `interest_rate`. Le DSCR est un pur *output*.
+
+   **`funding_uses_initial` = CAPEX total + additions du bloc "Uses & Sources" de `O-Control`**
+   (DSRA + `Financing costs, fees and interests during construction` + `Operation costs during
+   construction` + `Minimum cash at hands` — 4 champs optionnels de `ProjectInputs`,
+   `reported_dsra_keur` et consorts, tolerants a `None`/absents). Trouvaille de validation sur
+   Belle Epine : le vrai gearing (70%) s'applique au `Total Uses` (27 501,61 k€), pas au CAPEX
+   seul (25 340,18 k€) — sans cet elargissement, notre dette gearing (17 738,13 k€) etait ~8% en
+   dessous du reel (19 251,13 k€) ; avec, elle matche exactement
+   (`0.70 x 27 501,61 = 19 251,13`), et l'equity recalculee (8 250,48 k€) matche aussi
+   exactement la ligne `Equity` + `SHL drawdowns` du reel. **Uniquement applique au mode
+   `"gearing"`** : le mode `"dscr"` garde son propre plafond `gearing x (CAPEX + IDC + frais
+   upfront)` (voir plus bas) — les deux approximent des couts de financement de construction
+   qui se recoupent conceptuellement (double-compte potentiel si on les cumulait), donc pas
+   melanges. Repercute sur `equity_amount_initial` pour que dette + equity restent egaux au
+   meme total (`initial_equity_base`), mais **pas** sur `capex_total_initial_keur` (qui reste le
+   CAPEX seul, utilise comme poids pour repartir l'equity par annee au prorata du tirage CAPEX)
+   ni sur `net_cashflow_keur`/Project IRR (l'addon n'est pas un flux de cashflow projet, comme le
+   nom `CAPEX (w/o DSRA and financing fees)` du BP source le confirme deja). Consequence visible :
+   `debt_amount_keur + equity_amount_keur` peut depasser legerement `capex_total_keur` — signale
+   dans l'UI (`ui/overview.py`, caption conditionnelle sur `funding_uses_addon_initial_keur > 0`).
 2. **`"dscr"`** : la dette est **sculptee** (`sculpt_debt_service`). L'utilisateur nous a
    communique le code VBA reel de son BP (`Sub Debt_Sizing()`, onglet `C-SPV`) : il resout le
    meme probleme par **iteration circulaire** (copier-coller en valeurs jusqu'a ce qu'une

@@ -135,11 +135,15 @@ def compute_results(
     degradation_multipliers: list[float] | None = None,
     debt_sizing_mode: str = "gearing",
     target_dscr: float | None = None,
+    wacc: float | None = None,
 ) -> ProjectResults:
     """debt_sizing_mode:
-    - "gearing" (default): debt = gearing_pct x CAPEX, constant annuity, DSCR is
-      an output. Simple fixed-leverage assumption when no real covenant is known -
-      entirely unaffected by the "dscr" mode below (zero behaviour change).
+    - "gearing" (default): debt = gearing_pct x (CAPEX + O-Control "Uses & Sources"
+      addon when available - DSRA, financing fees/interest during construction,
+      operating costs during construction, minimum cash; 0 otherwise), constant
+      annuity, DSCR is an output. Simple fixed-leverage assumption when no real
+      covenant is known - entirely unaffected by the "dscr" mode below (zero
+      behaviour change there).
     - "dscr": debt is sculpted (core/sculpt_debt_service) so CFADS / debt service
       == target_dscr every year of the tenor (not just >= in the worst year),
       capped by a gearing ceiling that also accounts for capitalised construction
@@ -149,6 +153,10 @@ def compute_results(
       for what is and is not reproduced (no DSRA, commitment fees, or cash sweep;
       fees/IDC affect the debt ceiling only, not modeled as cash costs elsewhere).
       Requires target_dscr (this kwarg or inputs.target_dscr) - raises otherwise.
+
+    `wacc` overrides inputs.wacc for the NPV discount rate only (e.g. a two-way
+    NPV-vs-discount-rate sensitivity grid) - everything else (IRR, DSCR, debt
+    sizing) is unaffected by it.
     """
     gearing = inputs.gearing_pct if gearing_pct is None else gearing_pct
     rate = (inputs.interest_rate if interest_rate is None else interest_rate) + interest_rate_adj
@@ -195,6 +203,22 @@ def compute_results(
         c for i, c in enumerate(capex) if c < 0 and _is_repowering_year(i)
     )
 
+    # In debt_sizing_mode "gearing", the real model applies its gearing % to
+    # CAPEX plus these additional financing uses (O-Control "Uses & Sources"),
+    # not to CAPEX alone - see ProjectInputs.reported_dsra_keur and siblings.
+    # Widening the funding base (not just the debt amount) keeps debt + equity
+    # summing to the same total, matching how the real Sources table splits it.
+    funding_uses_addon_initial = sum(
+        v or 0.0
+        for v in (
+            inputs.reported_dsra_keur,
+            inputs.reported_financing_fees_construction_keur,
+            inputs.reported_opex_during_construction_keur,
+            inputs.reported_minimum_cash_keur,
+        )
+    )
+    funding_uses_initial = capex_total_initial + funding_uses_addon_initial
+
     # Debt service must only start once operations actually begin - a construction/
     # ramp-up year with no CAPEX outflow but zero revenue yet (e.g. COD falls a year
     # after the last CAPEX disbursement) must not be mistaken for an operating year,
@@ -237,7 +261,7 @@ def compute_results(
             inputs.senior_debt_upfront_fee_pct or 0.0,
         )
     elif debt_sizing_mode == "gearing":
-        debt_amount_initial = gearing * capex_total_initial
+        debt_amount_initial = gearing * funding_uses_initial
         initial_service = annuity_payment(debt_amount_initial, rate, tenor)
     else:
         raise ValueError(
@@ -288,7 +312,14 @@ def compute_results(
     )
     debt_service_repowering = _mean_active(repowering_schedule)
 
-    equity_amount_initial = capex_total_initial - debt_amount_initial
+    # "gearing" mode sizes debt off funding_uses_initial (CAPEX + addon), so
+    # equity must close the same base to keep debt + equity == total uses;
+    # "dscr" mode still sizes/caps debt off CAPEX alone (its own IDC/fee
+    # estimate, not the O-Control addon - see _size_tranche_by_dscr).
+    initial_equity_base = (
+        funding_uses_initial if debt_sizing_mode == "gearing" else capex_total_initial
+    )
+    equity_amount_initial = initial_equity_base - debt_amount_initial
     equity_amount_repowering = capex_total_repowering - debt_amount_repowering
     capex_total = capex_total_initial + capex_total_repowering
     debt_amount = debt_amount_initial + debt_amount_repowering
@@ -345,7 +376,8 @@ def compute_results(
 
     project_irr = _safe_irr(net_cashflow_series)
     equity_irr = _safe_irr(equity_cashflow_series) if equity_amount > 0 else None
-    npv = float(npf.npv(inputs.wacc, net_cashflow_series)) if net_cashflow_series else None
+    effective_wacc = inputs.wacc if wacc is None else wacc
+    npv = float(npf.npv(effective_wacc, net_cashflow_series)) if net_cashflow_series else None
 
     dscr_values = [r.dscr for r in yearly if r.dscr is not None]
     dscr_min = min(dscr_values) if dscr_values else None
@@ -368,6 +400,7 @@ def compute_results(
         debt_amount_repowering_keur=debt_amount_repowering,
         debt_service_initial_keur=debt_service_initial,
         debt_service_repowering_keur=debt_service_repowering,
+        funding_uses_addon_initial_keur=funding_uses_addon_initial,
     )
 
 

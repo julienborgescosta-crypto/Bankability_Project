@@ -326,5 +326,13 @@ def parse_full_bp(file_or_path, mapping_path: Path = DEFAULT_FULL_MAPPING_PATH) 
         target_dscr=i_project_float("target_dscr"),
         reported_capex_i_project_keur=i_project_float("reported_capex_i_project_keur"),
         senior_debt_upfront_fee_pct=i_project_float("senior_debt_upfront_fee_pct"),
+        reported_dsra_keur=scalar_float("reported_dsra_keur"),
+        reported_financing_fees_construction_keur=scalar_float(
+            "reported_financing_fees_construction_keur"
+        ),
+        reported_opex_during_construction_keur=scalar_float(
+            "reported_opex_during_construction_keur"
+        ),
+        reported_minimum_cash_keur=scalar_float("reported_minimum_cash_keur"),
         revenue_detail=revenue_detail,
     )

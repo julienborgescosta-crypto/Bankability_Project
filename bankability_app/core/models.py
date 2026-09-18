@@ -77,6 +77,17 @@ class ProjectInputs:
     # the repowering tranche (not present in I-Project's repowering debt section).
     senior_debt_upfront_fee_pct: float | None = None
 
+    # O-Control "Uses & Sources" block: additional financing uses beyond CAPEX
+    # itself (DSRA, financing costs/fees/interest during construction, operating
+    # costs during construction, minimum cash at hands). The real gearing % is
+    # applied to CAPEX + these, not to CAPEX alone - widening the funding base
+    # in debt_sizing_mode "gearing" by their sum reconciles our computed debt
+    # almost exactly against the real reported debt (see docs/specs/financial_engine.md).
+    reported_dsra_keur: float | None = None
+    reported_financing_fees_construction_keur: float | None = None
+    reported_opex_during_construction_keur: float | None = None
+    reported_minimum_cash_keur: float | None = None
+
     revenue_detail: RevenueBreakdown | None = None
 
 
@@ -117,3 +128,10 @@ class ProjectResults:
     debt_amount_repowering_keur: float = 0.0
     debt_service_initial_keur: float = 0.0
     debt_service_repowering_keur: float = 0.0
+
+    # Additional financing uses beyond CAPEX (DSRA + financing fees/interest
+    # during construction + operating costs during construction + minimum cash),
+    # folded into the funding base for the initial tranche in debt_sizing_mode
+    # "gearing" only (see ProjectInputs.reported_dsra_keur and financial_engine.py).
+    # 0.0 when the BP doesn't report this "Uses & Sources" block.
+    funding_uses_addon_initial_keur: float = 0.0

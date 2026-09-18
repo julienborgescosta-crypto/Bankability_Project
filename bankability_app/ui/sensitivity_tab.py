@@ -22,6 +22,31 @@ def _tornado_chart(
     return fig
 
 
+def _npv_heatmap(grid: list[list[float | None]]) -> go.Figure:
+    text = [
+        [(f"{v:+,.0f}".replace(",", " ") if v is not None else "n/a") for v in row] for row in grid
+    ]
+    fig = go.Figure(
+        data=go.Heatmap(
+            z=grid,
+            x=[f"{r:.1%}" for r in sensitivity.NPV_DISCOUNT_RATES],
+            y=[f"{s:+.0%}" for s in sensitivity.NPV_REVENUE_SHOCKS],
+            text=text,
+            texttemplate="%{text}",
+            colorscale="RdYlGn",
+            zmid=0,
+            colorbar={"title": "NPV (k€)"},
+        )
+    )
+    fig.update_yaxes(autorange="reversed")
+    fig.update_layout(
+        title="Project NPV sensitivity (k€)",
+        xaxis_title="Taux d'actualisation",
+        yaxis_title="Variation du revenu",
+    )
+    return fig
+
+
 def render(inputs: ProjectInputs, debt_kwargs: dict) -> None:
     base, rows = sensitivity.run_sensitivity(inputs, debt_kwargs)
 
@@ -89,6 +114,16 @@ def render(inputs: ProjectInputs, debt_kwargs: dict) -> None:
             _tornado_chart(rows, "dscr_min", base.dscr_min, "Tornado — DSCR min", "x"),
             use_container_width=True,
         )
+
+    st.divider()
+    st.subheader("Project NPV Sensitivity (Revenu × Taux d'actualisation)")
+    grid = sensitivity.run_npv_sensitivity_grid(inputs, debt_kwargs)
+    st.plotly_chart(_npv_heatmap(grid), use_container_width=True)
+    st.caption(
+        "Grille indépendante du WACC courant du projet : chaque colonne recalcule la NPV à un "
+        "taux d'actualisation différent, chaque ligne applique le même choc de revenu que le "
+        "tornado ci-dessus — utile pour situer le taux auquel la NPV bascule en négatif."
+    )
 
     st.divider()
     st.caption(

@@ -56,3 +56,29 @@ def run_sensitivity(inputs: ProjectInputs, debt_kwargs: dict) -> tuple[ProjectRe
             row[shock] = {"equity_irr": result.equity_irr, "dscr_min": result.dscr_min}
         rows.append(row)
     return base, rows
+
+
+# Two-way grid: Project NPV against Revenue change x discount rate, independent
+# of run_sensitivity() above (which is one-way, per-variable). Revenue change
+# reuses the same +/-10%/20% shocks as the one-way sensitivity for consistency;
+# the discount rate range is a standalone axis (not tied to inputs.wacc), so the
+# reader can see where NPV crosses zero as the hurdle rate moves.
+NPV_REVENUE_SHOCKS = [-0.20, -0.10, 0.0, 0.10, 0.20]
+NPV_DISCOUNT_RATES = [0.05, 0.075, 0.10, 0.12, 0.15]
+
+
+def run_npv_sensitivity_grid(inputs: ProjectInputs, debt_kwargs: dict) -> list[list[float | None]]:
+    """NPV for each (revenue_shock, discount_rate) combination - one row per
+    revenue_shock (in NPV_REVENUE_SHOCKS order), one column per discount rate
+    (in NPV_DISCOUNT_RATES order)."""
+    grid = []
+    for shock in NPV_REVENUE_SHOCKS:
+        kwargs = dict(debt_kwargs)
+        kwargs["revenue_multiplier"] = 1 + shock
+        row = []
+        for rate in NPV_DISCOUNT_RATES:
+            kwargs["wacc"] = rate
+            result = financial_engine.compute_results(inputs, **kwargs)
+            row.append(result.npv_keur)
+        grid.append(row)
+    return grid

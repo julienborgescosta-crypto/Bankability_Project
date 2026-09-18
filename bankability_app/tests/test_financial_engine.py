@@ -104,6 +104,21 @@ def test_npv_uses_wacc_and_undiscounted_year_zero(simple_inputs):
     assert result.npv_keur == pytest.approx(expected_npv)
 
 
+def test_wacc_kwarg_overrides_inputs_wacc_for_npv_only(simple_inputs):
+    """`wacc` overrides inputs.wacc for the NPV discount rate only - used by the
+    NPV-vs-discount-rate sensitivity grid (core/sensitivity.py) without touching
+    inputs.wacc itself, and without affecting IRR/DSCR/debt sizing."""
+    baseline = financial_engine.compute_results(simple_inputs)
+    overridden = financial_engine.compute_results(simple_inputs, wacc=0.20)
+
+    expected_npv = npf.npv(0.20, [-1000.0, 380.0, 380.0])
+    assert overridden.npv_keur == pytest.approx(expected_npv)
+    assert overridden.npv_keur != pytest.approx(baseline.npv_keur)
+    assert overridden.project_irr == pytest.approx(baseline.project_irr)
+    assert overridden.dscr_min == pytest.approx(baseline.dscr_min)
+    assert simple_inputs.wacc == pytest.approx(0.10)
+
+
 def test_multipliers_move_results_in_expected_direction(simple_inputs):
     base = financial_engine.compute_results(simple_inputs)
     higher_revenue = financial_engine.compute_results(simple_inputs, revenue_multiplier=1.2)
@@ -270,6 +285,47 @@ def test_gearing_mode_ignores_upfront_fee_and_idc(simple_inputs):
     still_same = financial_engine.compute_results(simple_inputs, gearing_pct=0.5)
     assert still_same.debt_amount_initial_keur == pytest.approx(baseline.debt_amount_initial_keur)
     assert still_same.dscr_min == pytest.approx(baseline.dscr_min)
+
+
+def test_gearing_mode_widens_funding_base_with_uses_and_sources_addon(simple_inputs):
+    """Le vrai gearing s'applique a CAPEX + DSRA + frais de financement construction
+    + couts d'operation construction + cash minimum (bloc "Uses & Sources" de
+    O-Control), pas au CAPEX seul - reproduit la reconciliation validee sur Belle
+    Epine (dette gearing exacte une fois ces additions incluses)."""
+    simple_inputs.reported_dsra_keur = 10.0
+    simple_inputs.reported_financing_fees_construction_keur = 70.0
+    simple_inputs.reported_opex_during_construction_keur = 5.0
+    simple_inputs.reported_minimum_cash_keur = 15.0
+    result = financial_engine.compute_results(simple_inputs, gearing_pct=0.7)
+
+    funding_uses = 1000.0 + 10.0 + 70.0 + 5.0 + 15.0
+    expected_debt = 0.7 * funding_uses
+    assert result.debt_amount_initial_keur == pytest.approx(expected_debt)
+    # simple_inputs n'a pas de tranche repowering -> l'agregat == la tranche initiale.
+    assert result.equity_amount_keur == pytest.approx(funding_uses - expected_debt)
+    assert result.funding_uses_addon_initial_keur == pytest.approx(100.0)
+    # capex_total_keur reste le CAPEX seul - debt+equity peuvent le depasser.
+    assert result.capex_total_keur == pytest.approx(1000.0)
+    assert result.debt_amount_keur + result.equity_amount_keur > result.capex_total_keur
+
+
+def test_dscr_mode_ignores_uses_and_sources_addon(simple_inputs):
+    """Le mode dscr garde son propre plafond (CAPEX + IDC + frais upfront) - il
+    ne doit pas etre gonfle par l'addon "Uses & Sources", qui recouvre en partie
+    les memes couts de financement de construction que son estimation interne."""
+    simple_inputs.reported_dsra_keur = 10.0
+    simple_inputs.reported_financing_fees_construction_keur = 70.0
+    baseline = financial_engine.compute_results(
+        simple_inputs, debt_sizing_mode="dscr", target_dscr=0.5
+    )
+    simple_inputs.reported_dsra_keur = None
+    simple_inputs.reported_financing_fees_construction_keur = None
+    without_addon = financial_engine.compute_results(
+        simple_inputs, debt_sizing_mode="dscr", target_dscr=0.5
+    )
+    assert baseline.debt_amount_initial_keur == pytest.approx(
+        without_addon.debt_amount_initial_keur
+    )
 
 
 def test_dscr_sizing_two_tranches_sequential(repowering_inputs):

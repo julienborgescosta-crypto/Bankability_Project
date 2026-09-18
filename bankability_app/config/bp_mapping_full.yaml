@@ -40,6 +40,17 @@ scalar_fields:
   interest_rate: "All-in rate (fixed part)"
   gearing_pct: {label: "Debt", offset: 2}
   equity_discount_factor: "Equity discount factor"
+  # "Uses & Sources" block - additional financing uses beyond CAPEX itself, on
+  # which the real gearing % is actually applied (see i_project_fields note in
+  # financial_engine.py and docs/specs/financial_engine.md). Tolerant if absent
+  # (older exports of this block, or the synthetic test fixtures, don't have it).
+  reported_dsra_keur: "DSRA"
+  # The source workbook misspells "construction" as "constuction" on this row -
+  # match on the common prefix (startswith fallback in _find_label) so both
+  # spellings resolve to the same cell.
+  reported_financing_fees_construction_keur: "Financing costs, fees and interests during"
+  reported_opex_during_construction_keur: "Operation costs during construction"
+  reported_minimum_cash_keur: "Minimum cash at hands"
 
 series_fields:
   years: "Year"

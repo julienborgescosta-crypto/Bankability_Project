@@ -3,6 +3,8 @@ from pathlib import Path
 import openpyxl
 import pytest
 
+from core import aur_cases
+from core.dev_case_parser import load_dev_case_grids, parse_copex_library
 from core.models import ProjectInputs
 
 SAMPLE_DATA_DIR = Path(__file__).resolve().parent.parent / "sample_data"
@@ -209,6 +211,36 @@ def sample_summary_bp_path() -> Path:
     return path
 
 
+@pytest.fixture(scope="session")
+def sample_aurora_bp_path() -> Path:
+    """Format complet + onglets Aurora (AU_Store, Source BP, BP Aurora, cas de
+    developpement) - donnees fictives, voir README section "Donnees confidentielles"."""
+    path = SAMPLE_DATA_DIR / "160926_BP_Stockage_Standalone__.xlsx"
+    assert path.exists(), "Fixture manquante - voir README pour la provenance du fichier"
+    return path
+
+
+@pytest.fixture(scope="session")
+def au_store(sample_aurora_bp_path):
+    """Session-scope : le classeur fait 4.7 Mo, le reparser par module de test
+    (comme le ferait un scope 'module' plus naturel) fait passer la suite de
+    quelques secondes a plusieurs minutes - lecture seule, sans risque de fuite
+    d'etat entre tests (AuStoreLibrary est un frozen dataclass)."""
+    return aur_cases.load_au_store(sample_aurora_bp_path)
+
+
+@pytest.fixture(scope="session")
+def copex_library(sample_aurora_bp_path):
+    """Session-scope pour la meme raison que `au_store` ci-dessus."""
+    _, copex_grid, _ = load_dev_case_grids(sample_aurora_bp_path)
+    return parse_copex_library(copex_grid)
+
+
+@pytest.fixture
+def default_financing_terms() -> dict:
+    return aur_cases.load_financing_terms()
+
+
 @pytest.fixture
 def sample_full_bp_path(tmp_path: Path) -> Path:
     """Construit un classeur synthetique minimal au format 'complet'
@@ -387,6 +419,113 @@ def sample_full_bp_with_i_project_path(tmp_path: Path) -> Path:
         "%",
         0.09,
     )  # repowering debt
+
+    wb.save(path)
+    return path
+
+
+@pytest.fixture
+def sample_dev_case_workbook_path(tmp_path: Path) -> Path:
+    """Classeur synthetique minimal avec les 3 onglets consommes par
+    core/dev_case_parser.py (Inputs Dev / COPEX_library / CF Aurora) - chiffres
+    ronds fabriques, pas les vraies donnees Aurora/Clean Horizon confidentielles
+    du fichier reel (jamais commite)."""
+    path = tmp_path / "synthetic_dev_case.xlsx"
+    wb = openpyxl.Workbook()
+
+    inputs_dev = wb.active
+    inputs_dev.title = "Inputs Dev"
+    rows = [
+        ("Entry year (COD)", 2028),
+        ("Puissance Nominale", 10),
+        ("Capacité énergétique", 20),
+        ("Network (Segment)", "TSO 90kV"),
+        ("Type TURPE", "Classique"),
+        ("Gabarit", 0),
+        ("Repowering", 0),
+        ("Option 1 - Valeur manuelle", 0),
+        ("Option 2 - Distance racco RTE", 0),
+        ("Option 3 - Distance HV Substation - BESS", 0),
+        ("OPEX Loyer foncier", 5),
+    ]
+    for i, (label, value) in enumerate(rows, start=1):
+        inputs_dev.cell(row=i, column=3, value=label)
+        inputs_dev.cell(row=i, column=4, value=value)
+
+    copex = wb.create_sheet("COPEX_library")
+    copex["A6"] = "CAPEX assumptions - AURORA (base 2028)"
+    copex["A8"] = 2028
+    copex["B8"] = "2h - HTB1"
+    copex["C8"] = "2h - HTA"
+    # Colonnes J+ (index 9+, apres les 7 colonnes segment + 1 separateur) :
+    # "Forecast price factor (selon annee de COD)" - delta relatif au cout de
+    # base 2028, uniquement renseigne pour "Battery system" dans ce fixture.
+    copex.cell(row=8, column=10, value=2030)
+    capex_rows = [
+        ("Battery system", 100.0, 90.0, -0.10),
+        ("Inverter", 20.0, 18.0, None),
+        ("Balance of system", 15.0, 14.0, None),
+        ("Development", 10.0, 9.0, None),
+        ("Grid connection", 20.0, 15.0, None),
+        ("EPC soft costs", 15.0, 14.0, None),
+    ]
+    for offset, (label, v1, v2, escalation) in enumerate(capex_rows, start=9):
+        copex.cell(row=offset, column=1, value=label)
+        copex.cell(row=offset, column=2, value=v1)
+        copex.cell(row=offset, column=3, value=v2)
+        if escalation is not None:
+            copex.cell(row=offset, column=10, value=escalation)
+
+    copex["A20"] = "OPEX assumptions -  AURORA (base 2028)"
+    copex["A21"] = 2028
+    copex["B21"] = "2h - HTB1"
+    copex["C21"] = "2h - HTA"
+    opex_rows = [
+        ("Fixed O&M", 2.0, 1.5),
+        ("Insurance", 1.0, 0.8),
+        ("Grid charges", 0.5, 0.4),
+        ("Land lease", 0.0, 0.0),
+        ("Accise", 0.0, 0.0),
+        ("Other", 0.5, 0.3),
+    ]
+    for offset, (label, v1, v2) in enumerate(opex_rows, start=22):
+        copex.cell(row=offset, column=1, value=label)
+        copex.cell(row=offset, column=2, value=v1)
+        copex.cell(row=offset, column=3, value=v2)
+
+    aurora = wb.create_sheet("CF Aurora")
+    aurora["A1"] = "HTB1"
+    aurora["B2"] = "configuration"
+    aurora["C2"] = "price"
+    aurora["D2"] = "stream"
+    for offset, year in enumerate([2028, 2029, 2030], start=5):
+        aurora.cell(row=2, column=offset, value=year)
+    aurora_2h_rows = [
+        ("wholesale_storage_sell_revenue", [50_000.0, 50_000.0, 50_000.0]),
+        ("tariff_TURPE 7 revenue", [-5_000.0, -5_000.0, -5_000.0]),
+    ]
+    for r, (stream, values) in enumerate(aurora_2h_rows, start=3):
+        aurora.cell(row=r, column=2, value="C2h1MW")
+        aurora.cell(row=r, column=3, value="Aurora - Forecast test")
+        aurora.cell(row=r, column=4, value=stream)
+        for offset, value in enumerate(values, start=5):
+            aurora.cell(row=r, column=offset, value=value)
+
+    aurora["B7"] = "configuration"
+    aurora["C7"] = "price"
+    aurora["D7"] = "stream"
+    for offset, year in enumerate([2028, 2029, 2030], start=5):
+        aurora.cell(row=7, column=offset, value=year)
+    aurora_4h_rows = [
+        ("wholesale_storage_sell_revenue", [90_000.0, 90_000.0, 90_000.0]),
+        ("tariff_TURPE 7 revenue", [-8_000.0, -8_000.0, -8_000.0]),
+    ]
+    for r, (stream, values) in enumerate(aurora_4h_rows, start=8):
+        aurora.cell(row=r, column=2, value="CTest4h1MW")
+        aurora.cell(row=r, column=3, value="Aurora - Forecast test")
+        aurora.cell(row=r, column=4, value=stream)
+        for offset, value in enumerate(values, start=5):
+            aurora.cell(row=r, column=offset, value=value)
 
     wb.save(path)
     return path
