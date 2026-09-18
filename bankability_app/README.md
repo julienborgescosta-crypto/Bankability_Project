@@ -7,6 +7,12 @@ en six couches decrite dans l'article de reference
 (Tudor Ionut Grigore) : revenue stack modelling, degradation/availability, bear case stress
 testing, sensitivity architecture, risk assessment layer, dashboard layer.
 
+**Travail en cours (v2)** : extension multi-projets pilotee par les Business Cases Aurora
+(`AU_Store`, strategies dev&sell RtB / garder&exploiter / racheter&flip). Vocabulaire et
+decisions de conception dans `CONTEXT.md` et `docs/adr/`, methodologie complete (pre-
+implementation) dans `docs/specs/aur_v2_methodology.md` — a lire avant de reprendre ce
+chantier, que ce soit pour continuer le cadrage ou pour coder une phase.
+
 ## Installation
 
 Toujours depuis `bankability_app/` (pas la racine du repo) :
@@ -57,9 +63,12 @@ L'app supporte deux formats de classeur Excel, detectes automatiquement
 (`bp_parser.detect_format`) :
 
 - **Format resume** — un seul onglet, cashflows deja agreges par annee. Mapping :
-  `config/bp_mapping.yaml`. Illustre par `sample_data/260612_BP_Stockage_Standalone__Claude.xlsx`.
+  `config/bp_mapping.yaml`. Illustre par `sample_data/260612_BP_Stockage_Standalone__Claude.xlsx`
+  (genere par `sample_data/build_sample_xlsx.py`).
 - **Format complet** — classeur reel multi-onglets, reconnu a la presence des onglets
   `O-Financials` (P&L + cashflows annuels) et `O-Control` (hypotheses + resultats deja calcules).
+  Illustre par `sample_data/160926_BP_Stockage_Standalone__.xlsx` (donnees fictives, inclut aussi
+  les onglets du cas de developpement : `Inputs Dev`, `COPEX_library`, `CF Aurora`).
   Un 3e onglet, `I-Project` (hypotheses source les plus detaillees : CAPEX poste par poste,
   termes de financement complets, dette de repowering separee), est lu s'il est present -
   tolere s'il est absent. Mapping : `config/bp_mapping_full.yaml`.
@@ -68,6 +77,37 @@ Dans les deux cas, le parsing se fait **par recherche de libelle** dans la grill
 (pas par adresse de cellule fixe) — voir `docs/specs/bp_parsing.md` pour le detail de cette
 decision. Ci-dessous, pour chacune des six couches de l'article, ce que l'app implemente et
 **precisement d'ou vient chaque donnee dans le BP**.
+
+### Extension hors 6 couches, en amont : Cas de développement
+
+Pas une des six couches de l'article — un point d'entrée **avant** elles : au lieu de lire un
+BP déjà chiffré (les couches ci-dessous supposent un `O-Financials` déjà calculé), l'onglet
+"Cas de développement" construit un `ProjectInputs` synthétique à partir d'hypothèses de
+développement (année de COD, puissance, durée BESS, segment réseau, type TURPE, gabarit, mode
+de CAPEX de raccordement) — sur le modèle de l'onglet `Advise Dev` du classeur réel. Détecté
+automatiquement sur le **même fichier uploadé** (pas de 2e import) dès que les onglets
+`Inputs Dev`, `COPEX_library` et `CF Aurora` sont présents ; apparaît comme 1er onglet de
+l'app si c'est le cas.
+
+Implémenté (`core/dev_case.py`, `core/dev_case_parser.py`) : le revenu est lu dans `CF Aurora`
+(bibliothèque de 30 configurations — 3 classes de tension x 5 variantes TURPE/gabarit x 2
+durées —, détail par flux normalisé 1 MW, indexé par année calendaire) ; le CAPEX/OPEX dans la
+table "CAPEX/OPEX assumptions - AURORA" de `COPEX_library` (même taxonomie classe de
+tension/durée, en €/kW) — validé **exactement** contre le fichier réel (CAPEX total = 21 536 k€
+pour 40 MW en HTB1/2h, identique à la colonne "Aurora (k€)" d'`Advise Dev`). Une fois le cas de
+base construit, `financial_engine.compute_results()` et tous les onglets existants s'appliquent
+sans modification — une case "Analyse bancabilité complète" les active sur ce cas de base.
+
+Leviers structurels balayables (chacun reconstruit un `ProjectInputs` complet par valeur, pas
+un simple choc multiplicatif comme la couche 4) : distance de raccordement RTE, durée BESS
+(2h/4h), configuration segment/TURPE/gabarit/repowering, année de COD. Revenu et CAPEX sont
+tous deux validés à l'euro/k€ près contre le fichier réel. Le CAPEX/OPEX est en plus escaladé
+par année de COD (poste par poste) via le "Forecast price factor" de `COPEX_library`, plafonné
+sur la dernière année couverte (2034) au-delà. Voir `docs/specs/dev_case.md` pour le détail des
+formules reproduites (coût de raccordement par distance, mapping segment CAPEX ↔ classe de
+tension revenu, escalade par année de COD) et la limite connue restante (sur 20 ans, le revenu
+Aurora décline pendant que l'OPEX reste plat, ce qui peut rendre l'IRR non calculable en fin de
+période — à trancher au cas par cas selon la configuration testée).
 
 ### 1. Revenue Stack Modelling
 
@@ -155,6 +195,7 @@ pour DSCR/Equity IRR) :
 | DSCR cible du projet (covenant) | non disponible | libelle `Target DSCR - Period 1` de `I-Project` (offset 2) — voir ci-dessous |
 | Gearing / taux / maturite (tranche repowering) | non disponible (defauts UI 70%/5%/10 ans) | section "BESS Repowering debt" de `I-Project` : libelles `Gearing`, `All-in rate (fixed part)` (occurrence 2), `Maturity` (occurrence 2), tous offset 2 |
 | Frais upfront de la dette senior | non disponible | libelle `Senior Debt Upfront fee` de `I-Project` (offset 2) — utilise uniquement en mode "Dimensionne par DSCR" |
+| Additions au CAPEX pour le gearing (DSRA, frais de financement construction, couts d'operation construction, cash minimum) | non disponible | bloc "Uses & Sources" de `O-Control` : libelles `DSRA`, `Financing costs, fees and interests during construction`, `Operation costs during construction`, `Minimum cash at hands` — utilise uniquement en mode "Gearing fixe" (voir ci-dessous) |
 
 La dette de repowering est une **2e tranche independante** de la dette initiale (voir
 `docs/specs/financial_engine.md`) : detectee automatiquement comme la 2e sortie de CAPEX dans
@@ -164,8 +205,13 @@ des termes de dette repowering definis dans `I-Project` mais `Repowering: Non` d
 CAPEX — la tranche repowering ne s'active donc pas).
 
 **Deux modes de dimensionnement de la dette**, basculables dans la sidebar (`debt_sizing_mode`) :
-- **Gearing fixe** (defaut) : `Debt = gearing_pct x CAPEX`, annuite constante, le DSCR est un
-  resultat.
+- **Gearing fixe** (defaut) : `Debt = gearing_pct x (CAPEX + additions "Uses & Sources" de
+  O-Control quand disponibles)`, annuite constante, le DSCR est un resultat. Le vrai gearing
+  s'applique au `Total Uses` (CAPEX + DSRA + frais de financement construction + cash minimum),
+  pas au CAPEX seul — trouvaille de validation sur Belle Epine, ou l'ecart avec la dette reelle
+  passe de ~8% (CAPEX seul) a un match quasi-exact une fois ces additions incluses. Sans elles
+  (format resume, ou colonnes absentes du classeur), se rabat sur `gearing_pct x CAPEX`, comme
+  avant.
 - **Dimensionne par DSCR** (visible seulement si `Target DSCR` est extrait d'`I-Project`) : la
   dette est **sculptee** — `service_annee = CFADS_annee / Target DSCR` **chaque annee** (pas
   juste dans la pire), en forme fermee (pas d'iteration necessaire malgre le fait que le BP
@@ -256,6 +302,7 @@ Modules (`core/`) :
 | `stress_test.py` | Matrice de stress combine (revenu x degradation) | 3 |
 | `risk_rules.py` | Regles de seuils -> flags rouge/orange/vert | 5 |
 | `acquisition.py` | Prime d'acquisition maximale (M&A) + sensibilite | extension hors 6 couches |
+| `dev_case.py` / `dev_case_parser.py` | Construit un `ProjectInputs` depuis des hypotheses de developpement (COD, puissance, duree, segment, TURPE) + bibliotheques CAPEX/revenu (`COPEX_library`/`CF Aurora`) | extension hors 6 couches, en amont |
 
 Configuration (`config/`) :
 
@@ -304,10 +351,19 @@ positives** (valeurs d'info, pas des flux de cashflow) — ne pas les confondre 
   taux (reel vs nominal) differente.
 - **Ecart CAPEX entre `O-Control` et `I-Project`** (~1000 k€ sur un projet reel observe) — voir
   couche 4 ci-dessus et `docs/specs/bp_parsing.md`, section "Questions ouvertes".
+- **Moteur Aurora v2 (`core/aur_cases.py`, Configurateur/Analyse globale) : valeur residuelle de
+  fin de vie non modelisee.** `AU_Store!EoL_perkW` (118,44 EUR/kW) est charge mais jamais applique
+  dans `build_project_inputs` — `end_of_life_keur` reste une serie de zeros, ce qui sous-estime
+  legerement le rendement des projets longs. Le cout de repowering (2e sortie CAPEX a l'op-year
+  15), lui, est modelise depuis le 2026-09-18 (Battery system + Inverter de `COPEX_library`, voir
+  `docs/specs/aur_cases.md`).
 
 ## Donnees confidentielles
 
 Les vrais Business Plans (`.xlsm`) et le dossier `fichier_excel/` a la racine du repo sont
-exclus de git (`.gitignore`). Seul le fixture illustratif fabrique
-(`sample_data/260612_BP_Stockage_Standalone__Claude.xlsx`) est commite, pour que les tests
-tournent sans donnee reelle.
+exclus de git (`.gitignore`). Seuls les fixtures illustratifs fabriques
+(`sample_data/260612_BP_Stockage_Standalone__Claude.xlsx` pour le format resume,
+`sample_data/160926_BP_Stockage_Standalone__.xlsx` pour le format complet) sont commites, pour
+que les tests tournent sans donnee reelle. Le fixture format complet est converti en `.xlsx`
+(valeurs figees, sans macro) avant d'etre commite, pour ne pas etre bloque par la regle
+`.gitignore` `*.xlsm` qui protege les vrais BP.

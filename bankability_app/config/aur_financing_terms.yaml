@@ -1,0 +1,45 @@
+# Defauts de financement et de frais pour les projets synthetiques du portefeuille Aurora
+# (pas de classeur I-Project reel derriere eux - voir docs/adr/0001).
+# Calibres sur sample_data/160926_BP_Stockage_Standalone__.xlsx (I-Project!220-250),
+# overridables par projet dans le Configurateur (core/aur_cases.py).
+
+senior_debt_margin_pct: 0.015  # I-Project!226 "Senior Debt margin"
+swap_margin_pct: 0.001  # I-Project!229 "Swap margin"
+senior_debt_upfront_fee_pct: 0.013  # I-Project!224 "Senior Debt Upfront fee"
+
+target_dscr_secured: 1.20  # I-Project!247 "Target DSCR - secured revenues (tolling / floor)"
+target_dscr_merchant: 1.40  # I-Project!248 "Target DSCR - merchant revenues"
+maturity_full_merchant_years: 10  # I-Project!249 "Maturity - full merchant case"
+maturity_years_added_after_ppa: 3  # I-Project!250 "Maturity - years added after PPA end"
+
+# Frais d'agregateur (mecanisme complet a paliers, voir I-Project!42-46 / CONTEXT.md) -
+# rates negatifs = cout. Sur le projet source, le seuil est a 0 donc tout le revenu est
+# "apres seuil" : avant/apres ne se distinguent pas encore sur ce seul exemple.
+aggregator_fee_rate_before_threshold: 0.0  # I-Project!44
+aggregator_fee_rate_after_threshold: -0.075  # I-Project!45
+aggregator_fee_yearly_threshold_keur_per_mw: 0.0  # I-Project!46
+aggregator_fee_net_of_energy_costs: true  # I-Project!42
+aggregator_fee_net_of_turpe: true  # I-Project!43
+
+# Strategie 1 (developper & vendre au RtB) - hypotheses business, pas des donnees du BP.
+# DEVEX = cout de developpement reel de QEF (forfaitaire par projet, pas un taux par MW -
+# ce sont des couts largement fixes : etudes de raccordement, permitting, foncier).
+devex_flat_keur_hta: 150  # confirme par l'utilisateur (2026-09-17)
+devex_flat_keur_htb: 300  # confirme, s'applique a HTB1/HTB2/HTB3 (pas de distinction fournie)
+
+# DSA = marge de dev CIBLE (par MW, par duree BESS) + DEVEX - pas un taux plat independant du
+# DEVEX. Construit ainsi, DSA - DEVEX = marge cible exactement quand SPA = 0 (le projet atteint
+# pile le TRI cible de l'acheteur) - c'est SPA qui absorbe ensuite tout ecart au TRI cible dans
+# les deux sens (voir core/strategy.py). Confirme par l'utilisateur (2026-09-18), remplace le
+# taux plat provisoire (75 k€/MW) du 2026-09-18 precedent qui ignorait le DEVEX.
+target_margin_keur_per_mw_2h: 50  # confirme par l'utilisateur (2026-09-18)
+target_margin_keur_per_mw_4h: 80  # confirme par l'utilisateur (2026-09-18)
+
+# TRI equity cible de l'acheteur au RtB (pour le solve SPA), par regime de risque -
+# blende par part de revenu securise (meme principe que le tiering DSCR ci-dessus).
+buyer_target_equity_irr_merchant: 0.11  # confirme, "cible Aurora" standalone merchant
+buyer_target_equity_irr_secured: 0.09  # PROVISOIRE - a confirmer (cas tolling/floor secures)
+
+# Strategie 3 (racheter RtB & vendre au COD) - hypotheses business.
+portage_duration_months: 18  # confirme par l'utilisateur (2026-09-17)
+carry_rate_pct: 0.08  # PROVISOIRE - a confirmer, cout de portage du capital immobilise
