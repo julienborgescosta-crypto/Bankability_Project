@@ -2,7 +2,8 @@
 
 L'« analyse globale » du brief pourrait se lire comme une extension du module de sensibilité
 existant (`sensitivity.py`, chocs one-way ±10 %/±20 % autour d'un cas de base). Mais l'espace des
-configs Aurora est fini et petit (18 configs `AU_Store` × années de COD valides × {full merchant,
+configs Aurora est fini et petit (22 configs `AU_Store`, dont 4 ORO — voir
+`docs/specs/aur_cases.md` — × années de COD valides × {full merchant,
 floor, tolling}), pas un continuum. Décision : `global_sensitivity.py` calcule et met en cache
 une fois **toute** la combinatoire valide, exposée comme table triable/filtrable plus des heatmaps
 et des coupes 1-2 variables à la volée depuis ce même cache — pas un balayage classique variable

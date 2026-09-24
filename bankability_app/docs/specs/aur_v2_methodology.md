@@ -17,15 +17,17 @@ Fichier source des faits ci-dessous : `sample_data/160926_BP_Stockage_Standalone
 
 ### 1.1 Source : `AU_Store`
 
-18 configurations Aurora standalone (Q2 2026), une config = `{durée 2h/4h} x {tension
-HTA/HTB1/HTB2/HTB3} x {TURPE Classique/Injection/Soutirage} x {gabarit 0/1}` — pas toutes les
-combinaisons existent, seulement celles qu'Aurora a modélisées (voir la liste exacte dans
-`AU_Store!AP2:AV19`).
+22 configurations Aurora standalone (Q2 2026) : 18 standard + 4 ORO (limitation non-firm 3000h/an,
+ajoutées le 2026-09-23, voir `docs/specs/aur_cases.md`), une config = `{durée 2h/4h} x {tension
+HTA/HTB1/HTB2/HTB3} x {TURPE Classique/Injection/Soutirage} x {gabarit 0/1} x {ORO 0/1}` — pas
+toutes les combinaisons existent, seulement celles qu'Aurora a modélisées (voir la liste exacte
+dans `AU_Store!AX2:BD23`, colonnes déplacées lors de la reconstruction du bloc TURPE ORO le
+2026-09-23 — toujours repérées par libellé, jamais par adresse fixe, voir `docs/specs/aur_cases.md`).
 
-Par config, deux courbes calendaires 2027-2060 (`AU_Store!B:S` pour RAW, `V:AM` pour TURPE) plus
-une table de dégradation par op-year commune à toutes les configs (`AU_Store!AX:AZ`, reset à
+Par config, deux courbes calendaires 2027-2060 (`AU_Store!B:W` pour RAW, `Z:AU` pour TURPE) plus
+une table de dégradation par op-year commune à toutes les configs (`AU_Store!BG:BI`, reset à
 l'op-year 15 pour repowering, `DegFactor_noRepo` sans reset) et deux constantes globales
-(`RepowOpYear=15`, `EoL_perkW=118.44`, `AU_Store!BB1:BC2`).
+(`RepowOpYear=15`, `EoL_perkW=118.44`, `AU_Store!BL1:BM2`).
 
 **Clé de config** : deux clés distinctes coexistent, à ne pas confondre (voir `CONTEXT.md`) —
 `AUStoreKey` (clé technique, en-tête des courbes, ex. `"4h HTB2 injection gabarit"`) et `DropKey`
@@ -74,6 +76,17 @@ Low/Overbuild, curtailment ORO, configs co-localisées PV/éolien, tarif BT) —
 de portée par construction puisqu'`AU_Store` ne couvre que standalone/Central/no-curtailment
 (+2 configs gabarit). Utiliser uniquement les lignes standalone/Central/no-curtailment de la
 Summary table comme jeux de test.
+
+### 1.4 Extrapolation des combinaisons manquantes (`config_extrapolation.py`, Phase 6)
+
+Demande de l'utilisateur, 2026-09-24 : pouvoir configurer n'importe quelle combinaison
+durée/tension/type TURPE/gabarit/ORO/heures de curtailment, même non modélisée par Aurora, plutôt
+que de se heurter à une erreur ou (pire) un repli silencieux. `config_extrapolation.resolve_config()`
+retourne toujours une courbe utilisable — réelle si Aurora l'a modélisée, sinon estimée par
+transfert de facteurs/deltas calibrés sur HTB2 (seule tension avec la matrice complète) ou sur le
+profil de perte % du databook Aurora pour les heures de curtailment personnalisées. Chaque
+extrapolation porte une note explicite, affichée côté UI avant et après l'ajout d'un projet. Voir
+`docs/specs/config_extrapolation.md` pour la méthode complète et ses limites.
 
 ---
 

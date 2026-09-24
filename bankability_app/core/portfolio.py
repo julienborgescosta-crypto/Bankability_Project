@@ -6,8 +6,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
 
-from . import aur_cases, contract_overlay, strategy
+from . import aur_cases, config_extrapolation, contract_overlay, strategy
 from .aur_cases import AuStoreLibrary
+from .config_extrapolation import ResolvedConfig
 from .contract_overlay import ContractStructure
 from .dev_case import CopexLibrary
 from .models import ProjectInputs
@@ -37,12 +38,26 @@ class ProjectConfig:
     devex_keur_override: float | None = None
     carry_months_override: int | None = None
     carry_rate_override: float | None = None
-    # Ajustement global (%) sur le CAPEX/OPEX Aurora - 0.0 = pas d'ajustement, +0.10 = +10%,
-    # -0.10 = -10%. Applique directement a la serie ProjectInputs (pas seulement au run
-    # financial_engine) pour que toutes les lectures downstream soient coherentes, y compris
-    # compute_cod_resale_value_keur qui lit inputs.opex_keur directement, hors compute_results.
-    capex_adjustment_pct: float = 0.0
-    opex_adjustment_pct: float = 0.0
+    # Seuls 2 postes CAPEX/OPEX sont challengeables individuellement - pas un
+    # ajustement global en % (retire le 2026-09-23 suite a un retour negatif,
+    # voir docs/specs/portfolio.md) : le CAPEX de raccordement (comme dans le
+    # BP Stockage Standalone 160926 - I-Project) et l'OPEX loyer foncier.
+    connection_capex_mode: str = "library"  # "library" | "manual" | "distance_rte"
+    manual_connection_capex_keur: float = 0.0  # utilise si connection_capex_mode == "manual"
+    distance_rte_km: float = 0.0  # utilise si connection_capex_mode == "distance_rte"
+    land_lease_opex_keur: float = 0.0  # ajoute tel quel a l'OPEX (non couvert par COPEX_library)
+    # Limitation non-firm 3000h/an (Offre de Raccordement Optimise) - demande de
+    # l'utilisateur, 2026-09-23 (les 6 cas ORO du databook Aurora partageaient la
+    # cle de la variante standard et etaient ecartes en silence, voir
+    # docs/specs/aur_cases.md). N'importe quelle combinaison duree/tension/type
+    # TURPE/gabarit/ORO/heures de curtailment est desormais acceptee : reelle si
+    # Aurora l'a modelisee, sinon estimee par `core.config_extrapolation`
+    # (2026-09-24) - jamais un repli silencieux sur la courbe standard, jamais
+    # un blocage pour une simple donnee manquante (`PortfolioRow.extrapolated`/
+    # `extrapolation_notes` exposent toujours si et comment une estimation a
+    # ete utilisee).
+    oro_requested: bool = False
+    curtailment_hours: int | None = None  # utilise seulement si oro_requested ; None = 3000h
 
 
 @dataclass(frozen=True)
@@ -70,6 +85,24 @@ class PortfolioRow:
     resale_value_cod_keur: float
     build_and_flip_carry_cost_keur: float
     build_and_flip_net_return_keur: float
+    oro_requested: bool
+    extrapolated: bool
+    extrapolation_notes: tuple[str, ...]
+
+
+def _resolve_au_config(config: ProjectConfig, au_store: AuStoreLibrary) -> ResolvedConfig:
+    """Delegue a `config_extrapolation.resolve_config` : reel si Aurora a
+    modelise exactement cette combinaison, sinon estime (jamais un blocage ni
+    un repli silencieux - voir docs/specs/portfolio.md)."""
+    return config_extrapolation.resolve_config(
+        au_store,
+        duree_h=config.duree_h,
+        tension=config.tension,
+        turpe_type=config.turpe_type,
+        gabarit=config.gabarit,
+        oro=config.oro_requested,
+        curtailment_hours=config.curtailment_hours if config.oro_requested else None,
+    )
 
 
 def build_project_inputs(
@@ -77,26 +110,27 @@ def build_project_inputs(
     au_store: AuStoreLibrary,
     copex_library: CopexLibrary,
     financing_terms: dict,
-) -> tuple[ProjectInputs, list[float]]:
+) -> tuple[ProjectInputs, list[float], ResolvedConfig]:
     """Construit le `ProjectInputs` Aurora pour ce projet : revenu de base
     (`aur_cases`), overlay contractuel (`contract_overlay`), puis frais
     d'agregateur sur la seule part merchant du revenu ajuste (docs/adr/0005).
-    Retourne `(inputs, revenu_securise)` - le revenu securise sert ensuite au
-    tiering DSCR/TRI cible (`core.contract_overlay`)."""
-    au_config = au_store.config_by_attributes(
-        duree_h=config.duree_h,
-        tension=config.tension,
-        turpe_type=config.turpe_type,
-        gabarit=config.gabarit,
-    )
+    Retourne `(inputs, revenu_securise, resolved)` - le revenu securise sert
+    ensuite au tiering DSCR/TRI cible (`core.contract_overlay`), `resolved`
+    porte la config Aurora effectivement utilisee (reelle ou extrapolee, voir
+    `_resolve_au_config`/`core.config_extrapolation`)."""
+    resolved = _resolve_au_config(config, au_store)
     base_inputs = aur_cases.build_project_inputs(
-        au_store,
-        au_config,
+        resolved.library,
+        resolved.config,
         copex_library,
         cod_year=config.cod_year,
         power_mw=config.power_mw,
         operating_years=config.operating_years,
         name=config.name,
+        connection_capex_mode=config.connection_capex_mode,
+        manual_connection_capex_keur=config.manual_connection_capex_keur,
+        distance_rte_km=config.distance_rte_km,
+        land_lease_opex_keur=config.land_lease_opex_keur,
     )
     operating_revenue = base_inputs.revenues_keur[1:]
     operating_turpe = base_inputs.turpe_keur[1:]
@@ -111,39 +145,19 @@ def build_project_inputs(
     final_operating_revenue = [a + f for a, f in zip(adjusted_revenue, fees, strict=True)]
     revenues_keur = [0.0] + final_operating_revenue
 
-    # Ajustement global CAPEX/OPEX (%) - multiplie directement les series (deja
-    # signees negatives) et les magnitudes scalaires "info" correspondantes,
-    # pour que toute lecture downstream (compute_results, mais aussi
-    # compute_cod_resale_value_keur qui lit inputs.opex_keur directement) soit
-    # coherente.
-    capex_keur = [c * (1 + config.capex_adjustment_pct) for c in base_inputs.capex_keur]
-    opex_keur = [o * (1 + config.opex_adjustment_pct) for o in base_inputs.opex_keur]
-    capex_initial_keur = base_inputs.capex_initial_keur * (1 + config.capex_adjustment_pct)
-    capex_repowering_keur = base_inputs.capex_repowering_keur * (1 + config.capex_adjustment_pct)
-    opex_year1_keur = base_inputs.opex_year1_keur * (1 + config.opex_adjustment_pct)
-
     net_cashflow_keur = [
         c + o + t + r + e
         for c, o, t, r, e in zip(
-            capex_keur,
-            opex_keur,
+            base_inputs.capex_keur,
+            base_inputs.opex_keur,
             base_inputs.turpe_keur,
             revenues_keur,
             base_inputs.end_of_life_keur,
             strict=True,
         )
     ]
-    inputs = replace(
-        base_inputs,
-        capex_keur=capex_keur,
-        opex_keur=opex_keur,
-        capex_initial_keur=capex_initial_keur,
-        capex_repowering_keur=capex_repowering_keur,
-        opex_year1_keur=opex_year1_keur,
-        revenues_keur=revenues_keur,
-        net_cashflow_keur=net_cashflow_keur,
-    )
-    return inputs, secured_revenue
+    inputs = replace(base_inputs, revenues_keur=revenues_keur, net_cashflow_keur=net_cashflow_keur)
+    return inputs, secured_revenue, resolved
 
 
 def _financing_kwargs(
@@ -196,7 +210,9 @@ def run_portfolio(
     terms = financing_terms if financing_terms is not None else aur_cases.load_financing_terms()
     rows = []
     for config in configs:
-        inputs, secured_revenue = build_project_inputs(config, au_store, copex_library, terms)
+        inputs, secured_revenue, resolved = build_project_inputs(
+            config, au_store, copex_library, terms
+        )
         operating_revenue = inputs.revenues_keur[1:]
         financing_kwargs = _financing_kwargs(config, secured_revenue, operating_revenue, terms)
         buyer_target_equity_irr = _buyer_target_equity_irr(
@@ -245,7 +261,8 @@ def run_portfolio(
 
         config_label = (
             f"{config.duree_h}h {config.tension} {config.turpe_type}"
-            f"{' gabarit' if config.gabarit else ''} COD{config.cod_year}"
+            f"{' gabarit' if config.gabarit else ''}{' ORO' if config.oro_requested else ''}"
+            f"{' (extrapolé)' if resolved.config.extrapolated else ''} COD{config.cod_year}"
         )
         rows.append(
             PortfolioRow(
@@ -272,6 +289,9 @@ def run_portfolio(
                 resale_value_cod_keur=build_and_flip_result.resale_value_cod_keur,
                 build_and_flip_carry_cost_keur=build_and_flip_result.carry_cost_keur,
                 build_and_flip_net_return_keur=build_and_flip_result.net_return_keur,
+                oro_requested=config.oro_requested,
+                extrapolated=resolved.config.extrapolated,
+                extrapolation_notes=tuple(resolved.notes),
             )
         )
     return rows

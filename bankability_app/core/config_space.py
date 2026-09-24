@@ -41,28 +41,38 @@ def tensions(
     return sorted({config.tension for config in configs})
 
 
+ALL_TURPE_TYPES = ["Classique", "Injection", "Soutirage"]
+
+
 def turpe_types(library: AuStoreLibrary, *, duree_h: int, tension: str) -> list[str]:
-    return sorted(
-        {
-            config.turpe_type
-            for config in library.configs
-            if config.duree_h == duree_h and config.tension == tension
-        }
-    )
+    """Toujours les 3 types TURPE (vocabulaire fixe de la methodologie, pas une
+    donnee lue dans `AU_Store`) - reel si Aurora a modelise cette tension/duree
+    pour ce type, sinon extrapole via `core.config_extrapolation.resolve_config`
+    (2026-09-24). `library`/`duree_h`/`tension` gardes dans la signature pour ne
+    pas casser les appelants existants, plus utilises pour filtrer."""
+    del library, duree_h, tension
+    return list(ALL_TURPE_TYPES)
 
 
 def gabarit_options(
     library: AuStoreLibrary, *, duree_h: int, tension: str, turpe_type: str
 ) -> list[bool]:
-    return sorted(
-        {
-            config.gabarit
-            for config in library.configs
-            if config.duree_h == duree_h
-            and config.tension == tension
-            and config.turpe_type == turpe_type
-        }
-    )
+    """Gabarit n'a de sens que pour TURPE Injection/Soutirage (jamais
+    Classique - regle business, pas une simple absence de donnee, voir
+    `core.config_extrapolation.resolve_config`). Reel si Aurora a modelise
+    cette tension/duree pour ce type+gabarit, sinon extrapole."""
+    del library, duree_h
+    if turpe_type == "Classique":
+        return [False]
+    return [False, True]
+
+
+def oro_options(*, turpe_type: str) -> list[bool]:
+    """ORO (limitation non-firm 3000h/an) n'a de sens que pour TURPE
+    Injection/Soutirage, meme regle business que le gabarit."""
+    if turpe_type == "Classique":
+        return [False]
+    return [False, True]
 
 
 def valid_cod_years(config: AuStoreConfig, candidate_years: list[int]) -> list[int]:

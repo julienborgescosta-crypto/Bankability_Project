@@ -65,3 +65,45 @@ def test_run_global_sensitivity_rows_have_computed_kpis(au_store, copex_library)
     )
     assert rows
     assert all(r.row.project_irr is not None for r in rows)
+
+
+def test_enumerate_configs_propagates_oro_request_from_au_config(au_store, copex_library):
+    """Sans `oro_requested=au_config.oro`, un au_config ORO et son equivalent
+    standard (meme duree_h/tension/turpe_type/gabarit) resoudraient tous les
+    deux vers la courbe standard - 2 entrees identiques au lieu d'une ligne ORO
+    distincte (voir docs/specs/global_sensitivity.md, 2026-09-23)."""
+    entries = global_sensitivity.enumerate_configs(
+        au_store, copex_library, contract_kinds=[contract_overlay.FULL_MERCHANT]
+    )
+    oro_entries = [e for e in entries if e[0].oro]
+    assert oro_entries
+    assert all(project_config.oro_requested for _, _, project_config in oro_entries)
+    standard_entries = [e for e in entries if not e[0].oro]
+    assert all(not project_config.oro_requested for _, _, project_config in standard_entries)
+
+
+def test_run_global_sensitivity_oro_row_has_lower_revenue_than_standard_sibling(
+    au_store, copex_library
+):
+    rows, _ = global_sensitivity.run_global_sensitivity(
+        au_store,
+        copex_library,
+        operating_years=5,
+        contract_kinds=[contract_overlay.FULL_MERCHANT],
+    )
+    oro_row = next(
+        r
+        for r in rows
+        if r.oro and r.tension == "HTB2" and r.turpe_type == "Injection" and r.duree_h == 2
+    )
+    standard_row = next(
+        r
+        for r in rows
+        if not r.oro
+        and r.tension == "HTB2"
+        and r.turpe_type == "Injection"
+        and not r.gabarit
+        and r.duree_h == 2
+        and r.cod_year == oro_row.cod_year
+    )
+    assert oro_row.row.revenue_total_keur < standard_row.row.revenue_total_keur

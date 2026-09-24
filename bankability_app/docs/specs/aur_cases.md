@@ -2,7 +2,7 @@
 
 ## Objectif
 
-Charger les 18 configurations Aurora standalone de `AU_Store` (courbes RAW/TURPE calendaires,
+Charger les 22 configurations Aurora standalone de `AU_Store` (18 standard + 4 ORO, courbes RAW/TURPE calendaires,
 dégradation par op-year, métadonnées de config) et construire un `ProjectInputs` pour une
 config/COD/puissance donnée — même forme que `dev_case.build_project_inputs`, utilisable tel
 quel par `financial_engine.compute_results()`. Voir `docs/specs/aur_v2_methodology.md` pour la
@@ -67,6 +67,87 @@ méthodologie complète et `CONTEXT.md` pour le vocabulaire (AU_Store, AUStoreKe
   Piste écartée : le coût réel observé dans `I-Project!183` (-5 723 k€ pour un projet à 16 626 k€
   de CAPEX initial, ≈34 %) — un seul point de données projet-spécifique, moins fiable que
   recomposer depuis `COPEX_library` (déjà validée, réutilisable par n'importe quelle config).
+
+- **CAPEX de raccordement et OPEX loyer foncier challengeables individuellement** (remplace
+  l'ajustement global CAPEX/OPEX en %, retiré le 2026-09-23 suite à un retour négatif — voir
+  `docs/specs/portfolio.md`, "Ajustement global CAPEX/OPEX (%) — retiré"). `capex_and_opex_keur()`
+  et `build_project_inputs()` acceptent désormais `connection_capex_mode` (`"library"` par défaut,
+  `"manual"`, `"distance_rte"`), `manual_connection_capex_keur`, `distance_rte_km` et
+  `land_lease_opex_keur`, simplement transmis à la construction interne du `DevCaseParams` (avant :
+  `connection_capex_mode="library"` en dur). Aucune nouvelle formule : ce sont les modes/formule
+  déjà implémentés et validés dans `dev_case.py` pour l'onglet "Cas de développement"
+  (`CONNECTION_CAPEX_MODES`, `_connection_cost_from_distance(km) = 4650.7 * km**0.239`,
+  `DevCaseParams.land_lease_opex_keur`) — seule nouveauté : les exposer aussi côté Configurateur/
+  portefeuille, poste par poste, plutôt qu'un choc global.
+
+- **Dimension ORO (limitation non-firm 3000h/an, Offre de Raccordement Optimisé) ajoutée**
+  (demande de l'utilisateur, 2026-09-23, suite au remplacement du fixture BP par une nouvelle
+  version). Aurora modélise 4 cas ORO (HTB2 injection/soutirage, 2h/4h) mais leur clé de config
+  (`{durée}×{tension}×{TURPE}×{gabarit}`) était identique à celle de leur équivalent sans
+  curtailment — les 6 cas ORO du databook Aurora (dont 2 doublons par année de COD) étaient donc
+  écartés en silence à l'extraction, `AU_Store` ne contenait aucune courbe ORO. Corrigé par un 5ᵉ
+  champ `AuStoreConfig.oro: bool` (dérivé du mot "ORO" dans `AUStoreKey`, pas d'une colonne
+  metadata dédiée — aucune n'existe dans `AU_Store`) et un paramètre `oro: bool = False` sur
+  `config_by_attributes()`, qui désambiguïse enfin les deux variantes.
+  Le fixture fourni par l'utilisateur (nouveau `160926_BP_Stockage_Standalone__.xlsm`) contenait
+  déjà les 4 colonnes RAW ORO + les lignes de métadonnées correspondantes dans `AU_Store`, mais
+  **pas de bloc TURPE correspondant** (colonnes RAW ajoutées à la place où commençait l'ancien
+  bloc TURPE, qui s'est retrouvé écrasé/vide) — `load_au_store` échouait donc immédiatement
+  (`RAW ≠ TURPE labels`) sur ce fichier. Reconstruit manuellement depuis le databook Aurora Q2
+  2026 (`Undegraded batteries`/`Degraded batteries`), avec la formule validée **exactement** (à 2
+  décimales, contre les valeurs `AU_Store` déjà commitées pour "2h HTB2 injection" : 209,11/1,69 à
+  2027) : `RAW = "Storage total cashflow" − "Storage volume-related network charges"`,
+  `TURPE = "Storage volume-related network charges"`. Les 2 cas 2h ORO (Case 6/7, COD2027, valides
+  "toute" COD) viennent directement de l'onglet `Undegraded batteries` (courbe déjà COD-indépendante,
+  comme toutes les autres configs "toute"). Les 2 cas 4h ORO (Case 23/24, COD2030 uniquement)
+  n'existent que dans `Degraded batteries` (pas de variante "undegraded" pour ce COD) — un nouveau
+  champ `AuStoreConfig.pre_degraded: bool` (= `oro and valide_cod is not None`) indique à
+  `revenue_and_turpe_series` de **ne pas** réappliquer la table `DegFactor` par-dessus une courbe
+  déjà dégradée, sans quoi la dégradation serait comptée deux fois.
+  Limite documentée : le repowering (op-year 15) déclenche quand même le CAPEX de remplacement
+  (`repowering_capex_keur`) pour ces 2 configs `pre_degraded`, mais son bénéfice (reset de
+  dégradation) n'est pas modélisé — la trajectoire Aurora source ne porte aucun mécanisme de reset.
+  UI (`ui/configurateur_tab.py`) : toggle "ORO" à côté du gabarit. Depuis le 2026-09-24, une
+  demande d'ORO (ou de type TURPE/gabarit) sur une combinaison non modélisée n'est plus bloquée ni
+  repliée silencieusement sur la courbe standard : elle est **extrapolée** par
+  `core.config_extrapolation.resolve_config()` (`PortfolioRow.extrapolated`/`extrapolation_notes`,
+  jamais un revenu nul ni un repli invisible) — voir `docs/specs/config_extrapolation.md` et
+  `docs/specs/portfolio.md`.
+
+- **Les courbes RAW/TURPE viennent maintenant d'un asset statique**
+  (`config/aurora_curves_22configs.json`, `load_aurora_curves()`), pas d'un `AU_Store` re-parsé à
+  chaque upload — décision de l'utilisateur, 2026-09-24, suite à une triangulation à 3 sources
+  (fichier `AU_Store` multi-config, databook Aurora Q2 26 brut, connecteur Aurora live) qui a
+  confirmé que ces 22 courbes sont universelles (mêmes valeurs pour tout projet, vérifiées à la
+  décimale près contre le databook). `ui/configurateur_tab.py` appelle `load_aurora_curves()` au
+  lieu de `load_au_store(SAMPLE_AURORA_BP_PATH)` ; `COPEX_library` (CAPEX/OPEX), lui, reste lu
+  depuis le fixture Aurora commité (poste indépendant des courbes de revenu).
+  Toutes les configs de ce JSON portent `pre_degraded=False` : contrairement au format `AU_Store`
+  historique (où les 2 cas ORO verrouillés à COD2030 stockent la valeur déjà dégradée, court-
+  circuitant `DegFactor`), ces courbes ont été "un-dégradées" à la source pour ces mêmes cas —
+  `RAW/TURPE[année] × DegFactor[op_year]` reproduit exactement le cashflow Aurora Degraded pour
+  COD2030 avec la formule uniforme, sans cas particulier. Vérifié : les 2 conventions (JSON
+  un-dégradé × DegFactor, vs `AU_Store` historique déjà dégradé × 1.0) retombent sur exactement le
+  même revenu/TURPE final, config par config, année par année (240 points de contrôle sur les 4
+  configs verrouillées COD2030).
+  **Diagnostic de l'écart TURPE/RAW signalé initialement** (session du 2026-09-23/24) : l'écart
+  ~2x sur TURPE (et ~2% sur RAW) mesuré en triangulant l'app contre l'API Aurora venait du fixture
+  *legacy* `fichier_excel/260612_BP_Stockage_Standalone__.xlsm` (projet Belle Épine, single-config,
+  antérieur à l'architecture multi-config) — ce fichier appliquait une seule courbe `Raw2h`/`TURPE_var_2h`
+  codée en dur (millésime `2h HTB2`) quelle que soit la tension réelle du projet (HTB1 dans ce cas),
+  d'où un TURPE à moitié du vrai HTB1. L'architecture multi-config (`AU_Store` 22 configs,
+  `aur_cases.py`) n'a jamais eu ce bug — vérifié en triangulant directement le fichier `160926`
+  multi-config contre le databook brut (RAW et TURPE identiques à la décimale pour HTA/HTB1/HTB2).
+- **`load_au_store()` localise le bloc TURPE par libellé, pas par décalage fixe** (robustesse
+  demandée par l'utilisateur, 2026-09-24) : 2 mises en page rencontrées dans la vraie vie — à côté
+  du bloc RAW sur la même ligne d'en-tête (historique, ex. fixture `160926_BP_Stockage_Standalone__.xlsx`
+  committé), ou empilé dessous comme son propre bloc `Year` (BP `160926.xlsm` frais fourni le
+  2026-09-24, après l'ajout des configs ORO — le bloc TURPE s'est retrouvé décalé sous le bloc RAW
+  plutôt qu'à côté). `_find_stacked_turpe_header_row()` cherche un 2e bloc `Year` portant
+  exactement les mêmes labels que RAW, où qu'il soit dans la feuille. Si aucune des deux mises en
+  page ne matche → `AuroraConfigError` explicite, jamais un TURPE à 0 silencieux (voir README
+  "zéro zéro silencieux"). Ce chemin (`load_au_store`, lecture d'un `AU_Store` réel) reste
+  disponible comme fallback/robustesse, mais n'est plus le chemin utilisé par le Configurateur.
 
 ## Questions ouvertes
 

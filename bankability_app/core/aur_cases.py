@@ -1,6 +1,7 @@
-"""Lit `AU_Store` (18 configurations Aurora standalone Q2 2026) et construit un
-`ProjectInputs` par config/COD/puissance - voir `docs/specs/aur_cases.md` et
-`docs/specs/aur_v2_methodology.md` pour la methodologie complete.
+"""Lit `AU_Store` (22 configurations Aurora standalone Q2 2026 : 18 standard +
+4 ORO) et construit un `ProjectInputs` par config/COD/puissance - voir
+`docs/specs/aur_cases.md` et `docs/specs/aur_v2_methodology.md` pour la
+methodologie complete.
 
 Delibirement independant de `dev_case.py`/`CF Aurora` (bibliotheque Aurora distincte,
 granularite differente - voir CONTEXT.md "Source de prix (Source BP)") - seules les
@@ -9,6 +10,7 @@ puisque c'est la meme table pour les deux chemins de donnee."""
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -16,18 +18,26 @@ from typing import Any
 
 import yaml
 
+from . import copex_icp
 from .bp_parser import _normalize, load_grid
-from .dev_case import CopexLibrary, DevCaseParams, escalated_unit_cost, voltage_duration_key
-from .dev_case import capex_total_keur as _dev_case_capex_total_keur
-from .dev_case import opex_year1_keur as _dev_case_opex_year1_keur
+from .dev_case import (
+    CopexLibrary,
+    DevCaseParams,
+    connection_capex_keur,
+    voltage_duration_key,
+)
 from .models import ProjectInputs
 
 AU_STORE_SHEET = "AU_Store"
 DEFAULT_FINANCING_TERMS_PATH = (
     Path(__file__).resolve().parent.parent / "config" / "aur_financing_terms.yaml"
 )
+DEFAULT_AURORA_CURVES_PATH = (
+    Path(__file__).resolve().parent.parent / "config" / "aurora_curves_22configs.json"
+)
 
 _DUREE_PATTERN = re.compile(r"(\d+)\s*h", re.IGNORECASE)
+_ORO_PATTERN = re.compile(r"\bORO\b", re.IGNORECASE)
 
 # Repowering (Round du 2026-09-18, confirme par l'utilisateur) : cout = Battery
 # system + Inverter (PCS) de COPEX_library, values a l'annee civile du
@@ -53,7 +63,10 @@ class AuStoreConfig:
     tension: str  # HTA / HTB1 / HTB2 / HTB3 - deja le meme libelle que ProjectInputs.segment
     turpe_type: str  # Classique / Injection / Soutirage
     gabarit: bool
+    oro: bool  # limitation non-firm 3000h/an (Offre de Raccordement Optimise) - HTB2 inj/sout uniquement
+    pre_degraded: bool  # courbe deja degradee (COD verrouille) - voir revenue_and_turpe_series
     valide_cod: int | None  # None = valide pour tout COD ("toute") ; sinon COD exige
+    extrapolated: bool = False  # courbe estimee (core.config_extrapolation), pas mesuree par Aurora
 
 
 @dataclass(frozen=True)
@@ -78,20 +91,28 @@ class AuStoreLibrary:
         )
 
     def config_by_attributes(
-        self, *, duree_h: int, tension: str, turpe_type: str, gabarit: bool
+        self, *, duree_h: int, tension: str, turpe_type: str, gabarit: bool, oro: bool = False
     ) -> AuStoreConfig:
+        """`oro=True` cible specifiquement la variante limitation non-firm 3000h/an
+        (voir `AuStoreConfig.oro`) - sans elle, une config standard et sa variante
+        ORO partageraient le meme (duree_h, tension, turpe_type, gabarit) et
+        seraient indiscernables (bug signale par l'utilisateur, 2026-09-23 : les
+        6 cas ORO du databook Aurora partageaient la cle de la variante sans
+        curtailment, ecartes en silence a l'extraction)."""
         for config in self.configs:
             if (
                 config.duree_h == duree_h
                 and config.tension == tension
                 and config.turpe_type == turpe_type
                 and config.gabarit == gabarit
+                and config.oro == oro
             ):
                 return config
         raise AuroraConfigError(
             f"Aucune config Aurora pour {duree_h}h {tension} {turpe_type} "
-            f"gabarit={gabarit} (Aurora n'a pas modelise toutes les combinaisons - "
-            f"disponibles : {[(c.duree_h, c.tension, c.turpe_type, c.gabarit) for c in self.configs]})."
+            f"gabarit={gabarit} oro={oro} (Aurora n'a pas modelise toutes les combinaisons - "
+            f"disponibles : "
+            f"{[(c.duree_h, c.tension, c.turpe_type, c.gabarit, c.oro) for c in self.configs]})."
         )
 
 
@@ -180,12 +201,12 @@ def _contiguous_labels(header: list[Any], start_col: int) -> list[str]:
     return labels
 
 
-def _next_non_empty_col(header: list[Any], after_col: int) -> int:
+def _next_non_empty_col(header: list[Any], after_col: int) -> int | None:
     col = after_col
     while col < len(header) and header[col] is None:
         col += 1
     if col >= len(header):
-        raise AuroraConfigError("Bloc TURPE introuvable apres le bloc RAW dans AU_Store.")
+        return None
     return col
 
 
@@ -196,6 +217,50 @@ def _parse_duree_h(value: Any) -> int:
     return int(match.group(1))
 
 
+def _read_year_value_block(
+    grid: list[list[Any]],
+    *,
+    header_row: int,
+    year_col: int,
+    value_start_col: int,
+    labels: list[str],
+) -> dict[str, dict[int, float]]:
+    """Lit un bloc 'Year' + N colonnes de valeurs commencant juste apres
+    `header_row`, jusqu'a la 1ere ligne dont la colonne annee n'est plus un
+    nombre. Reutilise pour le bloc RAW et pour le bloc TURPE, que ce dernier
+    soit a cote du RAW (meme ligne d'entete) ou empile dessous (sa propre
+    ligne d'entete 'Year') - voir load_au_store."""
+    by_key: dict[str, dict[int, float]] = {label: {} for label in labels}
+    for row in grid[header_row + 1 :]:
+        year = row[year_col] if year_col < len(row) else None
+        if not isinstance(year, (int, float)):
+            break
+        year = int(year)
+        for offset, label in enumerate(labels):
+            col = value_start_col + offset
+            value = row[col] if col < len(row) else None
+            if value is not None:
+                by_key[label][year] = float(value)
+    return by_key
+
+
+def _find_stacked_turpe_header_row(grid: list[list[Any]], raw_labels: list[str]) -> int | None:
+    """Cherche un 2e bloc 'Year' + memes labels que RAW, empile plus bas dans
+    la feuille (mise en page observee sur le BP 160926 apres l'ajout des
+    configs ORO : le bloc TURPE occupe ses propres lignes sous le bloc RAW,
+    plutot que des colonnes a cote sur la meme ligne d'entete - signale par
+    l'utilisateur, 2026-09-24). Ignore la ligne 0 (bloc RAW lui-meme, qui
+    partage evidemment les memes labels)."""
+    target = [_normalize(label) for label in raw_labels]
+    for i, row in enumerate(grid):
+        if i == 0 or not row or _normalize(row[0]) != "year":
+            continue
+        candidate = [_normalize(c) for c in row[1 : 1 + len(raw_labels)]]
+        if candidate == target:
+            return i
+    return None
+
+
 def load_au_store(file_or_path) -> AuStoreLibrary:
     grid = load_grid(file_or_path, sheet_name=AU_STORE_SHEET)
     header = grid[0]
@@ -203,28 +268,35 @@ def load_au_store(file_or_path) -> AuStoreLibrary:
     year_col = _find_col(header, "Year")
     raw_start = year_col + 1
     raw_labels = _contiguous_labels(header, raw_start)
-    turpe_start = _next_non_empty_col(header, raw_start + len(raw_labels))
-    turpe_labels = _contiguous_labels(header, turpe_start)
-    if turpe_labels != raw_labels:
-        raise AuroraConfigError(
-            "Les configs du bloc TURPE d'AU_Store ne correspondent pas au bloc RAW "
-            f"(RAW={raw_labels}, TURPE={turpe_labels})."
-        )
+    raw_by_key = _read_year_value_block(
+        grid, header_row=0, year_col=year_col, value_start_col=raw_start, labels=raw_labels
+    )
 
-    raw_by_key: dict[str, dict[int, float]] = {label: {} for label in raw_labels}
-    turpe_by_key: dict[str, dict[int, float]] = {label: {} for label in raw_labels}
-    for row in grid[1:]:
-        year = row[year_col] if year_col < len(row) else None
-        if not isinstance(year, (int, float)):
-            break
-        year = int(year)
-        for offset, label in enumerate(raw_labels):
-            raw_value = row[raw_start + offset]
-            if raw_value is not None:
-                raw_by_key[label][year] = float(raw_value)
-            turpe_value = row[turpe_start + offset]
-            if turpe_value is not None:
-                turpe_by_key[label][year] = float(turpe_value)
+    # Bloc TURPE : localise par libelle, pas par decalage fixe (meme
+    # discipline que bp_parser.py) - 2 mises en page rencontrees dans la vraie
+    # vie : a cote du bloc RAW sur la meme ligne d'entete (historique), ou
+    # empile dessous comme son propre bloc 'Year' (BP 160926+, apres l'ajout
+    # des configs ORO). Jamais un 0 silencieux si le bloc est absent des deux
+    # facons (voir README "zero zero silencieux") : erreur explicite.
+    turpe_start = _next_non_empty_col(header, raw_start + len(raw_labels))
+    turpe_labels = _contiguous_labels(header, turpe_start) if turpe_start is not None else None
+
+    if turpe_labels == raw_labels:
+        turpe_by_key = _read_year_value_block(
+            grid, header_row=0, year_col=year_col, value_start_col=turpe_start, labels=raw_labels
+        )
+    else:
+        turpe_header_row = _find_stacked_turpe_header_row(grid, raw_labels)
+        if turpe_header_row is None:
+            raise AuroraConfigError(
+                "Bloc TURPE introuvable dans AU_Store - ni a cote du bloc RAW sur la meme "
+                "ligne d'entete, ni empile dessous comme un 2e bloc 'Year' avec les memes "
+                "configs. Verifier la mise en page de l'onglet AU_Store "
+                f"(RAW={raw_labels}, colonne trouvee a la place : {turpe_labels})."
+            )
+        turpe_by_key = _read_year_value_block(
+            grid, header_row=turpe_header_row, year_col=0, value_start_col=1, labels=raw_labels
+        )
 
     dropkey_col = _find_col(header, "DropKey")
     metadata_labels = [_normalize(label) for label in _contiguous_labels(header, dropkey_col)]
@@ -248,17 +320,26 @@ def load_au_store(file_or_path) -> AuStoreLibrary:
         if drop_key is None or (isinstance(drop_key, str) and not drop_key.strip()):
             break
         valide_cod_raw = row[dropkey_col + 6]
+        valide_cod = int(valide_cod_raw) if isinstance(valide_cod_raw, (int, float)) else None
+        austore_key = str(row[dropkey_col + 1]).strip()
+        oro = bool(_ORO_PATTERN.search(austore_key))
         configs.append(
             AuStoreConfig(
                 drop_key=str(drop_key).strip(),
-                austore_key=str(row[dropkey_col + 1]).strip(),
+                austore_key=austore_key,
                 duree_h=_parse_duree_h(row[dropkey_col + 2]),
                 tension=str(row[dropkey_col + 3]).strip(),
                 turpe_type=str(row[dropkey_col + 4]).strip(),
                 gabarit=bool(row[dropkey_col + 5]),
-                valide_cod=(
-                    int(valide_cod_raw) if isinstance(valide_cod_raw, (int, float)) else None
-                ),
+                # Les 2 cas 4h ORO (COD2030 uniquement) sont sources directement
+                # depuis la trajectoire deja degradee du databook Aurora (pas de
+                # variante "undegraded" disponible pour cette annee de COD) - voir
+                # docs/specs/aur_cases.md. Un COD verrouille (valide_cod non None)
+                # + ORO signale donc une courbe deja degradee, a ne jamais
+                # redegrader (voir revenue_and_turpe_series).
+                oro=oro,
+                pre_degraded=oro and valide_cod is not None,
+                valide_cod=valide_cod,
             )
         )
     if not configs:
@@ -290,6 +371,76 @@ def load_au_store(file_or_path) -> AuStoreLibrary:
         degradation_no_repo=degradation_no_repo,
         repowering_op_year=repowering_op_year,
         eol_per_kw=eol_per_kw,
+    )
+
+
+def load_aurora_curves(path: Path = DEFAULT_AURORA_CURVES_PATH) -> AuStoreLibrary:
+    """Charge les 22 courbes RAW/TURPE Aurora depuis l'asset statique
+    `config/aurora_curves_22configs.json`, plutot que de les re-parser depuis
+    l'`AU_Store` d'un classeur uploade.
+
+    Decision (demande de l'utilisateur, 2026-09-24) : ces courbes sont
+    universelles - memes valeurs pour tout projet, verifiees a la decimale
+    contre le databook Aurora Q2 2026 brut (Undegraded/Degraded batteries),
+    voir docs/specs/aur_cases.md - donc elles n'ont pas a etre re-parsees a
+    chaque upload. Ca dissout le probleme de mise en page d'`AU_Store` qui
+    varie d'un classeur a l'autre (`load_au_store` reste le chemin robuste
+    pour qui a besoin de lire un `AU_Store` reel malgre tout).
+
+    Toutes les configs de ce JSON portent `pre_degraded=False` : contrairement
+    au format `AU_Store` historique (ou les 2 cas ORO verrouilles a COD2030
+    stockent directement la valeur degradee finale, court-circuitant la table
+    `DegFactor`), les courbes de ce JSON ont ete "un-degradees" a la source
+    pour ces memes cas - `RAW/TURPE[annee] x DegFactor[op_year]` reproduit
+    exactement le cashflow Aurora Degraded pour COD2030 avec la formule
+    uniforme, sans cas particulier. Verifie : les 2 conventions (JSON
+    un-degrade x DegFactor, vs AU_Store historique deja degrade x 1.0)
+    retombent sur exactement le meme revenu/TURPE final, config par config,
+    annee par annee."""
+    with open(path, encoding="utf-8") as handle:
+        data = json.load(handle)
+
+    degradation_data = data["degradation"]
+    degradation = dict(
+        zip(degradation_data["op_years"], degradation_data["DegFactor"], strict=True)
+    )
+    degradation_no_repo = dict(
+        zip(degradation_data["op_years"], degradation_data["DegFactor_noRepo"], strict=True)
+    )
+
+    configs: list[AuStoreConfig] = []
+    raw_by_key: dict[str, dict[int, float]] = {}
+    turpe_by_key: dict[str, dict[int, float]] = {}
+    for entry in data["configs"]:
+        austore_key = entry["au_key"]
+        valide_cod_raw = entry["valide_cod"]
+        valide_cod = None if valide_cod_raw == "toute" else int(valide_cod_raw)
+        configs.append(
+            AuStoreConfig(
+                drop_key=entry["drop_key"],
+                austore_key=austore_key,
+                duree_h=_parse_duree_h(entry["dur"]),
+                tension=entry["volt"],
+                turpe_type=entry["turpe"],
+                gabarit=bool(entry["gabarit"]),
+                oro=bool(_ORO_PATTERN.search(austore_key)),
+                pre_degraded=False,
+                valide_cod=valide_cod,
+            )
+        )
+        raw_by_key[austore_key] = {int(year): float(value) for year, value in entry["raw"].items()}
+        turpe_by_key[austore_key] = {
+            int(year): float(value) for year, value in entry["turpe_curve"].items()
+        }
+
+    return AuStoreLibrary(
+        configs=configs,
+        raw_by_key=raw_by_key,
+        turpe_by_key=turpe_by_key,
+        degradation=degradation,
+        degradation_no_repo=degradation_no_repo,
+        repowering_op_year=int(degradation_data["RepowOpYear"]),
+        eol_per_kw=float(degradation_data["EoL_perkW"]),
     )
 
 
@@ -336,12 +487,22 @@ def revenue_and_turpe_series(
                 f"Annee {year} hors de la plage AU_Store pour '{config.austore_key}' "
                 f"(plage couverte : {min(raw_curve)}-{max(raw_curve)})."
             )
-        deg = deg_table.get(op_year)
-        if deg is None:
-            raise AuroraConfigError(
-                f"Pas de facteur de degradation pour l'op-year {op_year} "
-                f"(plage couverte : 1-{max(deg_table)})."
-            )
+        if config.pre_degraded:
+            # Courbe deja degradee (databook Aurora, trajectoire COD2030 reelle,
+            # pas de variante "undegraded" disponible - voir docs/specs/aur_cases.md)
+            # - ne jamais reappliquer un 2e facteur de degradation par-dessus.
+            # Limite connue : le repowering (op-year 15) declenche quand meme le
+            # CAPEX de remplacement (`repowering_capex_keur`) mais son benefice
+            # (reset de degradation) n'est pas modelise pour cette config, faute
+            # de mecanisme de reset dans la trajectoire Aurora source.
+            deg = 1.0
+        else:
+            deg = deg_table.get(op_year)
+            if deg is None:
+                raise AuroraConfigError(
+                    f"Pas de facteur de degradation pour l'op-year {op_year} "
+                    f"(plage couverte : 1-{max(deg_table)})."
+                )
         revenue_series.append(raw_curve[year] * deg * power_mw)
         turpe_series.append(turpe_curve[year] * power_mw)
     return calendar_years, revenue_series, turpe_series
@@ -378,39 +539,91 @@ def aggregator_fee_series(
 
 
 def capex_and_opex_keur(
-    *, tension: str, duree_h: int, cod_year: int, power_mw: float, copex_library: CopexLibrary
+    *,
+    tension: str,
+    duree_h: int,
+    cod_year: int,
+    power_mw: float,
+    copex_library: CopexLibrary,
+    connection_capex_mode: str = "library",
+    manual_connection_capex_keur: float = 0.0,
+    distance_rte_km: float = 0.0,
+    land_lease_opex_keur: float = 0.0,
 ) -> tuple[float, float]:
-    """CAPEX/OPEX total depuis `COPEX_library` (meme table que `dev_case.py`,
-    reutilisee telle quelle - voir Round 1 Q5 de la session de cadrage,
-    docs/specs/aur_v2_methodology.md section 1.2). `DevCaseParams` sert
-    uniquement de vehicule de calcul ici (voltage_class_override court-circuite
-    tout besoin de connection_type).
+    """CAPEX/OPEX total - source primaire `config/copex_icp.xlsx` (couts
+    unitaires QEF reels, "ICP", mis a jour mensuellement par l'utilisateur en
+    remplacant ce fichier - voir `core/copex_icp.py`), avec repli sur
+    `copex_library` (Aurora `COPEX_library`) pour les postes qu'ICP ne couvre
+    pas : Development cote CAPEX ; Insurance/Grid charges/Land lease
+    (ligne bibliotheque)/Accise/Other cote OPEX ; HTB3 entierement (ICP n'a
+    pas de colonne pour cette tension, tout comme Aurora avant ce changement).
+    Decision de l'utilisateur, 2026-09-24, suite au constat qu'ICP donne des
+    couts reels/a jour la ou Aurora n'a qu'une estimation generique - voir
+    `docs/specs/copex_icp.md` pour le detail du mapping tension/segment et de
+    l'agregation (EPC Margin puis Insurance, sur le total incluant la marge).
 
-    `dev_case.capex_total_keur`/`opex_year1_keur` retournent silencieusement 0
-    si la cle tension/duree est absente de `COPEX_library` (`dict.get(key, {})`)
-    - sans consequence pour `dev_case.py` lui-meme (VOLTAGE_CLASSES n'expose que
-    HTA/HTB1/HTB2, qui existent tous dans la table). AU_Store, lui, modelise
-    aussi HTB3 - absent de COPEX_library (verifie : seules HTA/HTB1/HTB2 y sont
-    presentes) - d'ou ce garde-fou explicite plutot que de laisser passer un
-    CAPEX/OPEX a 0 (brief section 7, "zero zero silencieux")."""
+    Seuls 2 postes restent challengeables individuellement (demande de
+    l'utilisateur, 2026-09-23) : le CAPEX de raccordement
+    (`connection_capex_mode` - "library" tire desormais la ligne 'Grid
+    connection' d'ICP quand la tension est couverte, sinon Aurora ; "manual"/
+    "distance_rte"/"distance_rte_and_substation" inchanges, ce sont des
+    valeurs/formules saisies directement) et l'OPEX loyer foncier
+    (`land_lease_opex_keur`, ajoute tel quel, non couvert par ICP ni Aurora).
+
+    Garde-fou HTB3 inchange : si la tension n'a ni donnees ICP ni Aurora, leve
+    explicitement plutot que de laisser passer un CAPEX/OPEX a 0 (brief
+    section 7, "zero zero silencieux") - `copex_icp`'s propres fonctions
+    replient sur Aurora en silence pour les tensions qu'ICP ne couvre pas,
+    donc ce garde-fou reste necessaire en amont pour le cas ou Aurora
+    lui-meme n'a rien non plus."""
     key = voltage_duration_key(tension, duree_h)
     if key not in copex_library.capex_unit_costs or key not in copex_library.opex_unit_costs:
         raise AuroraConfigError(
             f"Pas de donnees CAPEX/OPEX dans COPEX_library pour '{key}' "
             f"(tensions disponibles : {sorted({k.split(' - ')[1] for k in copex_library.capex_unit_costs})})."
         )
-    params = DevCaseParams(
+    icp_library = copex_icp.load_icp_library_cached()
+
+    capex_generic_keur, _ = copex_icp.icp_capex_total_keur(
+        tension=tension,
+        duree_h=duree_h,
         cod_year=cod_year,
         power_mw=power_mw,
-        duration_h=duree_h,
-        connection_type="",
-        voltage_class_override=tension,
-        connection_capex_mode="library",
+        icp_library=icp_library,
+        aurora_library=copex_library,
     )
-    return (
-        _dev_case_capex_total_keur(params, copex_library),
-        _dev_case_opex_year1_keur(params, copex_library),
+    if connection_capex_mode == "library":
+        connection_keur, _ = copex_icp.icp_connection_capex_keur(
+            tension=tension,
+            duree_h=duree_h,
+            cod_year=cod_year,
+            power_mw=power_mw,
+            icp_library=icp_library,
+            aurora_library=copex_library,
+        )
+    else:
+        params = DevCaseParams(
+            cod_year=cod_year,
+            power_mw=power_mw,
+            duration_h=duree_h,
+            connection_type="",
+            voltage_class_override=tension,
+            connection_capex_mode=connection_capex_mode,
+            manual_connection_capex_keur=manual_connection_capex_keur,
+            distance_rte_km=distance_rte_km,
+        )
+        connection_keur = connection_capex_keur(params, copex_library)
+
+    opex_generic_keur, _ = copex_icp.icp_opex_year1_keur(
+        tension=tension,
+        duree_h=duree_h,
+        cod_year=cod_year,
+        power_mw=power_mw,
+        icp_library=icp_library,
+        aurora_library=copex_library,
     )
+
+    return capex_generic_keur + connection_keur, opex_generic_keur + land_lease_opex_keur
 
 
 def repowering_capex_keur(
@@ -421,23 +634,25 @@ def repowering_capex_keur(
     power_mw: float,
     copex_library: CopexLibrary,
 ) -> float:
-    """Cout de repowering = Battery system + Inverter (PCS) de `COPEX_library`,
-    values a `repowering_year` (l'annee civile du repowering, pas l'annee de
-    COD) - seuls les composants qui degradent physiquement sont remplaces,
-    pas le CAPEX complet (voir `REPOWERING_CAPEX_LINE_ITEMS`). Reutilise
-    `dev_case.escalated_unit_cost`, qui plafonne deja sur le dernier delta
-    d'escalade connu si `repowering_year` depasse la couverture de la table
-    (2028-2034 sur le fichier reel) - meme comportement que pour le CAPEX
-    initial, pas une nouvelle regle. Suppose que la cle tension/duree existe
-    dans `copex_library` (verifie en amont par `capex_and_opex_keur`)."""
-    key = voltage_duration_key(tension, duree_h)
-    unit_costs = copex_library.capex_unit_costs.get(key, {})
-    escalation = copex_library.capex_escalation
-    total_per_kw = sum(
-        escalated_unit_cost(unit_costs.get(label, 0.0), escalation.get(label, {}), repowering_year)
-        for label in REPOWERING_CAPEX_LINE_ITEMS
+    """Cout de repowering = Batteries and PCS ICP (formule power-law, valuee a
+    `repowering_year` - l'annee civile du repowering, pas l'annee de COD),
+    avec repli Aurora `Battery system + Inverter` (`REPOWERING_CAPEX_LINE_ITEMS`)
+    pour les tensions qu'ICP ne couvre pas (HTB3). Source ICP par coherence
+    avec le CAPEX initial (2026-09-24) : le meme composant remplace au
+    repowering doit suivre le meme modele de cout que sa premiere pose, pas un
+    cout Aurora fige pendant que le CAPEX initial suit desormais ICP. Suppose
+    que la cle tension/duree existe dans `copex_library` (verifie en amont
+    par `capex_and_opex_keur`)."""
+    icp_library = copex_icp.load_icp_library_cached()
+    cost_keur, _ = copex_icp.icp_repowering_capex_keur(
+        tension=tension,
+        duree_h=duree_h,
+        repowering_year=repowering_year,
+        power_mw=power_mw,
+        icp_library=icp_library,
+        aurora_library=copex_library,
     )
-    return total_per_kw * power_mw
+    return cost_keur
 
 
 def build_project_inputs(
@@ -452,10 +667,17 @@ def build_project_inputs(
     aggregator_fee: AggregatorFeeTerms | None = None,
     name: str = "",
     location: str = "",
+    connection_capex_mode: str = "library",
+    manual_connection_capex_keur: float = 0.0,
+    distance_rte_km: float = 0.0,
+    land_lease_opex_keur: float = 0.0,
 ) -> ProjectInputs:
     """Construit un `ProjectInputs` pour une config Aurora - meme forme que
     `dev_case.build_project_inputs`, utilisable tel quel par
-    `financial_engine.compute_results()` et tous les onglets existants."""
+    `financial_engine.compute_results()` et tous les onglets existants.
+    `connection_capex_mode`/`manual_connection_capex_keur`/`distance_rte_km`/
+    `land_lease_opex_keur` : voir `capex_and_opex_keur` - les 2 seuls postes
+    challengeables individuellement."""
     calendar_years, revenue_series, turpe_series = revenue_and_turpe_series(
         library,
         config,
@@ -474,6 +696,10 @@ def build_project_inputs(
         cod_year=cod_year,
         power_mw=power_mw,
         copex_library=copex_library,
+        connection_capex_mode=connection_capex_mode,
+        manual_connection_capex_keur=manual_connection_capex_keur,
+        distance_rte_km=distance_rte_km,
+        land_lease_opex_keur=land_lease_opex_keur,
     )
 
     length = len(calendar_years) + 1  # +1 pour l'annee de construction (COD - 1)

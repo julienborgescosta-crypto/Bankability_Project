@@ -22,6 +22,7 @@ _DIMENSIONS = {
     "Tension": "tension",
     "Type TURPE": "turpe_type",
     "Gabarit": "gabarit",
+    "ORO": "oro",
     "Durée BESS (h)": "duree_h",
     "Année de COD": "cod_year",
     "Structure contractuelle": "contract_kind",
@@ -68,6 +69,7 @@ def _rows_to_dataframe(rows: list[global_sensitivity.GlobalSensitivityRow]) -> p
                 "tension": r.tension,
                 "turpe_type": r.turpe_type,
                 "gabarit": "Oui" if r.gabarit else "Non",
+                "oro": "Oui" if r.oro else "Non",
                 "duree_h": r.duree_h,
                 "cod_year": r.cod_year,
                 "contract_kind": _CONTRACT_LABELS[r.contract_kind],
@@ -135,19 +137,36 @@ def _render_controls(au_store: aur_cases.AuStoreLibrary) -> dict:
 
 def _render_table_and_filters(df: pd.DataFrame) -> pd.DataFrame:
     st.subheader("Table complète (triable, filtrable)")
-    c1, c2, c3 = st.columns(3)
+    st.caption(
+        "Ces filtres s'appliquent aussi à la heatmap ci-dessous — sans filtre sur une "
+        "dimension, la heatmap la moyenne (ex. filtrer Gabarit = Oui isole les configs "
+        "gabarit sans les mélanger avec les configs sans limitation)."
+    )
+    c1, c2, c3, c4, c5, c6 = st.columns(6)
     with c1:
-        tensions = st.multiselect("Filtrer par tension", sorted(df["tension"].unique()))
+        tensions = st.multiselect("Tension", sorted(df["tension"].unique()))
     with c2:
-        turpe_types = st.multiselect("Filtrer par type TURPE", sorted(df["turpe_type"].unique()))
+        turpe_types = st.multiselect("Type TURPE", sorted(df["turpe_type"].unique()))
     with c3:
-        kinds = st.multiselect("Filtrer par structure", sorted(df["contract_kind"].unique()))
+        gabarits = st.multiselect("Gabarit", sorted(df["gabarit"].unique()))
+    with c4:
+        oros = st.multiselect("ORO", sorted(df["oro"].unique()))
+    with c5:
+        durees = st.multiselect("Durée BESS (h)", sorted(df["duree_h"].unique()))
+    with c6:
+        kinds = st.multiselect("Structure", sorted(df["contract_kind"].unique()))
 
     filtered = df.copy()
     if tensions:
         filtered = filtered[filtered["tension"].isin(tensions)]
     if turpe_types:
         filtered = filtered[filtered["turpe_type"].isin(turpe_types)]
+    if gabarits:
+        filtered = filtered[filtered["gabarit"].isin(gabarits)]
+    if oros:
+        filtered = filtered[filtered["oro"].isin(oros)]
+    if durees:
+        filtered = filtered[filtered["duree_h"].isin(durees)]
     if kinds:
         filtered = filtered[filtered["contract_kind"].isin(kinds)]
 
@@ -172,6 +191,7 @@ def _render_table_and_filters(df: pd.DataFrame) -> pd.DataFrame:
             "tension": "Tension",
             "turpe_type": "Type TURPE",
             "gabarit": "Gabarit",
+            "oro": "ORO",
             "duree_h": "Durée (h)",
             "cod_year": "COD",
             "contract_kind": "Structure",
@@ -191,15 +211,57 @@ def _render_table_and_filters(df: pd.DataFrame) -> pd.DataFrame:
     return filtered
 
 
+_FACET_CANDIDATES = [
+    "Tension",
+    "Type TURPE",
+    "Gabarit",
+    "ORO",
+    "Durée BESS (h)",
+    "Structure contractuelle",
+]
+
+
+def _single_heatmap(
+    df: pd.DataFrame, *, x_col: str, y_col: str, metric_col: str, is_pct: bool, title: str
+) -> go.Figure:
+    pivot = df.pivot_table(values=metric_col, index=y_col, columns=x_col, aggfunc="mean")
+    counts = df.pivot_table(values=metric_col, index=y_col, columns=x_col, aggfunc="count")
+    fig = go.Figure(
+        go.Heatmap(
+            z=pivot.values,
+            x=[str(c) for c in pivot.columns],
+            y=[str(i) for i in pivot.index],
+            customdata=counts.values,
+            hovertemplate="%{x} / %{y} : %{z}<br>%{customdata} cas moyennés<extra></extra>",
+            colorscale="RdYlGn",
+            colorbar={"tickformat": ".0%" if is_pct else None},
+            zmid=0.0 if not is_pct else None,
+        )
+    )
+    fig.update_layout(title=title, margin={"t": 40, "b": 20})
+    return fig
+
+
 def _render_heatmap(df: pd.DataFrame) -> None:
     st.subheader("Coupe 2 variables (heatmap)")
-    c1, c2, c3 = st.columns(3)
+    st.caption(
+        "Utilise les mêmes filtres que la table ci-dessus. Une case moyenne les cas restants "
+        'sur toute dimension non choisie ici et non filtrée au-dessus — utilise "Séparer par" '
+        "pour comparer des sous-sections (ex. Injection vs Soutirage vs Classique) sans les "
+        "mélanger dans une même moyenne."
+    )
+    c1, c2, c3, c4 = st.columns(4)
     with c1:
         x_label = st.selectbox("Axe X", list(_DIMENSIONS.keys()), index=4)
     with c2:
         y_label = st.selectbox("Axe Y", list(_DIMENSIONS.keys()), index=0)
     with c3:
         metric_label = st.selectbox("Métrique", list(_METRICS.keys()), key="heatmap_metric")
+    with c4:
+        facet_choices = [d for d in _FACET_CANDIDATES if d not in (x_label, y_label)]
+        facet_label = st.selectbox(
+            "Séparer par (petits multiples)", ["Aucun", *facet_choices], key="heatmap_facet"
+        )
 
     x_col, y_col = _DIMENSIONS[x_label], _DIMENSIONS[y_label]
     metric_col, is_pct = _METRICS[metric_label]
@@ -207,30 +269,50 @@ def _render_heatmap(df: pd.DataFrame) -> None:
         st.caption("Choisis deux dimensions différentes pour l'axe X et l'axe Y.")
         return
 
-    pivot = df.pivot_table(values=metric_col, index=y_col, columns=x_col, aggfunc="mean")
-    fig = go.Figure(
-        go.Heatmap(
-            z=pivot.values,
-            x=[str(c) for c in pivot.columns],
-            y=[str(i) for i in pivot.index],
-            colorscale="RdYlGn",
-            colorbar={"tickformat": ".0%" if is_pct else None},
-            zmid=0.0 if not is_pct else None,
+    if facet_label == "Aucun":
+        fig = _single_heatmap(
+            df,
+            x_col=x_col,
+            y_col=y_col,
+            metric_col=metric_col,
+            is_pct=is_pct,
+            title=f"{metric_label} (moyenne sur les autres dimensions)",
         )
-    )
-    fig.update_layout(xaxis_title=x_label, yaxis_title=y_label, title=f"{metric_label} (moyenne)")
-    st.plotly_chart(fig, use_container_width=True)
-    st.caption(
-        "Moyenne des cas correspondant à chaque case (les autres dimensions sont agrégées) — "
-        "filtre la table ci-dessus d'abord pour isoler une coupe précise."
-    )
+        st.plotly_chart(fig, use_container_width=True)
+        return
+
+    facet_col = _DIMENSIONS[facet_label]
+    facet_values = sorted(df[facet_col].unique())
+    if not facet_values:
+        st.caption("Aucune valeur disponible pour cette séparation avec les filtres actuels.")
+        return
+    cols = st.columns(len(facet_values))
+    for col, value in zip(cols, facet_values, strict=True):
+        subset = df[df[facet_col] == value]
+        with col:
+            if subset.empty:
+                st.caption(f"{facet_label} = {value} : aucun cas.")
+                continue
+            fig = _single_heatmap(
+                subset,
+                x_col=x_col,
+                y_col=y_col,
+                metric_col=metric_col,
+                is_pct=is_pct,
+                title=f"{facet_label} = {value}",
+            )
+            # key explicite : Streamlit deduplique les st.plotly_chart par ID
+            # auto-genere (type + parametres d'appel, pas le contenu de la
+            # figure) - sans key unique, 2 petits multiples peuvent lever
+            # StreamlitDuplicateElementId au lieu de s'afficher.
+            st.plotly_chart(fig, use_container_width=True, key=f"heatmap_{facet_col}_{value}")
 
 
 def render() -> None:
     st.caption(
-        "Balaie l'espace des 18 configs Aurora (`AU_Store`) x années de COD valides x structure "
-        "contractuelle, indépendamment des projets saisis dans le Configurateur — pour répondre à "
-        '"quelles configs/COD/segment/TURPE permettent d\'atteindre un TRI cible ?". '
+        "Balaie l'espace des 22 configs Aurora (`AU_Store`, dont 4 ORO) x années de COD valides x "
+        "structure contractuelle, indépendamment des projets saisis dans le Configurateur — pour "
+        'répondre à "quelles configs/COD/segment/TURPE permettent d\'atteindre un TRI cible ?". '
         "Voir docs/specs/aur_v2_methodology.md section 5."
     )
     au_store, copex_library, financing_terms = load_library()
@@ -258,6 +340,9 @@ def render() -> None:
 
     df = _rows_to_dataframe(rows)
     st.divider()
-    _render_table_and_filters(df)
+    filtered = _render_table_and_filters(df)
     st.divider()
-    _render_heatmap(df)
+    if filtered.empty:
+        st.warning("Aucun cas ne correspond aux filtres actuels.")
+    else:
+        _render_heatmap(filtered)

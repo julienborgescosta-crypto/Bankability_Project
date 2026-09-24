@@ -2,9 +2,13 @@
 core.portfolio.run_portfolio -> tableau de KPI comparatif. Voir
 docs/specs/aurora_v2_methodology.md section 4, docs/specs/portfolio.md.
 
-Les courbes AU_Store/COPEX_library sont chargees depuis le fixture Aurora
-commite (pas un BP par-projet a uploader - c'est une bibliotheque partagee,
-la meme pour tous les projets du portefeuille)."""
+Les courbes de revenu/TURPE (AU_Store) viennent de l'asset statique
+`config/aurora_curves_22configs.json` (core.aur_cases.load_aurora_curves) -
+universelles, memes valeurs pour tout projet, verifiees a la decimale contre
+le databook Aurora Q2 2026 brut (voir docs/specs/aur_cases.md) - pas re-parsees
+depuis un classeur uploade. COPEX_library (CAPEX/OPEX), lui, reste lu depuis le
+fixture Aurora commite (bibliotheque partagee, la meme pour tous les projets
+du portefeuille, mais un poste distinct des courbes de revenu)."""
 
 from __future__ import annotations
 
@@ -14,7 +18,14 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-from core import aur_cases, config_space, contract_overlay, portfolio
+from core import (
+    aur_cases,
+    config_extrapolation,
+    config_space,
+    contract_overlay,
+    copex_icp,
+    portfolio,
+)
 
 SAMPLE_AURORA_BP_PATH = (
     Path(__file__).resolve().parent.parent / "sample_data" / "160926_BP_Stockage_Standalone__.xlsx"
@@ -31,7 +42,7 @@ _CONTRACT_LABELS = {
 def load_library() -> tuple[aur_cases.AuStoreLibrary, object, dict]:
     from core.dev_case_parser import load_dev_case_grids, parse_copex_library
 
-    au_store = aur_cases.load_au_store(SAMPLE_AURORA_BP_PATH)
+    au_store = aur_cases.load_aurora_curves()
     _, copex_grid, _ = load_dev_case_grids(SAMPLE_AURORA_BP_PATH)
     copex_library = parse_copex_library(copex_grid)
     financing_terms = aur_cases.load_financing_terms()
@@ -71,9 +82,26 @@ def _render_add_project_form(
             "Gabarit", gabarit_options, format_func=lambda g: "Oui" if g else "Non"
         )
         if gabarit_options == [False]:
+            st.caption('Gabarit "Oui" indisponible pour TURPE Classique (jamais combiné).')
+        oro_options = config_space.oro_options(turpe_type=turpe_type)
+        oro_requested = st.checkbox(
+            "ORO (limitation injection/soutirage à 3000h/an)",
+            key=f"oro_{name}",
+            disabled=oro_options == [False],
+        )
+        if oro_options == [False]:
             st.caption(
-                'Gabarit "Oui" indisponible ici : Aurora ne l\'a modélisé que pour TURPE '
-                "Injection/Soutirage, en HTA ou HTB2 (jamais Classique, jamais HTB1/HTB3)."
+                "ORO indisponible pour TURPE Classique (limite spécifiquement injection/soutirage)."
+            )
+        curtailment_hours: int | None = None
+        if oro_requested:
+            curtailment_hours = st.number_input(
+                "Heures de curtailment ORO (défaut 3000h)",
+                value=3000,
+                min_value=500,
+                max_value=4000,
+                step=500,
+                key=f"oro_hours_{name}",
             )
         power_mw = st.number_input("Puissance (MW)", value=10.0, min_value=0.1)
     with c3:
@@ -85,16 +113,28 @@ def _render_add_project_form(
         )
 
     try:
-        au_config = au_store.config_by_attributes(
-            duree_h=duree_h, tension=tension, turpe_type=turpe_type, gabarit=gabarit
+        resolved = config_extrapolation.resolve_config(
+            au_store,
+            duree_h=duree_h,
+            tension=tension,
+            turpe_type=turpe_type,
+            gabarit=gabarit,
+            oro=oro_requested,
+            curtailment_hours=curtailment_hours,
         )
+        au_config = resolved.config
+        if resolved.config.extrapolated:
+            st.info(
+                "⚠️ Combinaison non modélisée directement par Aurora — courbe **extrapolée** :\n"
+                + "\n".join(f"- {note}" for note in resolved.notes)
+            )
         if not config_space.is_cod_valid(au_config, int(cod_year)):
             st.warning(
                 f"Cette config n'est modélisée par Aurora que pour COD={au_config.valide_cod} "
                 "- ajuste l'année de COD ci-dessus avant d'ajouter le projet."
             )
     except aur_cases.AuroraConfigError as exc:
-        st.error(f"Combinaison non modélisée par Aurora : {exc}")
+        st.error(f"Combinaison sans équivalent business : {exc}")
         return
 
     st.markdown("**Structure contractuelle**")
@@ -180,22 +220,40 @@ def _render_add_project_form(
             )
 
         st.markdown(
-            "**Ajustement global CAPEX/OPEX** (stress test rapide, sans changer les hypothèses)"
+            "**CAPEX de raccordement & OPEX loyer foncier** (comme dans le BP Stockage "
+            "Standalone 160926 — les seuls postes CAPEX/OPEX challengeables individuellement)"
         )
+        with st.expander("D'où viennent les autres postes CAPEX/OPEX ?"):
+            for note in copex_icp.capex_opex_source_notes(tension):
+                st.caption(note)
         a1, a2 = st.columns(2)
         with a1:
-            capex_adjustment_pct = (
-                st.number_input(
-                    "Ajustement CAPEX (%)", value=0.0, min_value=-90.0, max_value=200.0, step=5.0
-                )
-                / 100
+            connection_capex_mode = st.selectbox(
+                "Mode CAPEX raccordement",
+                ["library", "manual", "distance_rte"],
+                format_func=lambda m: {
+                    "library": "Bibliothèque (segment/durée)",
+                    "manual": "Valeur manuelle",
+                    "distance_rte": "Distance au poste RTE",
+                }[m],
+                key=f"conn_mode_{name}",
             )
-        with a2:
-            opex_adjustment_pct = (
-                st.number_input(
-                    "Ajustement OPEX (%)", value=0.0, min_value=-90.0, max_value=200.0, step=5.0
+            manual_connection_capex_keur = 0.0
+            distance_rte_km = 0.0
+            if connection_capex_mode == "manual":
+                manual_connection_capex_keur = st.number_input(
+                    "CAPEX raccordement manuel (k€)", value=0.0, min_value=0.0
                 )
-                / 100
+            elif connection_capex_mode == "distance_rte":
+                distance_rte_km = st.number_input(
+                    "Distance au poste RTE (km)", value=1.0, min_value=0.0
+                )
+                st.caption(
+                    f"= 4650,7 × distance^0,239 = {_fmt_keur(4650.7 * distance_rte_km**0.239)}"
+                )
+        with a2:
+            land_lease_opex_keur = st.number_input(
+                "OPEX loyer foncier (k€/an)", value=0.0, min_value=0.0
             )
 
     if st.button("Ajouter le projet", type="primary"):
@@ -218,8 +276,12 @@ def _render_add_project_form(
             interest_rate_override=interest_rate_override,
             dsa_keur_override=dsa_keur_override,
             devex_keur_override=devex_keur_override,
-            capex_adjustment_pct=float(capex_adjustment_pct),
-            opex_adjustment_pct=float(opex_adjustment_pct),
+            connection_capex_mode=connection_capex_mode,
+            manual_connection_capex_keur=float(manual_connection_capex_keur),
+            distance_rte_km=float(distance_rte_km),
+            land_lease_opex_keur=float(land_lease_opex_keur),
+            oro_requested=bool(oro_requested),
+            curtailment_hours=int(curtailment_hours) if curtailment_hours is not None else None,
         )
         st.session_state["portfolio_projects"].append(project)
         st.rerun()
@@ -235,14 +297,19 @@ def _render_project_list() -> None:
         c1, c2 = st.columns([5, 1])
         with c1:
             adjustments = []
-            if project.capex_adjustment_pct != 0.0:
-                adjustments.append(f"CAPEX {project.capex_adjustment_pct:+.0%}")
-            if project.opex_adjustment_pct != 0.0:
-                adjustments.append(f"OPEX {project.opex_adjustment_pct:+.0%}")
+            if project.connection_capex_mode == "manual":
+                adjustments.append(
+                    f"racco manuel {_fmt_keur(project.manual_connection_capex_keur)}"
+                )
+            elif project.connection_capex_mode == "distance_rte":
+                adjustments.append(f"racco {project.distance_rte_km:.0f} km")
+            if project.land_lease_opex_keur != 0.0:
+                adjustments.append(f"loyer foncier {_fmt_keur(project.land_lease_opex_keur)}")
             adjustment_suffix = f" ({', '.join(adjustments)})" if adjustments else ""
             st.write(
                 f"**{project.name}** — {project.duree_h}h {project.tension} {project.turpe_type}"
-                f"{' gabarit' if project.gabarit else ''}, COD {project.cod_year}, "
+                f"{' gabarit' if project.gabarit else ''}{' ORO' if project.oro_requested else ''}"
+                f", COD {project.cod_year}, "
                 f"{project.power_mw:.1f} MW, {_CONTRACT_LABELS[project.contract_structure.kind]}"
                 f"{adjustment_suffix}"
             )
@@ -420,6 +487,18 @@ def _render_results(
     except aur_cases.AuroraConfigError as exc:
         st.error(f"Erreur de calcul : {exc}")
         return
+
+    extrapolated_rows = [r for r in rows if r.extrapolated]
+    if extrapolated_rows:
+        with st.expander(
+            f"⚠️ {len(extrapolated_rows)} projet(s) avec une courbe extrapolée "
+            "(non modélisée directement par Aurora)",
+            expanded=False,
+        ):
+            for r in extrapolated_rows:
+                st.write(f"**{r.name}** ({r.config_label}) :")
+                for note in r.extrapolation_notes:
+                    st.caption(f"- {note}")
 
     _render_best_configs(rows)
     st.divider()

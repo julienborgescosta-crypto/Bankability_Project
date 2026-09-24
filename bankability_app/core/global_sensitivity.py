@@ -1,7 +1,8 @@
 """Analyse globale (Phase 5) : enumeration complete de l'espace des configs
-Aurora (18 configs x annees de COD valides x structure contractuelle) -> KPI
-par cas, exploitable en table triable/filtrable + heatmaps/coupes - voir
-docs/adr/0003 et docs/specs/aur_v2_methodology.md section 5.
+Aurora (22 configs, dont 4 ORO, x annees de COD valides x structure
+contractuelle) -> KPI par cas, exploitable en table triable/filtrable +
+heatmaps/coupes - voir docs/adr/0003 et docs/specs/aur_v2_methodology.md
+section 5.
 
 Espace fini et petit (pas un balayage classique variable-par-variable comme
 core/sensitivity.py) : tout est calcule une fois, l'UI ne fait que
@@ -42,6 +43,7 @@ class GlobalSensitivityRow:
     tension: str
     turpe_type: str
     gabarit: bool
+    oro: bool
     cod_year: int
     contract_kind: str
     row: portfolio.PortfolioRow
@@ -113,6 +115,12 @@ def enumerate_configs(
                     power_mw=power_mw,
                     operating_years=operating_years,
                     contract_structure=structure,
+                    # Sans ceci, un au_config ORO et son equivalent standard
+                    # partagent le meme (duree_h, tension, turpe_type, gabarit)
+                    # et `portfolio._resolve_au_config` retomberait sur la
+                    # meme courbe standard pour les 2 - 2 lignes identiques au
+                    # lieu d'une ligne ORO distincte (voir docs/specs/aur_cases.md).
+                    oro_requested=au_config.oro,
                 )
                 entries.append((au_config, kind, project_config))
     return entries
@@ -163,6 +171,7 @@ def run_global_sensitivity(
                 tension=au_config.tension,
                 turpe_type=au_config.turpe_type,
                 gabarit=au_config.gabarit,
+                oro=au_config.oro,
                 cod_year=project_config.cod_year,
                 contract_kind=kind,
                 row=row,

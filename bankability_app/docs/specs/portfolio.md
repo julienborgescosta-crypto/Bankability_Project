@@ -71,16 +71,50 @@ section 4.
   coûts QEnergy identifiée.
 - ~~Pas d'UI Configurateur/Vue portefeuille~~ — fait, voir `ui/configurateur_tab.py`.
 
-## Ajustement global CAPEX/OPEX (%)
+## Ajustement global CAPEX/OPEX (%) — retiré, remplacé par 2 leviers ciblés
 
-Demandé par l'utilisateur (2026-09-18) : `ProjectConfig.capex_adjustment_pct`/`opex_adjustment_pct`
-(défaut `0.0`) multiplient directement la série `ProjectInputs.capex_keur`/`opex_keur` **et** les
-scalaires "info" correspondants (`capex_initial_keur`, `capex_repowering_keur`, `opex_year1_keur`)
-dans `build_project_inputs` — pas seulement passés en kwargs à `financial_engine.compute_results`.
-Raison : `strategy.compute_cod_resale_value_keur` (stratégie 3) lit `inputs.opex_keur` directement,
-hors `compute_results` — un ajustement passé uniquement via `capex_multiplier`/`opex_multiplier`
-(paramètres déjà supportés par `compute_results`, utilisés par `sensitivity.py`) n'aurait affecté
-que les stratégies 1/2, pas la valeur de revente au COD. Ajuster la série une fois, en amont,
-garantit une lecture cohérente partout. Multiplication directe (`x * (1 + pct)`) valide quel que
-soit le signe de la série (CAPEX/OPEX déjà négatifs) : `pct > 0` accentue le coût, `pct < 0`
-l'atténue, sans distinction de cas.
+Une première version (2026-09-18) ajoutait `ProjectConfig.capex_adjustment_pct`/
+`opex_adjustment_pct` (défaut `0.0`), multipliant directement toute la série
+`ProjectInputs.capex_keur`/`opex_keur` en amont dans `build_project_inputs`. Retour négatif de
+l'utilisateur le 2026-09-23 : *"la variation des CAPEX/OPEX en % j'ai eu un feedback négatif …
+Il faut pas rechallenger les CAPEX/OPEX qu'on a overall mais certains uniquement comme dans le BP
+Stockage Standalone 160926, en pouvant toucher aux CAPEX racco avec 2 options: saisir une valeur
+manuelle ou une valeur calculée en fonction de la distance au poste: =4650,7*Distance^0,239, et
+côté OPEX seulement les OPEX loyer fonciers"*. Un choc global en % sur tout le CAPEX/OPEX n'a pas
+de sens business — le BP réel ne stresse que des postes précis, individuellement identifiables.
+
+Remplacé par 2 leviers repris tels quels de `core/dev_case.py` (déjà utilisés par l'onglet "Cas de
+développement", donc alignés sur le BP réel) :
+
+- **CAPEX de raccordement** (`ProjectConfig.connection_capex_mode` : `"library"` par défaut, ou
+  `"manual"` avec `manual_connection_capex_keur`, ou `"distance_rte"` avec `distance_rte_km` →
+  coût = `4650.7 * distance_km**0.239` k€, formule I-Project du BP Stockage Standalone 160926).
+- **OPEX loyer foncier** (`ProjectConfig.land_lease_opex_keur`, additif, non escaladé — ajouté tel
+  quel à l'OPEX année 1 comme dans `dev_case.opex_year1_keur`).
+
+Les deux sont passés jusqu'à `aur_cases.build_project_inputs`/`capex_and_opex_keur`, qui les
+transmet à la construction interne du `DevCaseParams` (au lieu du `connection_capex_mode="library"`
+en dur précédent). Plus de scaling post-hoc de la série : `build_project_inputs` redevient un
+simple `replace(base_inputs, revenues_keur=..., net_cashflow_keur=...)`, la CAPEX/OPEX vient
+directement de `base_inputs` (déjà correcte pour le poste raccordement/loyer foncier choisi).
+
+## Toggle ORO (limitation non-firm) — extrapolé plutôt qu'un repli silencieux
+
+`ProjectConfig.oro_requested: bool` + `curtailment_hours: int | None` (2026-09-23, étendu
+2026-09-24 — voir `docs/specs/aur_cases.md` pour le contexte de la dimension ORO dans `AU_Store` et
+`docs/specs/config_extrapolation.md` pour la méthode). Seuls 4 cas Aurora (HTB2 injection/soutirage,
+2h/4h) à exactement 3000h ont une courbe ORO réelle — demander ORO (à 3000h ou toute autre valeur
+500-4000h) sur une autre combinaison ne renvoie plus un revenu nul silencieux, **ni un repli
+silencieux sur la courbe standard** (comportement du 2026-09-23, remplacé le lendemain suite à la
+demande explicite de l'utilisateur d'extrapoler plutôt que d'ignorer) : `_resolve_au_config()`
+délègue entièrement à `config_extrapolation.resolve_config()`, qui retourne toujours une courbe
+utilisable — réelle ou estimée, jamais bloquante sauf combinaison sans sens business (ORO/gabarit +
+Classique).
+
+`build_project_inputs()` retourne `(inputs, secured_revenue, resolved: ResolvedConfig)` - le 3ᵉ
+élément porte la config Aurora effectivement utilisée (`resolved.config.extrapolated`,
+`resolved.notes`). `run_portfolio()` peuple `PortfolioRow.extrapolated`/`extrapolation_notes` (plus
+générique que l'ancien `oro_applied` — couvre aussi bien l'extrapolation ORO que celle du type
+TURPE/gabarit) sans dupliquer la résolution. L'UI (`ui/configurateur_tab.py`) affiche l'estimation
+et ses notes **avant** l'ajout (aperçu dans le formulaire) et **après** (expander sur le tableau de
+résultats) — jamais une seule des deux.

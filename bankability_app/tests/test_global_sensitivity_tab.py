@@ -18,3 +18,25 @@ def test_global_sensitivity_mode_loads_without_exception():
     assert "Table complète" in "".join(h.value for h in at.subheader)
     assert "Coupe 2 variables" in "".join(h.value for h in at.subheader)
     assert len(at.dataframe) == 1
+    # Par defaut ("Separer par" = "Aucun"), une seule heatmap.
+    assert len(at.get("plotly_chart")) == 1
+
+
+def test_global_sensitivity_heatmap_facet_renders_one_chart_per_value():
+    """ "Separer par" doit produire plusieurs petits multiples (une heatmap par
+    valeur de la dimension choisie), pas une seule heatmap moyennee - c'est le
+    point signale par l'utilisateur (comparer Injection/Soutirage/Classique
+    sans les melanger dans une meme moyenne)."""
+    at = AppTest.from_file(APP_PATH)
+    at.run(timeout=_TIMEOUT)
+    at.sidebar.radio[0].set_value("Analyse globale Aurora")
+    at.run(timeout=_TIMEOUT)
+    assert not at.exception
+
+    facet_selectbox = at.selectbox(key="heatmap_facet")
+    facet_selectbox.set_value(facet_selectbox.options[1])  # 1ere vraie dimension (pas "Aucun")
+    at.run(timeout=_TIMEOUT)
+    assert not at.exception
+    # Plus d'une heatmap : les valeurs de la dimension choisie ne sont plus
+    # melangees dans une seule moyenne (le bug signale par l'utilisateur).
+    assert len(at.get("plotly_chart")) > 1

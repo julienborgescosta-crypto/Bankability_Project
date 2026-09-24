@@ -303,6 +303,7 @@ Modules (`core/`) :
 | `risk_rules.py` | Regles de seuils -> flags rouge/orange/vert | 5 |
 | `acquisition.py` | Prime d'acquisition maximale (M&A) + sensibilite | extension hors 6 couches |
 | `dev_case.py` / `dev_case_parser.py` | Construit un `ProjectInputs` depuis des hypotheses de developpement (COD, puissance, duree, segment, TURPE) + bibliotheques CAPEX/revenu (`COPEX_library`/`CF Aurora`) | extension hors 6 couches, en amont |
+| `copex_icp.py` | CAPEX/OPEX BESS depuis `config/copex_icp.xlsx` (couts unitaires QEF reels, "ICP", mis a jour mensuellement) - source primaire pour le moteur Aurora v2, Aurora `COPEX_library` en repli pour les postes non couverts (Development, Insurance/Grid charges/Land lease/Accise/Other, HTB3) | 5bis (CAPEX/OPEX du moteur Aurora v2) |
 
 Configuration (`config/`) :
 
@@ -311,6 +312,9 @@ Configuration (`config/`) :
   (`O-Financials` + `O-Control` + `I-Project` optionnel)
 - `risk_thresholds.yaml` — seuils du dashboard de risques (DSCR generique + pondere par mix de
   revenu, hurdle rate, marge WACC)
+- `copex_icp.xlsx` — couts unitaires CAPEX/OPEX BESS reels ("ICP"), source primaire du moteur
+  Aurora v2 depuis le 2026-09-24 — a remplacer (meme nom de fichier) a chaque mise a jour mensuelle,
+  voir `docs/specs/copex_icp.md`
 
 Chaque module ci-dessus a sa spec retrospective dans `docs/specs/` (objectif, decisions,
 bugs corriges, questions ouvertes) — a lire avant de le modifier.
@@ -355,8 +359,12 @@ positives** (valeurs d'info, pas des flux de cashflow) — ne pas les confondre 
   fin de vie non modelisee.** `AU_Store!EoL_perkW` (118,44 EUR/kW) est charge mais jamais applique
   dans `build_project_inputs` — `end_of_life_keur` reste une serie de zeros, ce qui sous-estime
   legerement le rendement des projets longs. Le cout de repowering (2e sortie CAPEX a l'op-year
-  15), lui, est modelise depuis le 2026-09-18 (Battery system + Inverter de `COPEX_library`, voir
-  `docs/specs/aur_cases.md`).
+  15), lui, est modelise depuis le 2026-09-18 (Battery system + Inverter, source `copex_icp.xlsx`
+  depuis le 2026-09-24 — voir `docs/specs/copex_icp.md`).
+- **CAPEX/OPEX du moteur Aurora v2 : poste "OPEX Guarantees & preventive maint" (ICP, cout total
+  15 ans) etale comme addition constante a l'OPEX annuel**, pas limite aux 15 premieres annees
+  (le moteur financier n'a pas de notion d'OPEX variable dans le temps) — voir
+  `docs/specs/copex_icp.md`, "Questions ouvertes".
 
 ## Donnees confidentielles
 
@@ -367,3 +375,8 @@ exclus de git (`.gitignore`). Seuls les fixtures illustratifs fabriques
 que les tests tournent sans donnee reelle. Le fixture format complet est converti en `.xlsx`
 (valeurs figees, sans macro) avant d'etre commite, pour ne pas etre bloque par la regle
 `.gitignore` `*.xlsm` qui protege les vrais BP.
+
+`config/copex_icp.xlsx` (couts unitaires CAPEX/OPEX BESS reels QEF) est, lui, committe
+deliberement (choix de l'utilisateur, 2026-09-24) — a la difference des BP projet, ce ne sont pas
+des donnees clients/projet mais des hypotheses de couts internes, mises a jour mensuellement en
+remplacant ce fichier.

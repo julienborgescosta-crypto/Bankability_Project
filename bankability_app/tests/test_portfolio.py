@@ -22,7 +22,7 @@ def test_build_project_inputs_full_merchant_has_no_secured_revenue(
     au_store, copex_library, default_financing_terms
 ):
     config = _config()
-    inputs, secured_revenue = portfolio.build_project_inputs(
+    inputs, secured_revenue, _ = portfolio.build_project_inputs(
         config, au_store, copex_library, default_financing_terms
     )
     assert secured_revenue == [0.0] * config.operating_years
@@ -37,7 +37,7 @@ def test_build_project_inputs_tolling_secures_revenue_during_duration(
             kind=contract_overlay.TOLLING, price_keur_per_mw_per_year=80.0, duration_years=5
         )
     )
-    inputs, secured_revenue = portfolio.build_project_inputs(
+    inputs, secured_revenue, _ = portfolio.build_project_inputs(
         config, au_store, copex_library, default_financing_terms
     )
     assert secured_revenue[:5] == pytest.approx([800.0] * 5)  # 80 keur/MW x 10 MW
@@ -47,12 +47,27 @@ def test_build_project_inputs_tolling_secures_revenue_during_duration(
     assert inputs.revenues_keur[1:6] == pytest.approx([800.0] * 5)
 
 
-def test_build_project_inputs_raises_for_unmodelled_combo(
+def test_build_project_inputs_extrapolates_unmodelled_combo(
     au_store, copex_library, default_financing_terms
 ):
+    """HTB1 n'a que Classique dans AU_Store - depuis le 2026-09-24 ceci est
+    extrapole (core.config_extrapolation), plus une erreur bloquante."""
+    config = _config(tension="HTB1", turpe_type="Injection")
+    inputs, _, resolved = portfolio.build_project_inputs(
+        config, au_store, copex_library, default_financing_terms
+    )
+    assert resolved.config.extrapolated is True
+    assert inputs.revenues_keur[1] > 0.0
+
+
+def test_build_project_inputs_raises_for_gabarit_with_classique(
+    au_store, copex_library, default_financing_terms
+):
+    """Combinaison sans equivalent business (pas juste une donnee manquante) -
+    reste bloquante meme apres l'introduction de l'extrapolation."""
     from core.aur_cases import AuroraConfigError
 
-    config = _config(tension="HTB1", turpe_type="Injection")
+    config = _config(tension="HTA", turpe_type="Classique", gabarit=True)
     with pytest.raises(AuroraConfigError):
         portfolio.build_project_inputs(config, au_store, copex_library, default_financing_terms)
 
@@ -188,62 +203,71 @@ def test_run_portfolio_produces_one_row_per_config(
     assert {r.name for r in rows} == {"Test HTA", "Second"}
 
 
-def test_build_project_inputs_capex_adjustment_scales_series_and_scalars(
+def test_build_project_inputs_connection_capex_manual_overrides_library(
     au_store, copex_library, default_financing_terms
 ):
     config = _config()
-    baseline, _ = portfolio.build_project_inputs(
+    baseline, _, _ = portfolio.build_project_inputs(
         config, au_store, copex_library, default_financing_terms
     )
-    bumped, _ = portfolio.build_project_inputs(
-        _config(capex_adjustment_pct=0.10), au_store, copex_library, default_financing_terms
+    manual, _, _ = portfolio.build_project_inputs(
+        _config(connection_capex_mode="manual", manual_connection_capex_keur=500.0),
+        au_store,
+        copex_library,
+        default_financing_terms,
     )
-    assert bumped.capex_keur[0] == pytest.approx(baseline.capex_keur[0] * 1.10)
-    assert bumped.capex_initial_keur == pytest.approx(baseline.capex_initial_keur * 1.10)
-    # OPEX non touche par l'ajustement CAPEX.
-    assert bumped.opex_keur[1] == pytest.approx(baseline.opex_keur[1])
+    assert manual.capex_initial_keur != pytest.approx(baseline.capex_initial_keur)
+    # OPEX non touche par le mode de CAPEX raccordement.
+    assert manual.opex_keur[1] == pytest.approx(baseline.opex_keur[1])
 
 
-def test_build_project_inputs_opex_adjustment_scales_series_and_scalars(
+def test_build_project_inputs_connection_capex_distance_rte_matches_formula(
+    au_store, copex_library, default_financing_terms
+):
+    """= 4650.7 x distance^0.239 (dev_case._connection_cost_from_distance),
+    comme dans le BP Stockage Standalone 160926 - I-Project."""
+    config = _config(connection_capex_mode="distance_rte", distance_rte_km=5.0)
+    with_distance, _, _ = portfolio.build_project_inputs(
+        config, au_store, copex_library, default_financing_terms
+    )
+    without_connection, _, _ = portfolio.build_project_inputs(
+        _config(connection_capex_mode="manual", manual_connection_capex_keur=0.0),
+        au_store,
+        copex_library,
+        default_financing_terms,
+    )
+    expected_connection_cost = 4650.7 * 5.0**0.239
+    assert with_distance.capex_initial_keur == pytest.approx(
+        without_connection.capex_initial_keur + expected_connection_cost, abs=0.05
+    )
+
+
+def test_build_project_inputs_land_lease_opex_is_additive(
     au_store, copex_library, default_financing_terms
 ):
     config = _config()
-    baseline, _ = portfolio.build_project_inputs(
+    baseline, _, _ = portfolio.build_project_inputs(
         config, au_store, copex_library, default_financing_terms
     )
-    reduced, _ = portfolio.build_project_inputs(
-        _config(opex_adjustment_pct=-0.20), au_store, copex_library, default_financing_terms
+    with_land_lease, _, _ = portfolio.build_project_inputs(
+        _config(land_lease_opex_keur=20.0), au_store, copex_library, default_financing_terms
     )
-    assert reduced.opex_keur[1] == pytest.approx(baseline.opex_keur[1] * 0.80)
-    assert reduced.opex_year1_keur == pytest.approx(baseline.opex_year1_keur * 0.80)
-    # CAPEX non touche par l'ajustement OPEX.
-    assert reduced.capex_keur[0] == pytest.approx(baseline.capex_keur[0])
+    assert with_land_lease.opex_year1_keur == pytest.approx(baseline.opex_year1_keur + 20.0)
+    assert with_land_lease.opex_keur[1] == pytest.approx(baseline.opex_keur[1] - 20.0)
+    # CAPEX non touche par le loyer foncier.
+    assert with_land_lease.capex_keur[0] == pytest.approx(baseline.capex_keur[0])
 
 
-def test_run_portfolio_capex_adjustment_reduces_project_irr(
+def test_run_portfolio_connection_capex_mode_defaults_to_library(
     au_store, copex_library, default_financing_terms
 ):
-    baseline = portfolio.run_portfolio(
-        [_config()], au_store, copex_library, default_financing_terms
+    """Sans override, le mode par defaut ('library') doit redonner exactement
+    le meme CAPEX qu'avant l'introduction de ces leviers (non-regression)."""
+    rows = portfolio.run_portfolio([_config()], au_store, copex_library, default_financing_terms)
+    inputs, _, _ = portfolio.build_project_inputs(
+        _config(), au_store, copex_library, default_financing_terms
     )
-    stressed = portfolio.run_portfolio(
-        [_config(capex_adjustment_pct=0.50)], au_store, copex_library, default_financing_terms
-    )
-    assert stressed[0].capex_total_keur > baseline[0].capex_total_keur
-    assert stressed[0].project_irr < baseline[0].project_irr
-
-
-def test_run_portfolio_opex_adjustment_reduces_project_irr(
-    au_store, copex_library, default_financing_terms
-):
-    baseline = portfolio.run_portfolio(
-        [_config()], au_store, copex_library, default_financing_terms
-    )
-    stressed = portfolio.run_portfolio(
-        [_config(opex_adjustment_pct=0.30)], au_store, copex_library, default_financing_terms
-    )
-    assert stressed[0].opex_total_keur > baseline[0].opex_total_keur
-    assert stressed[0].project_irr < baseline[0].project_irr
+    assert rows[0].capex_total_keur == pytest.approx(inputs.capex_initial_keur)
 
 
 def test_run_portfolio_build_and_flip_net_return_is_internally_consistent(
@@ -280,3 +304,96 @@ def test_run_portfolio_defaults_financing_terms_when_not_given(au_store, copex_l
     rows = portfolio.run_portfolio([_config()], au_store, copex_library)
     assert len(rows) == 1
     assert rows[0].project_irr is not None
+
+
+def test_run_portfolio_oro_requested_and_real_lowers_revenue(
+    au_store, copex_library, default_financing_terms
+):
+    config = _config(tension="HTB2", turpe_type="Injection", oro_requested=True)
+    rows_oro = portfolio.run_portfolio([config], au_store, copex_library, default_financing_terms)
+    rows_standard = portfolio.run_portfolio(
+        [_config(tension="HTB2", turpe_type="Injection")],
+        au_store,
+        copex_library,
+        default_financing_terms,
+    )
+    assert rows_oro[0].oro_requested is True
+    assert rows_oro[0].extrapolated is False
+    assert rows_oro[0].revenue_total_keur < rows_standard[0].revenue_total_keur
+
+
+def test_run_portfolio_oro_requested_but_unmodelled_is_extrapolated_not_dropped(
+    au_store, copex_library, default_financing_terms
+):
+    """HTA n'a jamais ete modelise en ORO par Aurora - depuis le 2026-09-24, ça
+    ne retombe plus silencieusement sur la courbe standard : c'est extrapole
+    (jamais un revenu nul ni un repli invisible, voir
+    docs/specs/config_extrapolation.md)."""
+    config = _config(tension="HTA", turpe_type="Injection", oro_requested=True)
+    rows_oro = portfolio.run_portfolio([config], au_store, copex_library, default_financing_terms)
+    rows_standard = portfolio.run_portfolio(
+        [_config(tension="HTA", turpe_type="Injection")],
+        au_store,
+        copex_library,
+        default_financing_terms,
+    )
+    assert rows_oro[0].oro_requested is True
+    assert rows_oro[0].extrapolated is True
+    assert rows_oro[0].extrapolation_notes
+    assert rows_oro[0].revenue_total_keur < rows_standard[0].revenue_total_keur
+
+
+def test_run_portfolio_oro_with_classique_raises(au_store, copex_library, default_financing_terms):
+    """ORO n'a de sens que pour Injection/Soutirage - pas juste une donnee
+    manquante, une combinaison sans equivalent business."""
+    from core.aur_cases import AuroraConfigError
+
+    config = _config(tension="HTA", turpe_type="Classique", oro_requested=True)
+    with pytest.raises(AuroraConfigError):
+        portfolio.run_portfolio([config], au_store, copex_library, default_financing_terms)
+
+
+def test_build_project_inputs_pre_degraded_4h_oro_config_matches_databook_directly(
+    au_store, copex_library, default_financing_terms
+):
+    config = _config(
+        duree_h=4,
+        tension="HTB2",
+        turpe_type="Injection",
+        cod_year=2030,
+        operating_years=5,
+        oro_requested=True,
+    )
+    inputs, _, resolved = portfolio.build_project_inputs(
+        config, au_store, copex_library, default_financing_terms
+    )
+    assert resolved.config.extrapolated is False
+    assert resolved.config.pre_degraded is True
+
+
+def test_run_portfolio_missing_combo_is_extrapolated_not_raised(
+    au_store, copex_library, default_financing_terms
+):
+    """HTB1 n'a que Classique dans AU_Store - avant le 2026-09-24 ceci levait
+    AuroraConfigError, desormais c'est extrapole (voir
+    docs/specs/config_extrapolation.md)."""
+    config = _config(tension="HTB1", turpe_type="Injection")
+    rows = portfolio.run_portfolio([config], au_store, copex_library, default_financing_terms)
+    assert rows[0].extrapolated is True
+    assert rows[0].extrapolation_notes
+
+
+def test_run_portfolio_custom_curtailment_hours(au_store, copex_library, default_financing_terms):
+    config = _config(
+        tension="HTB2", turpe_type="Injection", oro_requested=True, curtailment_hours=1000
+    )
+    rows_1000 = portfolio.run_portfolio([config], au_store, copex_library, default_financing_terms)
+    rows_3000 = portfolio.run_portfolio(
+        [_config(tension="HTB2", turpe_type="Injection", oro_requested=True)],
+        au_store,
+        copex_library,
+        default_financing_terms,
+    )
+    assert rows_1000[0].extrapolated is True
+    assert rows_3000[0].extrapolated is False
+    assert rows_1000[0].revenue_total_keur > rows_3000[0].revenue_total_keur

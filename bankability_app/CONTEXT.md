@@ -8,11 +8,13 @@ vocabulaire propre à cette extension — pour le vocabulaire du moteur financie
 ## Language
 
 **AU_Store**:
-La feuille source des 18 configurations Aurora standalone (Q2 2026) : courbes RAW (revenu net
-des charges réseau, brut de TURPE, non dégradé, €/kW, calendaire 2027-2060) et courbes TURPE par
-config, plus une table de dégradation par op-year commune à toutes les configs (reset à
-l'op-year 15 pour repowering) et une table de métadonnées par config (Duree, Tension, TURPE,
-Gabarit, ValideCOD).
+La feuille source des 22 configurations Aurora standalone (Q2 2026) : 18 standard + 4 ORO
+(limitation non-firm 3000h/an, ajoutées 2026-09-23). Courbes RAW (revenu net des charges réseau,
+brut de TURPE, calendaire 2027-2060) et courbes TURPE par config, plus une table de dégradation
+par op-year commune à toutes les configs (reset à l'op-year 15 pour repowering) et une table de
+métadonnées par config (Duree, Tension, TURPE, Gabarit, ORO, ValideCOD). Les courbes RAW sont
+"non dégradées" pour toutes les configs sauf les 2 4h ORO COD2030-only (`pre_degraded=True`, déjà
+dégradées, voir `docs/specs/aur_cases.md`).
 _Avoid_: "Aurora sheet", "courbe Aurora" (trop vague — préciser RAW vs TURPE vs métadonnées)
 
 **AUStoreKey**:
@@ -27,13 +29,32 @@ la clé technique — ce sont deux choses différentes dans le fichier)
 Le libellé humain d'une configuration Aurora dans la liste déroulante de `Source BP!B3`, ex.
 `"2h HTA Classique g0"` ou `"4h HTB2 Injection g1 (COD2030)"`. Distinct de l'AUStoreKey — une
 table de correspondance DropKey → AUStoreKey (+ Duree/Tension/TURPE/Gabarit/ValideCOD) vit dans
-`AU_Store!AP:AV`.
+`AU_Store` (colonnes repérées par libellé, jamais par adresse fixe — voir `docs/specs/aur_cases.md`).
 _Avoid_: confondre avec AUStoreKey
 
 **Config COD2030-only**:
-Une configuration Aurora dont `ValideCOD` (dans `AU_Store!AP:AV`) vaut `2030` au lieu de `"toute"`
-— seulement 2 des 18 configs (`4h HTB2 injection gabarit`, `4h HTB2 soutirage gabarit`) sont dans
-ce cas. Doit rester derrière un garde-fou : sélectionnable seulement si le projet a COD=2030.
+Une configuration Aurora dont `ValideCOD` vaut `2030` au lieu de `"toute"` — 4 des 22 configs
+(`4h HTB2 injection gabarit`, `4h HTB2 soutirage gabarit`, `4h HTB2 injection ORO`,
+`4h HTB2 soutirage ORO`) sont dans ce cas. Doit rester derrière un garde-fou : sélectionnable
+seulement si le projet a COD=2030.
+
+**ORO (Offre de Raccordement Optimisé)**:
+Limitation non-firm sur l'injection ou le soutirage (3000h/an dans les cas réels Aurora, mais toute
+valeur 500-4000h acceptée, voir "Extrapolation"), en échange d'un raccordement moins cher/plus
+rapide — Aurora chiffre le curtailment (~-20 % de revenu au pire). Modélisée reellement pour 4
+configs seulement (HTB2 injection/soutirage, 2h/4h à 3000h) — `AuStoreConfig.oro: bool`. Toute
+autre combinaison est extrapolée, pas bloquée (voir "Extrapolation"). Voir `docs/specs/aur_cases.md`.
+_Avoid_: confondre avec "gabarit" (autre mécanisme de limitation, sans lien avec l'ORO)
+
+**Extrapolation** (`core/config_extrapolation.py`):
+Estimation d'une courbe RAW/TURPE pour une combinaison (durée/tension/type TURPE/gabarit/ORO/heures
+de curtailment) qu'Aurora n'a pas modélisée, par transfert de facteurs/deltas calibrés sur HTB2 (ou
+sur le profil de perte % du databook pour les heures de curtailment). `resolve_config()` est le
+point d'entrée — retourne une `AuStoreConfig` avec `extrapolated=True` et des `notes` explicatives
+si une estimation a été utilisée, jamais silencieux. Voir `docs/specs/config_extrapolation.md`.
+_Avoid_: laisser une combinaison manquante lever une erreur ou retomber en silence sur une autre
+courbe — passer par `resolve_config()`, pas par `AuStoreLibrary.config_by_attributes()` directement,
+dès qu'une combinaison n'est pas garantie réelle.
 
 **Source de prix (Source BP)**:
 Le sélecteur `Source BP!B1` dans le BP, qui choisit entre `BP Aurora` (prix issus d'`AU_Store`) et

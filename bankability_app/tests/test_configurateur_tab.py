@@ -42,3 +42,56 @@ def test_configurateur_add_default_project_and_see_results():
     assert "Résultats du portefeuille" in "".join(h.value for h in at.subheader)
     # 3 tableaux : Garder & exploiter / Développer & vendre RtB / Racheter & vendre au COD.
     assert len(at.dataframe) == 3
+
+
+def test_configurateur_extrapolated_combo_shows_warning_and_adds_project():
+    """HTB1 + Injection n'est pas modelise par Aurora (seul Classique existe) -
+    depuis le 2026-09-24 c'est extrapole plutot que bloque, et l'UI doit le
+    signaler explicitement avant et apres l'ajout (voir
+    docs/specs/config_extrapolation.md)."""
+    at = AppTest.from_file(APP_PATH)
+    at.run(timeout=_TIMEOUT)
+    at.sidebar.radio[0].set_value("Configurateur Aurora (multi-projets)")
+    at.run(timeout=_TIMEOUT)
+    assert not at.exception
+
+    next(sb for sb in at.selectbox if sb.label == "Tension").set_value("HTB1")
+    at.run(timeout=_TIMEOUT)
+    next(sb for sb in at.selectbox if sb.label == "Type TURPE").set_value("Injection")
+    at.run(timeout=_TIMEOUT)
+    assert not at.exception
+    assert any("extrapolée" in i.value for i in at.info)
+
+    add_button = next(b for b in at.button if b.label == "Ajouter le projet")
+    add_button.click()
+    at.run(timeout=_TIMEOUT)
+    assert not at.exception
+    assert "Résultats du portefeuille" in "".join(h.value for h in at.subheader)
+    assert any("extrapolée" in e.label for e in at.expander)
+
+
+def test_configurateur_oro_with_custom_curtailment_hours():
+    """HTB2 injection ORO existe reellement a 3000h - a 1500h, ce doit etre
+    extrapole via le profil de perte % du databook (voir
+    docs/specs/config_extrapolation.md)."""
+    at = AppTest.from_file(APP_PATH)
+    at.run(timeout=_TIMEOUT)
+    at.sidebar.radio[0].set_value("Configurateur Aurora (multi-projets)")
+    at.run(timeout=_TIMEOUT)
+
+    next(sb for sb in at.selectbox if sb.label == "Tension").set_value("HTB2")
+    at.run(timeout=_TIMEOUT)
+    next(sb for sb in at.selectbox if sb.label == "Type TURPE").set_value("Injection")
+    at.run(timeout=_TIMEOUT)
+    next(cb for cb in at.checkbox if cb.label.startswith("ORO")).set_value(True)
+    at.run(timeout=_TIMEOUT)
+    assert not at.exception
+    # 3000h par defaut = courbe reelle Aurora, pas d'avertissement d'extrapolation.
+    assert not any("extrapolée" in i.value for i in at.info)
+
+    next(ni for ni in at.number_input if ni.label.startswith("Heures de curtailment")).set_value(
+        1500
+    )
+    at.run(timeout=_TIMEOUT)
+    assert not at.exception
+    assert any("extrapolée" in i.value for i in at.info)

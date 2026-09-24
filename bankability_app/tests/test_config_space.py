@@ -62,3 +62,27 @@ def test_is_cod_valid(au_store):
     config = au_store.config_by_drop_key("4h HTB2 Injection g1 (COD2030)")
     assert config_space.is_cod_valid(config, 2030) is True
     assert config_space.is_cod_valid(config, 2027) is False
+
+
+def test_turpe_types_always_full_set_even_when_aurora_didnt_model_it(au_store):
+    # HTB1 n'a que Classique g0 dans AU_Store - les 3 types restent proposables
+    # (extrapoles via core.config_extrapolation si necessaire, 2026-09-24).
+    assert config_space.turpe_types(au_store, duree_h=2, tension="HTB1") == [
+        "Classique",
+        "Injection",
+        "Soutirage",
+    ]
+
+
+def test_gabarit_options_always_both_for_non_classique_even_when_unmodelled(au_store):
+    assert config_space.gabarit_options(
+        au_store, duree_h=2, tension="HTB1", turpe_type="Injection"
+    ) == [False, True]
+
+
+def test_oro_options_classique_is_false_only():
+    assert config_space.oro_options(turpe_type="Classique") == [False]
+
+
+def test_oro_options_injection_has_both():
+    assert config_space.oro_options(turpe_type="Injection") == [False, True]
