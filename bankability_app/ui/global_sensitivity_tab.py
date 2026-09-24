@@ -13,6 +13,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from core import aur_cases, contract_overlay, global_sensitivity
+from ui import chart_theme
 from ui.configurateur_tab import load_library
 
 _CONTRACT_LABELS = {
@@ -229,6 +230,11 @@ def _single_heatmap(
 ) -> go.Figure:
     pivot = df.pivot_table(values=metric_col, index=y_col, columns=x_col, aggfunc="mean")
     counts = df.pivot_table(values=metric_col, index=y_col, columns=x_col, aggfunc="count")
+    # Sequentiel (bleu, magnitude) pour les metriques % (toujours positives en
+    # pratique) ; divergent bleu<->rouge (skill dataviz, remplace RdYlGn -
+    # rouge/vert etant la confusion daltonienne la plus frequente) pour les
+    # metriques k€ qui peuvent etre negatives (NPV, marge nette RtB, build-and-flip).
+    colorscale = chart_theme.SEQUENTIAL_BLUE if is_pct else chart_theme.DIVERGING
     fig = go.Figure(
         go.Heatmap(
             z=pivot.values,
@@ -236,13 +242,13 @@ def _single_heatmap(
             y=[str(i) for i in pivot.index],
             customdata=counts.values,
             hovertemplate="%{x} / %{y}: %{z}<br>%{customdata} cases averaged<extra></extra>",
-            colorscale="RdYlGn",
+            colorscale=colorscale,
             colorbar={"tickformat": ".0%" if is_pct else None},
             zmid=0.0 if not is_pct else None,
         )
     )
     fig.update_layout(title=title, margin={"t": 40, "b": 20})
-    return fig
+    return chart_theme.apply_layout(fig, legend_horizontal=False)
 
 
 def _render_heatmap(df: pd.DataFrame) -> None:

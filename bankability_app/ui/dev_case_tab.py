@@ -5,6 +5,7 @@ import streamlit as st
 
 from core import dev_case, financial_engine
 from core.models import ProjectInputs, ProjectResults
+from ui import chart_theme
 
 # Un cas de développement construit de zéro n'a pas de covenant DSCR propre au
 # projet (target_dscr) comme un BP déjà chiffré (I-Project) - le mode "dscr" du
@@ -38,10 +39,22 @@ def _cash_profile_chart(result: ProjectResults) -> go.Figure:
     years = [y.year for y in result.yearly]
     fig = go.Figure()
     fig.add_trace(
-        go.Scatter(x=years, y=[y.revenue_keur for y in result.yearly], name="Revenue", mode="lines")
+        go.Scatter(
+            x=years,
+            y=[y.revenue_keur for y in result.yearly],
+            name="Revenue",
+            mode="lines",
+            line={"color": chart_theme.ENTITY["revenue"]},
+        )
     )
     fig.add_trace(
-        go.Scatter(x=years, y=[y.cfads_keur for y in result.yearly], name="CFADS", mode="lines")
+        go.Scatter(
+            x=years,
+            y=[y.cfads_keur for y in result.yearly],
+            name="CFADS",
+            mode="lines",
+            line={"color": chart_theme.ENTITY["cfads"]},
+        )
     )
     fig.add_trace(
         go.Scatter(
@@ -49,10 +62,11 @@ def _cash_profile_chart(result: ProjectResults) -> go.Figure:
             y=[y.debt_service_keur for y in result.yearly],
             name="Debt service",
             mode="lines",
+            line={"color": chart_theme.ENTITY["debt_service"]},
         )
     )
-    fig.update_layout(title="Annual cash profile (k€)", legend={"orientation": "h"})
-    return fig
+    fig.update_layout(title="Annual cash profile (k€)")
+    return chart_theme.apply_layout(fig)
 
 
 def _render_form(
@@ -225,11 +239,16 @@ def render(
                 y=[r["project_irr"] for r in distance_rows],
                 mode="lines+markers",
                 name="Project IRR",
+                line={"color": chart_theme.ENTITY["single_series"]},
             )
         )
         fig.update_layout(
-            xaxis_title="Distance (km)", yaxis_title="Project IRR", yaxis_tickformat=".0%"
+            xaxis_title="Distance (km)",
+            yaxis_title="Project IRR",
+            yaxis_tickformat=".0%",
+            showlegend=False,
         )
+        chart_theme.apply_layout(fig)
         st.plotly_chart(fig, use_container_width=True)
     except ValueError as exc:
         st.caption(f"Not available: {exc}")
@@ -277,9 +296,16 @@ def render(
                 y=[r["project_irr"] for r in cod_rows],
                 mode="lines+markers",
                 name="Project IRR",
+                line={"color": chart_theme.ENTITY["single_series"]},
             )
         )
-        fig.update_layout(xaxis_title="COD year", yaxis_title="Project IRR", yaxis_tickformat=".0%")
+        fig.update_layout(
+            xaxis_title="COD year",
+            yaxis_title="Project IRR",
+            yaxis_tickformat=".0%",
+            showlegend=False,
+        )
+        chart_theme.apply_layout(fig)
         st.plotly_chart(fig, use_container_width=True)
     except ValueError as exc:
         st.caption(f"Not available: {exc}")

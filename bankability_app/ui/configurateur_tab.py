@@ -32,6 +32,7 @@ from core import (
     copex_icp,
     portfolio,
 )
+from ui import chart_theme
 
 SAMPLE_AURORA_BP_PATH = (
     Path(__file__).resolve().parent.parent / "sample_data" / "160926_BP_Stockage_Standalone__.xlsx"
@@ -389,13 +390,22 @@ def _render_project_list() -> None:
 def _bar_chart(
     labels: list[str], values: list[float | None], *, y_title: str, pct: bool = False
 ) -> go.Figure:
-    fig = go.Figure(go.Bar(x=labels, y=[v if v is not None else 0.0 for v in values]))
+    # Serie unique -> le titre de l'axe nomme la grandeur, pas besoin de
+    # legende ni de couleur d'identite distincte (skill dataviz).
+    fig = go.Figure(
+        go.Bar(
+            x=labels,
+            y=[v if v is not None else 0.0 for v in values],
+            marker_color=chart_theme.ENTITY["single_series"],
+        )
+    )
     fig.update_layout(
         yaxis_title=y_title,
         yaxis_tickformat=".0%" if pct else None,
         margin={"t": 20, "b": 20},
+        showlegend=False,
     )
-    return fig
+    return chart_theme.apply_layout(fig)
 
 
 def _render_hold_and_operate(rows: list[portfolio.PortfolioRow]) -> None:
@@ -514,8 +524,18 @@ def _render_dev_and_sell(rows: list[portfolio.PortfolioRow]) -> None:
     st.dataframe(df, use_container_width=True, hide_index=True)
     margin_per_mw = [r.net_margin_keur / r.power_mw if r.power_mw else None for r in rows]
     fig = _bar_chart([r.name for r in rows], margin_per_mw, y_title="Net margin (k€/MW)")
-    fig.add_hline(y=50, line_dash="dot", annotation_text="Low benchmark (50 k€/MW)")
-    fig.add_hline(y=100, line_dash="dot", annotation_text="High benchmark (100 k€/MW)")
+    fig.add_hline(
+        y=50,
+        line_dash="dot",
+        line_color=chart_theme.MUTED_INK,
+        annotation_text="Low benchmark (50 k€/MW)",
+    )
+    fig.add_hline(
+        y=100,
+        line_dash="dot",
+        line_color=chart_theme.MUTED_INK,
+        annotation_text="High benchmark (100 k€/MW)",
+    )
     st.plotly_chart(fig, use_container_width=True)
     st.caption(
         'RtB "secured revenue" buyer target IRR (floor/tolling) still **provisional** '

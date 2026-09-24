@@ -1,0 +1,13 @@
+# Theme aligne sur la palette de reference du skill dataviz (voir
+# ui/chart_theme.py, docs/specs/chart_theme.md) - meme surface/encre que les
+# graphiques Plotly, pour que le chrome Streamlit (boutons, sliders, fond) et
+# les charts ne jurent pas l'un avec l'autre. Clair uniquement pour l'instant
+# (voir chart_theme.py, en-tete).
+
+[theme]
+base = "light"
+primaryColor = "#2a78d6"
+backgroundColor = "#fcfcfb"
+secondaryBackgroundColor = "#f9f9f7"
+textColor = "#0b0b0b"
+font = "sans serif"

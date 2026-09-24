@@ -6,6 +6,7 @@ import streamlit as st
 
 from core import sensitivity
 from core.models import ProjectInputs
+from ui import chart_theme
 
 
 def _tornado_chart(
@@ -16,10 +17,10 @@ def _tornado_chart(
     high = [r[0.20][metric] - base_value for r in rows]
 
     fig = go.Figure()
-    fig.add_bar(y=labels, x=low, orientation="h", name="-20%", marker_color="#f4a6a6")
-    fig.add_bar(y=labels, x=high, orientation="h", name="+20%", marker_color="#a6c8f4")
+    fig.add_bar(y=labels, x=low, orientation="h", name="-20%", marker_color=chart_theme.RED)
+    fig.add_bar(y=labels, x=high, orientation="h", name="+20%", marker_color=chart_theme.BLUE)
     fig.update_layout(barmode="relative", title=title, xaxis_title=f"Delta vs base ({fmt})")
-    return fig
+    return chart_theme.apply_layout(fig)
 
 
 def _npv_heatmap(grid: list[list[float | None]]) -> go.Figure:
@@ -33,7 +34,11 @@ def _npv_heatmap(grid: list[list[float | None]]) -> go.Figure:
             y=[f"{s:+.0%}" for s in sensitivity.NPV_REVENUE_SHOCKS],
             text=text,
             texttemplate="%{text}",
-            colorscale="RdYlGn",
+            # Divergent bleu<->rouge (skill dataviz) au lieu de RdYlGn -
+            # rouge/vert est justement la confusion daltonienne la plus
+            # frequente, contre-productif sur un graphique deja pense pour
+            # signaler une bascule negatif/positif.
+            colorscale=chart_theme.DIVERGING,
             zmid=0,
             colorbar={"title": "NPV (k€)"},
         )
@@ -44,7 +49,7 @@ def _npv_heatmap(grid: list[list[float | None]]) -> go.Figure:
         xaxis_title="Discount rate",
         yaxis_title="Revenue shock",
     )
-    return fig
+    return chart_theme.apply_layout(fig, legend_horizontal=False)
 
 
 def render(inputs: ProjectInputs, debt_kwargs: dict) -> None:

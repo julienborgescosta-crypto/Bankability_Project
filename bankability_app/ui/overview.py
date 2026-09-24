@@ -4,6 +4,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from core.models import ProjectInputs, ProjectResults
+from ui import chart_theme
 
 
 def _fmt_keur(value: float | None) -> str:
@@ -25,7 +26,7 @@ def _cash_profile_chart(result: ProjectResults) -> go.Figure:
             y=[y.revenue_keur for y in result.yearly],
             name="Revenue",
             mode="lines",
-            line={"color": "#1f77b4", "width": 2.5},
+            line={"color": chart_theme.ENTITY["revenue"], "width": 2.5},
         )
     )
     fig.add_trace(
@@ -34,7 +35,7 @@ def _cash_profile_chart(result: ProjectResults) -> go.Figure:
             y=[y.cfads_keur for y in result.yearly],
             name="CFADS",
             mode="lines",
-            line={"color": "#ff7f0e", "width": 2.5},
+            line={"color": chart_theme.ENTITY["cfads"], "width": 2.5},
         )
     )
     fig.add_trace(
@@ -43,15 +44,11 @@ def _cash_profile_chart(result: ProjectResults) -> go.Figure:
             y=[y.debt_service_keur for y in result.yearly],
             name="Debt service",
             mode="lines",
-            line={"color": "#2ca02c", "width": 2.5},
+            line={"color": chart_theme.ENTITY["debt_service"], "width": 2.5},
         )
     )
-    fig.update_layout(
-        title="Annual cash profile (k€)",
-        yaxis_title="k€",
-        legend={"orientation": "h"},
-    )
-    return fig
+    fig.update_layout(title="Annual cash profile (k€)", yaxis_title="k€")
+    return chart_theme.apply_layout(fig)
 
 
 def render(
