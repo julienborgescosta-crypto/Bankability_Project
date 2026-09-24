@@ -100,6 +100,38 @@ def test_configurateur_oro_with_custom_curtailment_hours():
     assert any("extrapolated" in i.value for i in at.info)
 
 
+def test_configurateur_cod_locked_config_disables_add_button():
+    """4h HTB2 Injection gabarit ORO est une courbe reelle Aurora deja
+    degradee (pre_degraded), verrouillee sur COD=2030 - pas de variante
+    "brute" pour l'extrapoler sur un autre COD (voir
+    docs/specs/config_extrapolation.md). Avant ce fix (2026-09-24, suite a un
+    ajout par erreur signale par l'utilisateur), le bouton "Add the project"
+    restait cliquable malgre l'avertissement, et l'erreur explicite
+    n'apparaissait qu'au calcul des resultats du portefeuille."""
+    at = AppTest.from_file(APP_PATH)
+    at.run(timeout=_TIMEOUT)
+    at.sidebar.radio[0].set_value("Aurora Configurator (multi-project)")
+    at.run(timeout=_TIMEOUT)
+
+    next(sb for sb in at.selectbox if sb.label == "BESS duration (h)").set_value(4)
+    at.run(timeout=_TIMEOUT)
+    next(sb for sb in at.selectbox if sb.label == "Voltage (Tension)").set_value("HTB2")
+    at.run(timeout=_TIMEOUT)
+    next(sb for sb in at.selectbox if sb.label == "TURPE type").set_value("Injection")
+    at.run(timeout=_TIMEOUT)
+    next(sb for sb in at.selectbox if sb.label == "Gabarit").set_value(True)
+    at.run(timeout=_TIMEOUT)
+    next(cb for cb in at.checkbox if cb.label.startswith("ORO")).set_value(True)
+    at.run(timeout=_TIMEOUT)
+    next(ni for ni in at.number_input if ni.label == "COD year").set_value(2029)
+    at.run(timeout=_TIMEOUT)
+    assert not at.exception
+
+    assert any("only modelled by Aurora for COD=2030" in w.value for w in at.warning)
+    add_button = next(b for b in at.button if b.label == "Add the project")
+    assert add_button.disabled
+
+
 def test_configurateur_repowering_disabled_shows_in_project_list_and_results():
     """Demande de l'utilisateur, 2026-09-24 : le repowering doit pouvoir etre
     desactive (avant ce changement il etait force, sans controle possible -

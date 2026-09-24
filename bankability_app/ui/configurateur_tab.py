@@ -122,6 +122,7 @@ def _render_add_project_form(
         cod_year = st.number_input("COD year", value=2027, min_value=2027, max_value=2060, step=1)
         operating_years = st.number_input("Operating life (years)", value=20, min_value=1, step=1)
 
+    cod_invalid = False
     try:
         resolved = config_extrapolation.resolve_config(
             au_store,
@@ -138,10 +139,12 @@ def _render_add_project_form(
                 "⚠️ Combination not directly modelled by Aurora — **extrapolated** curve:\n"
                 + "\n".join(f"- {note}" for note in resolved.notes)
             )
-        if not config_space.is_cod_valid(au_config, int(cod_year)):
+        cod_invalid = not config_space.is_cod_valid(au_config, int(cod_year))
+        if cod_invalid:
             st.warning(
                 f"This config is only modelled by Aurora for COD={au_config.valide_cod} "
-                "- adjust the COD year above before adding the project."
+                "- adjust the COD year above (the 'Add the project' button is disabled "
+                "until then)."
             )
     except aur_cases.AuroraConfigError as exc:
         st.error(f"Combination with no business equivalent: {exc}")
@@ -311,7 +314,7 @@ def _render_add_project_form(
                 "Land lease OPEX (k€/yr)", value=0.0, min_value=0.0
             )
 
-    if st.button("Add the project", type="primary"):
+    if st.button("Add the project", type="primary", disabled=cod_invalid):
         project = portfolio.ProjectConfig(
             name=name,
             duree_h=int(duree_h),

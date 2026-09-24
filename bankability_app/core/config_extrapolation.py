@@ -245,10 +245,10 @@ def resolve_config(
             raw = {y: raw[y] * factor[y] for y in raw if y in factor}
             turpe = {y: turpe[y] + delta[y] for y in turpe if y in delta}
             notes.append(
-                f"Type TURPE {turpe_type} non modelise par Aurora pour {tension} {duree_h}h - "
-                f"estime en transferant le ratio/ecart RAW/TURPE observe entre {turpe_type} et "
-                f"Classique sur {REFERENCE_TENSION} (seule tension avec cette combinaison reelle) "
-                f"a la courbe Classique reelle de {tension}."
+                f"TURPE type {turpe_type} not modeled by Aurora for {tension} {duree_h}h - "
+                f"estimated by transferring the RAW/TURPE ratio/delta observed between "
+                f"{turpe_type} and Classique on {REFERENCE_TENSION} (the only voltage with "
+                f"this real combination) to the real Classique curve for {tension}."
             )
         if gabarit:
             gfactor = _gabarit_raw_factor(au_store, duree_h=duree_h, turpe_type=turpe_type)
@@ -256,8 +256,8 @@ def resolve_config(
             raw = {y: raw[y] * gfactor[y] for y in raw if y in gfactor}
             turpe = {y: turpe[y] + gdelta[y] for y in turpe if y in gdelta}
             notes.append(
-                f"Gabarit non modelise par Aurora pour {tension} {turpe_type} {duree_h}h - "
-                f"estime en transferant l'effet gabarit observe sur {REFERENCE_TENSION} "
+                f"Gabarit not modeled by Aurora for {tension} {turpe_type} {duree_h}h - "
+                f"estimated by transferring the gabarit effect observed on {REFERENCE_TENSION} "
                 f"{turpe_type} {duree_h}h."
             )
 
@@ -290,10 +290,10 @@ def resolve_config(
             raw = {y: raw[y] * oro_factor[y] for y in raw if y in oro_factor}
             turpe = {y: turpe[y] + oro_delta[y] for y in turpe if y in oro_delta}
             notes.append(
-                f"ORO non modelise par Aurora pour {tension} {turpe_type} {duree_h}h"
-                f"{' gabarit' if gabarit else ''} - estime en transferant le ratio/ecart "
-                f"RAW/TURPE ORO vs standard observe sur {REFERENCE_TENSION} {turpe_type} "
-                f"{duree_h}h (seule combinaison ORO reelle pour cette duree/type)."
+                f"ORO not modeled by Aurora for {tension} {turpe_type} {duree_h}h"
+                f"{' gabarit' if gabarit else ''} - estimated by transferring the ORO vs "
+                f"standard RAW/TURPE ratio/delta observed on {REFERENCE_TENSION} {turpe_type} "
+                f"{duree_h}h (the only real ORO combination for this duration/type)."
             )
 
         target_hours = (
@@ -308,11 +308,11 @@ def resolve_config(
             }
             raw = {y: raw[y] * rescale[y] for y in raw if y in rescale}
             notes.append(
-                f"Courbe ORO reajustee de 3000h (reference de tout le reste de l'app) a "
-                f"{target_hours}h via le profil de perte % par annee du databook Aurora "
-                f"(onglet Curtailment analysis, calibre uniquement sur 2h HTB2 injection "
-                f"Central COD2027) - approximation, pas un output direct d'Aurora pour "
-                f"cette combinaison/duree."
+                f"ORO curve rescaled from 3000h (reference for the rest of the app) to "
+                f"{target_hours}h via the Aurora databook's per-year loss % profile "
+                f"(Curtailment analysis sheet, calibrated only on 2h HTB2 injection "
+                f"Central COD2027) - an approximation, not a direct Aurora output for "
+                f"this combination/duration."
             )
 
     if not extrapolated:
@@ -325,7 +325,7 @@ def resolve_config(
         label_bits.append("ORO")
         if curtailment_hours is not None and curtailment_hours != DEFAULT_CURTAILMENT_HOURS:
             label_bits.append(f"{curtailment_hours}h")
-    label_bits.append("(extrapole)")
+    label_bits.append("(extrapolated)")
     synthetic_key = " ".join(label_bits)
 
     synthetic_config = AuStoreConfig(
