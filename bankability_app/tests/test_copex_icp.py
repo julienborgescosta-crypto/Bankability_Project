@@ -44,10 +44,46 @@ def icp_library_for_unit_test():
 
 def test_icp_battery_pcs_keur_matches_power_law_formula(icp_library):
     # 10 MW / 2h -> 20 MWh, formule 156.37 * MWh^(-0.051), COD avant 2027 -> multiplicateur base (1.0).
+    # Coefficient en EUR/kWh malgre le libelle Excel "€/MWh" (bug de mislabeling corrige le
+    # 2026-09-24 - voir IcpPowerLawCost/_power_law_cost_keur) : cout total k€ = unit_cost x MWh,
+    # sans division par 1000 supplementaire.
     result = copex_icp.icp_battery_pcs_keur(icp_library, duree_h=2, power_mw=10.0, cod_year=2026)
-    expected_eur_per_mwh = 156.37 * 20.0**-0.051
-    expected_keur = expected_eur_per_mwh * 20.0 / 1000.0
+    expected_eur_per_kwh = 156.37 * 20.0**-0.051
+    expected_keur = expected_eur_per_kwh * 20.0
     assert result == pytest.approx(expected_keur)
+
+
+def test_icp_battery_pcs_keur_order_of_magnitude_is_realistic(icp_library):
+    """Garde-fou de non-regression (bug 2026-09-24) : avant correction,
+    `_power_law_cost_keur` divisait par 1000 de trop et donnait un cout
+    Batteries+PCS d'environ 0.1 EUR/kWh installe (~1000x trop bas). Un vrai
+    cout BESS batterie+PCS se situe dans une fourchette large mais realiste -
+    verifie l'ordre de grandeur plutot qu'une valeur exacte qui bougera a
+    chaque mise a jour mensuelle du fichier ICP."""
+    for duree_h in (2, 4):
+        cost_keur = copex_icp.icp_battery_pcs_keur(
+            icp_library, duree_h=duree_h, power_mw=40.0, cod_year=2028
+        )
+        cost_keur_per_mwh = cost_keur / (40.0 * duree_h)
+        assert 50.0 <= cost_keur_per_mwh <= 400.0, (
+            f"Batteries+PCS {duree_h}h hors fourchette realiste "
+            f"(100-300 k€/MWh attendus) : {cost_keur_per_mwh:.1f} k€/MWh."
+        )
+
+
+def test_icp_opex_guarantees_order_of_magnitude_is_realistic(icp_library):
+    """Meme garde-fou que ci-dessus, pour la 2e (et derniere) ligne power-law
+    du fichier ICP - avant correction, l'OPEX de garantie annualise tombait a
+    ~0.2-0.3 k€/an au lieu de plusieurs centaines."""
+    for duree_h in (2, 4):
+        annualized_keur = copex_icp.icp_opex_guarantees_annualized_keur(
+            icp_library, duree_h=duree_h, power_mw=40.0, cod_year=2028
+        )
+        annualized_keur_per_mw = annualized_keur / 40.0
+        assert 1.0 <= annualized_keur_per_mw <= 20.0, (
+            f"OPEX Guarantees {duree_h}h hors fourchette realiste "
+            f"(1-20 k€/MW/an attendus) : {annualized_keur_per_mw:.2f} k€/MW/an."
+        )
 
 
 def test_icp_battery_pcs_keur_applies_year_multiplier(icp_library):

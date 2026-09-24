@@ -16,19 +16,19 @@ STAGE_BENCHMARKS = [
         "stage": "Development Rights (pre-construction)",
         "example": "NextEnergy (2022) - 250 MW BESS portfolio, UK",
         "benchmark": "~£130k / MW",
-        "note": "Droits seuls - la valeur reflete le risque de developpement et les jalons restants.",
+        "note": "Rights only - value reflects development risk and remaining milestones.",
     },
     {
         "stage": "Development Premium (RTB / late-stage)",
-        "example": "Enerdatics - projets BESS RTB, Allemagne",
+        "example": "Enerdatics - RTB BESS projects, Germany",
         "benchmark": "$50k - $170k / MW",
-        "note": "Varie selon duree, profil de revenu, part merchant vs contractee, risque d'execution.",
+        "note": "Varies with duration, revenue profile, merchant vs contracted share, execution risk.",
     },
     {
         "stage": "Operational Assets",
-        "example": "Harmony Energy Income Trust (2024) - 400 MW BESS en exploitation, UK",
+        "example": "Harmony Energy Income Trust (2024) - 400 MW BESS in operation, UK",
         "benchmark": "~£860k / MW EV",
-        "note": "Portefeuille en exploitation - valeur pilotee par le cashflow, la performance et le risque.",
+        "note": "Operating portfolio - value driven by cashflow, performance and risk.",
     },
 ]
 

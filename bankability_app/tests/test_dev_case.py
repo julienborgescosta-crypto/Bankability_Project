@@ -202,13 +202,13 @@ def test_build_project_inputs_missing_year_is_zero_not_error(
 
 def test_build_project_inputs_unknown_combo_raises(base_params, aurora_library, copex_library):
     base_params.turpe_type = "Injection"  # combo "HTB1 injection" absente de la fixture
-    with pytest.raises(ValueError, match="Combo Aurora"):
+    with pytest.raises(ValueError, match="Aurora combo"):
         dev_case.build_project_inputs(base_params, aurora_library, copex_library)
 
 
 def test_build_project_inputs_unknown_duration_raises(base_params, aurora_library, copex_library):
     base_params.duration_h = 4  # seule la duree 2h existe dans la fixture
-    with pytest.raises(ValueError, match="Durée"):
+    with pytest.raises(ValueError, match="Duration"):
         dev_case.build_project_inputs(base_params, aurora_library, copex_library)
 
 

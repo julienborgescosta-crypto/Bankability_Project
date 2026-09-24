@@ -239,8 +239,8 @@ def compute_results(
         effective_target_dscr = inputs.target_dscr if target_dscr is None else target_dscr
         if not effective_target_dscr or effective_target_dscr <= 0:
             raise ValueError(
-                "debt_sizing_mode='dscr' necessite un target_dscr positif "
-                "(ni fourni en argument, ni present dans ProjectInputs.target_dscr)."
+                "debt_sizing_mode='dscr' requires a positive target_dscr "
+                "(neither passed as an argument nor present in ProjectInputs.target_dscr)."
             )
         # Sized sequentially, in chronological order: the initial tranche is
         # closed before repowering happens, so it's sized first, in isolation.
@@ -265,7 +265,7 @@ def compute_results(
         initial_service = annuity_payment(debt_amount_initial, rate, tenor)
     else:
         raise ValueError(
-            f"debt_sizing_mode inconnu : '{debt_sizing_mode}' (attendu 'gearing' ou 'dscr')."
+            f"Unknown debt_sizing_mode: '{debt_sizing_mode}' (expected 'gearing' or 'dscr')."
         )
     initial_schedule = _tranche_service_schedule(
         length, capex, first_op_index - 1, initial_service, tenor

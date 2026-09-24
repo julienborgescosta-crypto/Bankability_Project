@@ -29,7 +29,7 @@ DEFAULT_CONTRACT_KINDS = [
 # voir docs/specs/global_sensitivity.md "Questions ouvertes").
 DEFAULT_FLOOR_TOLLING_PRICE_KEUR_PER_MW_PER_YEAR = 80.0
 DEFAULT_FLOOR_TOLLING_DURATION_YEARS = 10
-DEFAULT_FLOOR_REVENUE_SHARING_PCT = 0.4
+DEFAULT_FLOOR_REVENUE_SHARING_PCT = 0.0  # confirme par l'utilisateur, 2026-09-24
 
 
 @dataclass(frozen=True)
@@ -147,8 +147,15 @@ def run_global_sensitivity(
     terms = financing_terms if financing_terms is not None else aur_cases.load_financing_terms()
 
     skipped: list[str] = []
+    # HTB3 n'a jamais eu de donnees CAPEX/OPEX (ni Aurora ni ICP) - limite permanente et
+    # connue, pas une donnee manquante ponctuelle a signaler a l'utilisateur (demande de
+    # l'utilisateur, 2026-09-24 : ne plus mentionner HTB3 nulle part dans l'UI). Filtree ici
+    # plutot que dans `config_space.has_cost_data` (qui reste generique pour toute tension
+    # future sans donnees).
     excluded_configs = [
-        c for c in au_store.configs if not config_space.has_cost_data(c, copex_library)
+        c
+        for c in au_store.configs
+        if not config_space.has_cost_data(c, copex_library) and c.tension != "HTB3"
     ]
     if excluded_configs:
         skipped.append(

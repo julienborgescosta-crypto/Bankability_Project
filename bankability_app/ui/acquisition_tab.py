@@ -19,55 +19,54 @@ def _fmt_pct(value: float | None) -> str:
 
 def render(inputs: ProjectInputs, result: ProjectResults, debt_kwargs: dict) -> None:
     st.caption(
-        "Reformule l'analyse en question M&A : combien peut-on payer pour acquérir ce "
-        "projet (SPV), plutôt que de le développer en interne — on résout pour la prime "
-        "d'acquisition maximale au lieu de la supposer."
+        "Reframes the analysis as an M&A question: how much can you pay to acquire this "
+        "project (SPV), rather than developing it in-house — solves for the maximum "
+        "acquisition premium instead of assuming it."
     )
-    acquisition_mode = st.checkbox("Analyser comme une acquisition (M&A)")
+    acquisition_mode = st.checkbox("Analyze as an acquisition (M&A)")
     if not acquisition_mode:
-        st.info("Cochez la case pour lancer l'analyse d'acquisition sur ce projet.")
+        st.info("Check the box to run the acquisition analysis on this project.")
         return
 
-    target_irr = st.slider("Rendement equity cible (acheteur)", 5.0, 25.0, 12.0, step=0.5) / 100
+    target_irr = st.slider("Target equity return (buyer)", 5.0, 25.0, 12.0, step=0.5) / 100
     valuation = acquisition.compute_acquisition_valuation(result, target_irr)
 
-    st.subheader("Prime d'acquisition maximale")
+    st.subheader("Maximum acquisition premium")
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Equity de base requis", _fmt_keur(valuation.base_equity_keur))
-    c2.metric("VA des flux equity futurs", _fmt_keur(valuation.pv_future_equity_cashflows_keur))
+    c1.metric("Base equity required", _fmt_keur(valuation.base_equity_keur))
+    c2.metric("PV of future equity cashflows", _fmt_keur(valuation.pv_future_equity_cashflows_keur))
     c3.metric(
-        "Prime d'acquisition max (headroom)", _fmt_keur(valuation.max_acquisition_premium_keur)
+        "Max acquisition premium (headroom)", _fmt_keur(valuation.max_acquisition_premium_keur)
     )
-    c4.metric("Ticket equity total maximal", _fmt_keur(valuation.max_total_equity_check_keur))
+    c4.metric("Max total equity check", _fmt_keur(valuation.max_total_equity_check_keur))
     st.caption(
-        f"Equity IRR du projet (financement actuel) : {_fmt_pct(valuation.actual_equity_irr)} "
-        f"— cible acheteur : {_fmt_pct(target_irr)}."
+        f"Project Equity IRR (current financing): {_fmt_pct(valuation.actual_equity_irr)} "
+        f"— buyer target: {_fmt_pct(target_irr)}."
     )
 
     if valuation.max_acquisition_premium_keur < 0:
         st.warning(
-            "Prime négative : au montant d'equity de base, le projet ne couvre pas le "
-            "rendement cible. Il faudrait payer **moins** que l'equity de base (décote), "
-            "pas une prime — ou revoir le rendement cible / les hypothèses de financement."
+            "Negative premium: at the base equity amount, the project doesn't cover the "
+            "target return. You'd need to pay **less** than the base equity (a discount), "
+            "not a premium — or revisit the target return / financing assumptions."
         )
     else:
         st.success(
-            "Vous pouvez payer jusqu'à cette prime au-dessus de l'equity de base tout en "
-            "tenant le rendement cible."
+            "You can pay up to this premium above the base equity while still hitting the "
+            "target return."
         )
 
     st.caption(
-        "Formule : Purchase Price + Base Equity Investment ≤ VA des flux equity futurs "
-        "@ rendement cible. La prime n'est jamais une hypothèse en entrée — c'est une "
-        "valeur résiduelle qui bouge avec l'économie du projet."
+        "Formula: Purchase Price + Base Equity Investment ≤ PV of future equity cashflows "
+        "@ target return. The premium is never an input assumption — it's a residual value "
+        "that moves with the project's economics."
     )
 
     st.divider()
-    st.subheader("Sensibilité de la prime d'acquisition")
+    st.subheader("Acquisition premium sensitivity")
     st.caption(
-        "Même logique que l'onglet Sensitivity Analysis, mais sur la prime d'acquisition "
-        "plutôt que sur l'Equity IRR/DSCR. 'OPEX' est le proxy le plus proche d'un choc de "
-        "coût réseau (grid cost) dans ce modèle."
+        "Same logic as the Sensitivity Analysis tab, but on the acquisition premium rather "
+        "than Equity IRR/DSCR. 'OPEX' is the closest proxy for a grid cost shock in this model."
     )
     rows = acquisition.run_acquisition_sensitivity(inputs, debt_kwargs, target_irr)
     sensitivity_table = pd.DataFrame(
@@ -82,17 +81,16 @@ def render(inputs: ProjectInputs, result: ProjectResults, debt_kwargs: dict) -> 
     st.dataframe(sensitivity_table, hide_index=True, use_container_width=True)
 
     st.divider()
-    st.subheader("Repères de marché (contexte, non calculé)")
+    st.subheader("Market benchmarks (context, not calculated)")
     st.caption(
-        "Benchmarks externes indicatifs par stade de développement — utiles comme "
-        "référence, mais ce ne sont pas votre plafond : votre plafond est ce que le "
-        "calcul ci-dessus dit que vous pouvez payer."
+        "Indicative external benchmarks by development stage — useful as a reference, but "
+        "not your ceiling: your ceiling is what the calculation above says you can pay."
     )
     benchmarks_table = pd.DataFrame(
         {
-            "Stade": [b["stage"] for b in acquisition.STAGE_BENCHMARKS],
-            "Exemple": [b["example"] for b in acquisition.STAGE_BENCHMARKS],
-            "Repère": [b["benchmark"] for b in acquisition.STAGE_BENCHMARKS],
+            "Stage": [b["stage"] for b in acquisition.STAGE_BENCHMARKS],
+            "Example": [b["example"] for b in acquisition.STAGE_BENCHMARKS],
+            "Benchmark": [b["benchmark"] for b in acquisition.STAGE_BENCHMARKS],
             "Note": [b["note"] for b in acquisition.STAGE_BENCHMARKS],
         }
     )

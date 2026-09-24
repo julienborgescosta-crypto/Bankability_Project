@@ -52,6 +52,26 @@ section 4.
 - **Durée/taux de portage** (`portage_duration_months`=18 confirmé, `carry_rate_pct`=8%
   provisoire) dans `aur_financing_terms.yaml`, overridables par projet
   (`carry_months_override`/`carry_rate_override`) — même pattern que les autres défauts.
+- **Repowering choisi/optimisé, plus subi figé à l'op-year 15** (demande de l'utilisateur,
+  2026-09-24, suite au constat qu'un repowering forcé sur un projet de 20 ans ne laissait que 5
+  ans pour en profiter — pas de moyen de le désactiver ni de tester une autre année).
+  `ProjectConfig` porte 3 champs : `repowering_enabled` (case à cocher), `repowering_year_mode`
+  (`"manual"` ou `"auto"`), `repowering_op_year_manual`. En mode `"auto"`,
+  `find_best_repowering_op_year()` balaie `repowering_candidate_years(operating_years)` (10 à
+  `operating_years - 2`, vide si `operating_years < 15` — pas de repowering sur un projet trop
+  court pour en profiter) et retient l'année qui maximise l'**Equity IRR** de la stratégie Garder
+  & exploiter (confirmé par l'utilisateur — c'est la stratégie où le choix a le plus d'impact
+  direct). Chaque candidat reconstruit un `ProjectInputs` complet (revenu ET CAPEX suivent
+  l'année choisie, pas juste un des deux — voir `aur_cases._shifted_degradation`, qui généralise
+  le reset de dégradation à n'importe quel op-year plutôt que le figer sur celui d'`AU_Store`).
+  **Défaut dataclass volontairement différent du défaut UI** : `ProjectConfig` par défaut est
+  `repowering_year_mode="manual"`/année 15 (= comportement identique à avant ce changement), pour
+  ne pas ralentir silencieusement `global_sensitivity.py` (~22 configs × ~30 CODs — passer chacun
+  en mode "auto" multiplierait son coût par ~9, le nombre de candidats balayés). Le formulaire
+  interactif du Configurateur (`ui/configurateur_tab.py`, un projet à la fois) pré-sélectionne
+  "auto" explicitement dans son widget — seul ce chemin paie le coût du balayage, là où
+  l'utilisateur en profite réellement. `PortfolioRow.repowering_op_year_used`/
+  `repowering_auto_optimized` exposent le résultat dans le tableau de résultats.
 
 ## Questions ouvertes
 

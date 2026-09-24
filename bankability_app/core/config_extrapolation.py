@@ -171,8 +171,8 @@ def curtailment_loss_pct(hours: int, *, path: Path = CURTAILMENT_LOSSES_PATH) ->
     grid = data["hours_grid"]
     if not (grid[0] <= hours <= grid[-1]):
         raise AuroraConfigError(
-            f"Heures de curtailment {hours} hors de la plage analysee par Aurora "
-            f"({grid[0]}-{grid[-1]}h, onglet Curtailment analysis) - pas de base pour extrapoler."
+            f"Curtailment hours {hours} outside the range analyzed by Aurora "
+            f"({grid[0]}-{grid[-1]}h, Curtailment analysis sheet) - no basis to extrapolate."
         )
     losses_by_hours = data["loss_pct_by_hours"]
     if hours in losses_by_hours:
@@ -208,17 +208,17 @@ def resolve_config(
     erreur."""
     if gabarit and turpe_type == "Classique":
         raise AuroraConfigError(
-            "Gabarit n'a de sens que pour TURPE Injection/Soutirage (jamais Classique) - "
-            "combinaison sans equivalent business, pas juste une donnee manquante."
+            "Gabarit only makes sense for TURPE Injection/Soutirage (never Classique) - "
+            "a combination with no business equivalent, not just missing data."
         )
     if oro and turpe_type == "Classique":
         raise AuroraConfigError(
-            "ORO (limitation non-firm) n'a de sens que pour TURPE Injection/Soutirage "
-            "(jamais Classique) - combinaison sans equivalent business, pas juste une donnee "
-            "manquante."
+            "ORO (non-firm curtailment) only makes sense for TURPE Injection/Soutirage "
+            "(never Classique) - a combination with no business equivalent, not just "
+            "missing data."
         )
     if curtailment_hours is not None and not oro:
-        raise AuroraConfigError("`curtailment_hours` n'a de sens que si `oro=True`.")
+        raise AuroraConfigError("`curtailment_hours` only makes sense when `oro=True`.")
 
     notes: list[str] = []
     extrapolated = False

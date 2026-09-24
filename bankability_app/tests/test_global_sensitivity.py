@@ -46,14 +46,16 @@ def test_enumerate_configs_sweeps_all_contract_kinds_by_default(au_store, copex_
     }
 
 
-def test_run_global_sensitivity_reports_htb3_exclusion_once(au_store, copex_library):
+def test_run_global_sensitivity_excludes_htb3_without_mentioning_it(au_store, copex_library):
+    """HTB3 n'a jamais de donnees CAPEX/OPEX (ni Aurora ni ICP) - limite permanente,
+    pas une donnee manquante ponctuelle : exclue silencieusement des lignes ET du
+    resume `skipped` (demande de l'utilisateur, 2026-09-24 - ne plus mentionner HTB3
+    dans l'UI)."""
     rows, skipped = global_sensitivity.run_global_sensitivity(
         au_store, copex_library, operating_years=10, contract_kinds=[contract_overlay.FULL_MERCHANT]
     )
     assert all(r.tension != "HTB3" for r in rows)
-    assert len(skipped) == 1
-    assert "HTB3" in skipped[0]
-    assert "COPEX_library" in skipped[0]
+    assert not any("HTB3" in message for message in skipped)
 
 
 def test_run_global_sensitivity_rows_have_computed_kpis(au_store, copex_library):

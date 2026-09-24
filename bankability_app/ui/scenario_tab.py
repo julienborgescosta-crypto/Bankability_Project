@@ -11,7 +11,7 @@ SCENARIO_COLORS = {"Bear (P10)": "#f7d6d6", "Base (P50)": "#d9ead3", "Bull (P90)
 
 
 def render(inputs: ProjectInputs, debt_kwargs: dict) -> None:
-    st.caption("Facteurs d'ajustement appliqués aux hypothèses du BP par scénario.")
+    st.caption("Adjustment factors applied to the Business Plan assumptions, per scenario.")
 
     defaults = scenarios_module.DEFAULT_SCENARIOS
     factor_df = pd.DataFrame(
@@ -68,7 +68,7 @@ def render(inputs: ProjectInputs, debt_kwargs: dict) -> None:
     st.dataframe(display_df.loc[list(rows[SCENARIO_ORDER[0]].keys())], use_container_width=True)
 
     st.divider()
-    st.subheader("Résultats par scénario")
+    st.subheader("Results by scenario")
     cols = st.columns(len(SCENARIO_ORDER))
     for col, name in zip(cols, SCENARIO_ORDER, strict=True):
         _, result = results[name]

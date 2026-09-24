@@ -58,6 +58,24 @@ class ProjectConfig:
     # ete utilisee).
     oro_requested: bool = False
     curtailment_hours: int | None = None  # utilise seulement si oro_requested ; None = 3000h
+    # Repowering (demande de l'utilisateur, 2026-09-24, suite au constat qu'un
+    # repowering force a l'op-year 15 sur un projet de 20 ans ne laisse que 5
+    # ans pour en profiter) : desormais un choix explicite, pas un defaut subi.
+    # Desactive automatiquement si operating_years < MIN_OPERATING_YEARS_FOR_REPOWERING
+    # (voir repowering_candidate_years) - inutile de repowerer un projet trop court.
+    #
+    # Defaut dataclass = "manual"/15 (comportement identique a avant ce
+    # changement) plutot que "auto", pour ne pas ralentir silencieusement
+    # `global_sensitivity.py` (enumere ~22 configs x ~30 CODs - passer chaque
+    # combo en mode "auto" multiplierait son cout par ~9, le nombre de
+    # candidats balayes par `find_best_repowering_op_year`). Le formulaire
+    # interactif du Configurateur (`ui/configurateur_tab.py`, ajout d'UN
+    # projet a la fois) pre-selectionne "auto" explicitement dans son widget -
+    # seul ce chemin paie le cout du balayage, la ou l'utilisateur en profite
+    # reellement.
+    repowering_enabled: bool = True
+    repowering_year_mode: str = "manual"  # "auto" | "manual"
+    repowering_op_year_manual: int = 15  # utilise seulement si repowering_year_mode == "manual"
 
 
 @dataclass(frozen=True)
@@ -88,6 +106,95 @@ class PortfolioRow:
     oro_requested: bool
     extrapolated: bool
     extrapolation_notes: tuple[str, ...]
+    repowering_op_year_used: int | None
+    repowering_auto_optimized: bool
+
+
+# Repowering (demande de l'utilisateur, 2026-09-24) : un projet plus court
+# que MIN_OPERATING_YEARS_FOR_REPOWERING n'offre pas la fonctionnalite (pas
+# assez de vie pour que remplacer la batterie ait un sens). Les annees
+# candidates balayees pour le mode "auto" vont de MIN_REPOWERING_OP_YEAR (pas
+# de repowering avant 10 ans - la batterie n'a pas encore assez degrade pour
+# le justifier) a `operating_years - MIN_REPOWERING_BENEFIT_YEARS` (garder au
+# moins 2 ans pour profiter du reset apres repowering, sinon on paie le CAPEX
+# juste avant d'arreter le projet - exactement le cas signale par
+# l'utilisateur : repowering a l'annee 15 d'un projet de 15 ans).
+MIN_OPERATING_YEARS_FOR_REPOWERING = 15
+MIN_REPOWERING_OP_YEAR = 10
+MIN_REPOWERING_BENEFIT_YEARS = 2
+
+
+def repowering_candidate_years(operating_years: int) -> list[int]:
+    """Annees op-year candidates pour le mode 'auto' - liste vide si le
+    projet est trop court pour que le repowering ait un sens (voir les
+    constantes ci-dessus)."""
+    if operating_years < MIN_OPERATING_YEARS_FOR_REPOWERING:
+        return []
+    upper = operating_years - MIN_REPOWERING_BENEFIT_YEARS
+    if upper < MIN_REPOWERING_OP_YEAR:
+        return []
+    return list(range(MIN_REPOWERING_OP_YEAR, upper + 1))
+
+
+def find_best_repowering_op_year(
+    config: ProjectConfig,
+    au_store: AuStoreLibrary,
+    copex_library: CopexLibrary,
+    financing_terms: dict,
+) -> tuple[int | None, float | None, list[tuple[int, float | None]]]:
+    """Balaie `repowering_candidate_years(config.operating_years)` et retourne
+    celle qui maximise l'Equity IRR de la strategie Garder & exploiter
+    (confirme par l'utilisateur, 2026-09-24 - c'est la strategie ou le choix
+    de l'annee de repowering a le plus d'impact direct). Retourne
+    `(meilleure_annee, son_equity_irr, detail_par_annee)` -
+    `(None, None, [])` si le projet est trop court pour offrir le repowering.
+
+    Chaque candidat force `repowering_year_mode='manual'` pour eviter toute
+    recursion avec ce meme balayage."""
+    candidates = repowering_candidate_years(config.operating_years)
+    if not candidates:
+        return None, None, []
+
+    details: list[tuple[int, float | None]] = []
+    for candidate_year in candidates:
+        candidate_config = replace(
+            config,
+            repowering_enabled=True,
+            repowering_year_mode="manual",
+            repowering_op_year_manual=candidate_year,
+        )
+        inputs, secured_revenue, _ = build_project_inputs(
+            candidate_config, au_store, copex_library, financing_terms
+        )
+        operating_revenue = inputs.revenues_keur[1:]
+        financing_kwargs = _financing_kwargs(
+            candidate_config, secured_revenue, operating_revenue, financing_terms
+        )
+        hold_result = strategy.compute_hold_and_operate(inputs, financing_kwargs=financing_kwargs)
+        details.append((candidate_year, hold_result.equity_irr))
+
+    valid = [(year, irr) for year, irr in details if irr is not None]
+    if not valid:
+        return None, None, details
+    best_year, best_irr = max(valid, key=lambda item: item[1])
+    return best_year, best_irr, details
+
+
+def _effective_repowering_op_year(
+    config: ProjectConfig,
+    au_store: AuStoreLibrary,
+    copex_library: CopexLibrary,
+    financing_terms: dict,
+) -> tuple[int | None, bool]:
+    """Resout l'annee de repowering a utiliser pour CE projet - retourne
+    `(annee_ou_None, auto_optimisee)`. `None` = repowering desactive (case
+    decochee, ou mode auto sans candidat valide car projet trop court)."""
+    if not config.repowering_enabled:
+        return None, False
+    if config.repowering_year_mode == "manual":
+        return config.repowering_op_year_manual, False
+    best_year, _, _ = find_best_repowering_op_year(config, au_store, copex_library, financing_terms)
+    return best_year, True
 
 
 def _resolve_au_config(config: ProjectConfig, au_store: AuStoreLibrary) -> ResolvedConfig:
@@ -117,8 +224,13 @@ def build_project_inputs(
     Retourne `(inputs, revenu_securise, resolved)` - le revenu securise sert
     ensuite au tiering DSCR/TRI cible (`core.contract_overlay`), `resolved`
     porte la config Aurora effectivement utilisee (reelle ou extrapolee, voir
-    `_resolve_au_config`/`core.config_extrapolation`)."""
+    `_resolve_au_config`/`core.config_extrapolation`). L'annee de repowering
+    (si active) est resolue ici - manuelle telle quelle, ou optimisee via
+    `find_best_repowering_op_year` en mode 'auto' (2026-09-24)."""
     resolved = _resolve_au_config(config, au_store)
+    repowering_op_year, _auto_optimized = _effective_repowering_op_year(
+        config, au_store, copex_library, financing_terms
+    )
     base_inputs = aur_cases.build_project_inputs(
         resolved.library,
         resolved.config,
@@ -127,6 +239,8 @@ def build_project_inputs(
         power_mw=config.power_mw,
         operating_years=config.operating_years,
         name=config.name,
+        with_repowering=repowering_op_year is not None,
+        repowering_op_year_override=repowering_op_year,
         connection_capex_mode=config.connection_capex_mode,
         manual_connection_capex_keur=config.manual_connection_capex_keur,
         distance_rte_km=config.distance_rte_km,
@@ -292,6 +406,12 @@ def run_portfolio(
                 oro_requested=config.oro_requested,
                 extrapolated=resolved.config.extrapolated,
                 extrapolation_notes=tuple(resolved.notes),
+                repowering_op_year_used=inputs.repowering_op_year,
+                repowering_auto_optimized=(
+                    config.repowering_enabled
+                    and config.repowering_year_mode == "auto"
+                    and inputs.repowering_op_year is not None
+                ),
             )
         )
     return rows

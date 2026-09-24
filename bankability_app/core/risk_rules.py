@@ -65,13 +65,13 @@ def evaluate_risks(
     weighted_threshold = revenue_weighted_dscr_threshold(inputs, thresholds)
     if inputs.target_dscr is not None:
         dscr_min_amber = inputs.target_dscr
-        amber_label = "cible du projet (I-Project)"
+        amber_label = "project target (I-Project)"
     elif weighted_threshold is not None:
         dscr_min_amber = weighted_threshold
-        amber_label = "pondere par mix de revenu contracte/merchant"
+        amber_label = "weighted by contracted/merchant revenue mix"
     else:
         dscr_min_amber = thresholds["dscr_min_amber"]
-        amber_label = "bancaire usuel"
+        amber_label = "usual bank threshold"
 
     dscr_min = result.dscr_min
     if dscr_min is None:
@@ -79,7 +79,7 @@ def evaluate_risks(
             RiskFlag(
                 "DSCR min",
                 "amber",
-                "DSCR non calculable (pas de dette ou pas d'annees d'exploitation).",
+                "DSCR not calculable (no debt or no operating years).",
             )
         )
     elif dscr_min < thresholds["dscr_min_red"]:
@@ -87,7 +87,7 @@ def evaluate_risks(
             RiskFlag(
                 "DSCR min",
                 "red",
-                f"DSCR min {dscr_min:.2f}x sous le seuil critique {thresholds['dscr_min_red']:.2f}x.",
+                f"DSCR min {dscr_min:.2f}x below the critical threshold {thresholds['dscr_min_red']:.2f}x.",
             )
         )
     elif dscr_min < dscr_min_amber:
@@ -95,7 +95,7 @@ def evaluate_risks(
             RiskFlag(
                 "DSCR min",
                 "amber",
-                f"DSCR min {dscr_min:.2f}x sous le seuil {amber_label} {dscr_min_amber:.2f}x.",
+                f"DSCR min {dscr_min:.2f}x below the {amber_label} threshold {dscr_min_amber:.2f}x.",
             )
         )
     else:
@@ -103,18 +103,18 @@ def evaluate_risks(
             RiskFlag(
                 "DSCR min",
                 "green",
-                f"DSCR min {dscr_min:.2f}x au-dessus du seuil {amber_label} {dscr_min_amber:.2f}x.",
+                f"DSCR min {dscr_min:.2f}x above the {amber_label} threshold {dscr_min_amber:.2f}x.",
             )
         )
 
     if result.equity_irr is None:
-        flags.append(RiskFlag("Equity IRR", "amber", "Equity IRR non calculable."))
+        flags.append(RiskFlag("Equity IRR", "amber", "Equity IRR not calculable."))
     elif result.equity_irr < thresholds["equity_irr_hurdle"]:
         flags.append(
             RiskFlag(
                 "Equity IRR",
                 "red",
-                f"Equity IRR {result.equity_irr:.1%} sous le hurdle rate {thresholds['equity_irr_hurdle']:.1%}.",
+                f"Equity IRR {result.equity_irr:.1%} below the hurdle rate {thresholds['equity_irr_hurdle']:.1%}.",
             )
         )
     else:
@@ -122,7 +122,7 @@ def evaluate_risks(
             RiskFlag(
                 "Equity IRR",
                 "green",
-                f"Equity IRR {result.equity_irr:.1%} au-dessus du hurdle rate.",
+                f"Equity IRR {result.equity_irr:.1%} above the hurdle rate.",
             )
         )
 
@@ -141,7 +141,7 @@ def evaluate_risks(
                 RiskFlag(
                     "Project IRR vs WACC",
                     "green",
-                    f"Project IRR {result.project_irr:.2%} >= WACC {inputs.wacc:.2%} (marge {margin:.2%}).",
+                    f"Project IRR {result.project_irr:.2%} >= WACC {inputs.wacc:.2%} (margin {margin:.2%}).",
                 )
             )
 

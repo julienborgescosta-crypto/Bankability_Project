@@ -51,7 +51,7 @@ def _cash_profile_chart(result: ProjectResults) -> go.Figure:
             mode="lines",
         )
     )
-    fig.update_layout(title="Profil de cashflow annuel (k€)", legend={"orientation": "h"})
+    fig.update_layout(title="Annual cash profile (k€)", legend={"orientation": "h"})
     return fig
 
 
@@ -64,23 +64,25 @@ def _render_form(
         if year_range is not None:
             min_year, max_year = year_range
             cod_year = st.number_input(
-                "Année de COD",
+                "COD year",
                 value=min(max(defaults.cod_year, min_year), max_year),
                 min_value=min_year,
                 max_value=max_year,
                 step=1,
             )
             st.caption(
-                f"Revenus CF Aurora disponibles {min_year}-{max_year}. CAPEX/OPEX escaladés "
-                "jusqu'en 2034 (plafonnés au-delà, voir docs/specs/dev_case.md)."
+                f"CF Aurora revenue available {min_year}-{max_year}. CAPEX/OPEX escalated up "
+                "to 2034 (capped beyond, see docs/specs/dev_case.md)."
             )
         else:
-            cod_year = st.number_input("Année de COD", value=defaults.cod_year, step=1)
-        power_mw = st.number_input("Puissance (MW)", value=defaults.power_mw, min_value=0.1)
-        duration_h = st.selectbox("Durée BESS (h)", [2, 4], index=[2, 4].index(defaults.duration_h))
+            cod_year = st.number_input("COD year", value=defaults.cod_year, step=1)
+        power_mw = st.number_input("Power (MW)", value=defaults.power_mw, min_value=0.1)
+        duration_h = st.selectbox(
+            "BESS duration (h)", [2, 4], index=[2, 4].index(defaults.duration_h)
+        )
     with c2:
         connection_type = st.selectbox(
-            "Type de raccordement",
+            "Connection type",
             dev_case.CONNECTION_TYPES,
             index=(
                 dev_case.CONNECTION_TYPES.index(defaults.connection_type)
@@ -91,10 +93,10 @@ def _render_form(
         voltage_class_override = None
         if connection_type.startswith("Industrial"):
             voltage_class_override = st.selectbox(
-                "Classe de tension (raccordement industriel)", dev_case.VOLTAGE_CLASSES
+                "Voltage class (industrial connection)", dev_case.VOLTAGE_CLASSES
             )
         turpe_type = st.selectbox(
-            "Type TURPE",
+            "TURPE type",
             dev_case.TURPE_TYPES,
             index=(
                 dev_case.TURPE_TYPES.index(defaults.turpe_type)
@@ -106,20 +108,20 @@ def _render_form(
         repowering = st.checkbox("Repowering", value=defaults.repowering)
     with c3:
         operating_years = st.number_input(
-            "Durée d'exploitation (ans)", value=defaults.operating_years, min_value=1, step=1
+            "Operating life (years)", value=defaults.operating_years, min_value=1, step=1
         )
         land_lease_opex_keur = st.number_input(
-            "OPEX loyer foncier (k€/an)", value=defaults.land_lease_opex_keur
+            "Land lease OPEX (k€/yr)", value=defaults.land_lease_opex_keur
         )
         connection_capex_mode = st.selectbox(
-            "Mode CAPEX raccordement",
+            "Grid connection CAPEX mode",
             dev_case.CONNECTION_CAPEX_MODES,
             index=dev_case.CONNECTION_CAPEX_MODES.index(defaults.connection_capex_mode),
             format_func=lambda m: {
-                "library": "Bibliothèque (segment/durée)",
-                "manual": "Valeur manuelle",
-                "distance_rte": "Distance raccordement RTE",
-                "distance_rte_and_substation": "Distance RTE + poste HTB",
+                "library": "Library (segment/duration)",
+                "manual": "Manual value",
+                "distance_rte": "Distance to RTE substation",
+                "distance_rte_and_substation": "Distance to RTE + HV substation",
             }[m],
         )
         distance_rte_km = defaults.distance_rte_km
@@ -127,15 +129,17 @@ def _render_form(
         manual_connection_capex_keur = defaults.manual_connection_capex_keur
         if connection_capex_mode == "manual":
             manual_connection_capex_keur = st.number_input(
-                "CAPEX raccordement manuel (k€)", value=defaults.manual_connection_capex_keur
+                "Manual grid connection CAPEX (k€)", value=defaults.manual_connection_capex_keur
             )
         elif connection_capex_mode in ("distance_rte", "distance_rte_and_substation"):
             distance_rte_km = st.number_input(
-                "Distance racco RTE (km)", value=defaults.distance_rte_km, min_value=0.0
+                "Distance to RTE substation (km)", value=defaults.distance_rte_km, min_value=0.0
             )
             if connection_capex_mode == "distance_rte_and_substation":
                 distance_substation_km = st.number_input(
-                    "Distance poste HTB (km)", value=defaults.distance_substation_km, min_value=0.0
+                    "Distance to HV substation (km)",
+                    value=defaults.distance_substation_km,
+                    min_value=0.0,
                 )
 
     return dev_case.DevCaseParams(
@@ -169,9 +173,9 @@ def render(
     case "Analyse bancabilité complète" est cochée (pour activer les autres
     onglets sur ce cas), sinon None."""
     st.caption(
-        "Construit un cas de base à partir d'hypothèses de développement (COD, puissance, "
-        "durée, segment réseau, type TURPE...), en tirant les revenus de CF Aurora et le "
-        "CAPEX/OPEX de COPEX_library — plutôt que de partir d'un BP déjà chiffré."
+        "Builds a base case from development assumptions (COD, power, duration, grid "
+        "segment, TURPE type...), pulling revenue from CF Aurora and CAPEX/OPEX from "
+        "COPEX_library — rather than starting from an already-priced Business Plan."
     )
     params = _render_form(defaults, aurora_library)
     debt_kwargs = _safe_debt_kwargs(debt_kwargs)
@@ -182,33 +186,33 @@ def render(
         last_operating_year = params.cod_year + params.operating_years - 1
         if last_operating_year > max_year:
             st.warning(
-                f"La durée d'exploitation dépasse la couverture CF Aurora ({max_year}) : les "
-                f"années {max_year + 1}-{last_operating_year} auront un revenu nul plutôt "
-                "qu'une vraie prévision. Réduisez le COD ou la durée d'exploitation pour rester "
-                "dans la plage couverte."
+                f"The operating life extends beyond CF Aurora's coverage ({max_year}): years "
+                f"{max_year + 1}-{last_operating_year} will have zero revenue instead of a "
+                "real forecast. Reduce the COD or the operating life to stay within the "
+                "covered range."
             )
 
     try:
         inputs = dev_case.build_project_inputs(params, aurora_library, copex_library)
     except ValueError as exc:
-        st.error(f"Impossible de construire le cas de base : {exc}")
+        st.error(f"Unable to build the base case: {exc}")
         return None
 
     result = financial_engine.compute_results(inputs, **debt_kwargs)
 
     st.divider()
-    st.subheader("Cas de base")
+    st.subheader("Base case")
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("CAPEX total", _fmt_keur(result.capex_total_keur))
+    c1.metric("Total CAPEX", _fmt_keur(result.capex_total_keur))
     c2.metric("Project IRR", _fmt_pct(result.project_irr))
     c3.metric("Equity IRR", _fmt_pct(result.equity_irr))
     c4.metric("DSCR min", f"{result.dscr_min:.2f}x" if result.dscr_min is not None else "n/a")
     st.plotly_chart(_cash_profile_chart(result), use_container_width=True)
 
     st.divider()
-    st.subheader("Leviers de sensibilité")
+    st.subheader("Sensitivity levers")
 
-    st.markdown("**TRI vs distance de raccordement RTE**")
+    st.markdown("**IRR vs distance to RTE substation**")
     distances = [0.0, 1.0, 2.0, 5.0, 10.0, 20.0]
     try:
         distance_rows = dev_case.run_distance_sensitivity(
@@ -228,19 +232,19 @@ def render(
         )
         st.plotly_chart(fig, use_container_width=True)
     except ValueError as exc:
-        st.caption(f"Non disponible : {exc}")
+        st.caption(f"Not available: {exc}")
 
-    st.markdown("**TRI vs durée BESS (2h / 4h)**")
+    st.markdown("**IRR vs BESS duration (2h / 4h)**")
     try:
         duration_rows = dev_case.run_duration_sensitivity(
             params, aurora_library, copex_library, [2, 4], compute_kwargs=debt_kwargs
         )
         for row in duration_rows:
-            st.write(f"{row['duration_h']}h : Project IRR = {_fmt_pct(row['project_irr'])}")
+            st.write(f"{row['duration_h']}h: Project IRR = {_fmt_pct(row['project_irr'])}")
     except ValueError as exc:
-        st.caption(f"Non disponible : {exc}")
+        st.caption(f"Not available: {exc}")
 
-    st.markdown("**Comparaison de configurations (segment/TURPE/gabarit/repowering)**")
+    st.markdown("**Config comparison (segment/TURPE/gabarit/repowering)**")
     configs = [
         {},
         {"turpe_type": "Injection"},
@@ -253,11 +257,11 @@ def render(
             params, aurora_library, copex_library, configs, compute_kwargs=debt_kwargs
         )
         for row in config_rows:
-            st.write(f"{row['label']} : Project IRR = {_fmt_pct(row['project_irr'])}")
+            st.write(f"{row['label']}: Project IRR = {_fmt_pct(row['project_irr'])}")
     except ValueError as exc:
-        st.caption(f"Non disponible : {exc}")
+        st.caption(f"Not available: {exc}")
 
-    st.markdown("**TRI vs année de COD**")
+    st.markdown("**IRR vs COD year**")
     cod_years = [params.cod_year + i for i in range(-2, 3)]
     if year_range is not None:
         min_year, max_year = year_range
@@ -275,18 +279,16 @@ def render(
                 name="Project IRR",
             )
         )
-        fig.update_layout(
-            xaxis_title="Année de COD", yaxis_title="Project IRR", yaxis_tickformat=".0%"
-        )
+        fig.update_layout(xaxis_title="COD year", yaxis_title="Project IRR", yaxis_tickformat=".0%")
         st.plotly_chart(fig, use_container_width=True)
     except ValueError as exc:
-        st.caption(f"Non disponible : {exc}")
+        st.caption(f"Not available: {exc}")
 
     st.divider()
     full_analysis = st.checkbox(
-        "Analyse bancabilité complète (sur le cas de base)",
-        help="Active les onglets Cashflow/Scenario/Sensitivity/Stress-Test/Risk/Acquisition "
-        "sur ce cas de base construit, comme s'il venait d'un BP déjà chiffré.",
+        "Full bankability analysis (on the base case)",
+        help="Activates the Cashflow/Scenario/Sensitivity/Stress-Test/Risk/Acquisition tabs "
+        "on this built base case, as if it came from an already-priced Business Plan.",
     )
     if full_analysis:
         return inputs, result

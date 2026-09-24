@@ -397,3 +397,109 @@ def test_run_portfolio_custom_curtailment_hours(au_store, copex_library, default
     assert rows_1000[0].extrapolated is True
     assert rows_3000[0].extrapolated is False
     assert rows_1000[0].revenue_total_keur > rows_3000[0].revenue_total_keur
+
+
+# --- Repowering : activation/annee choisie ou optimisee (2026-09-24) ---
+# Avant ce changement, le repowering etait force a l'op-year 15 sans aucun
+# moyen de le desactiver ou de choisir l'annee - signale par l'utilisateur
+# comme absurde sur un projet de 20 ans (on repower a 15 pour n'exploiter que
+# 5 ans de plus). Voir core/portfolio.py, docs/specs/portfolio.md.
+
+
+def test_repowering_candidate_years_empty_below_minimum_operating_years():
+    assert portfolio.repowering_candidate_years(14) == []
+    assert portfolio.repowering_candidate_years(10) == []
+
+
+def test_repowering_candidate_years_at_minimum_project_length():
+    # 15 ans : candidats 10 a 15-2=13 inclus.
+    assert portfolio.repowering_candidate_years(15) == [10, 11, 12, 13]
+
+
+def test_repowering_candidate_years_for_20_year_project():
+    assert portfolio.repowering_candidate_years(20) == list(range(10, 19))
+
+
+def test_find_best_repowering_op_year_returns_none_for_short_project(
+    au_store, copex_library, default_financing_terms
+):
+    config = _config(operating_years=10)
+    best_year, best_irr, details = portfolio.find_best_repowering_op_year(
+        config, au_store, copex_library, default_financing_terms
+    )
+    assert best_year is None
+    assert best_irr is None
+    assert details == []
+
+
+def test_find_best_repowering_op_year_picks_a_candidate_with_matching_detail(
+    au_store, copex_library, default_financing_terms
+):
+    config = _config(operating_years=20)
+    best_year, best_irr, details = portfolio.find_best_repowering_op_year(
+        config, au_store, copex_library, default_financing_terms
+    )
+    assert best_year in portfolio.repowering_candidate_years(20)
+    assert best_irr is not None
+    assert {year for year, _ in details} == set(portfolio.repowering_candidate_years(20))
+    assert dict(details)[best_year] == pytest.approx(best_irr)
+
+
+def test_build_project_inputs_repowering_disabled_has_no_op_year(
+    au_store, copex_library, default_financing_terms
+):
+    config = _config(operating_years=20, repowering_enabled=False)
+    inputs, _, _ = portfolio.build_project_inputs(
+        config, au_store, copex_library, default_financing_terms
+    )
+    assert inputs.repowering_op_year is None
+    assert inputs.capex_repowering_keur == 0.0
+
+
+def test_build_project_inputs_repowering_manual_uses_chosen_year(
+    au_store, copex_library, default_financing_terms
+):
+    config = _config(
+        operating_years=20, repowering_year_mode="manual", repowering_op_year_manual=12
+    )
+    inputs, _, _ = portfolio.build_project_inputs(
+        config, au_store, copex_library, default_financing_terms
+    )
+    assert inputs.repowering_op_year == 12
+    assert inputs.capex_keur[12] < 0
+
+
+def test_build_project_inputs_repowering_auto_picks_a_candidate_year(
+    au_store, copex_library, default_financing_terms
+):
+    config = _config(operating_years=20, repowering_year_mode="auto")
+    inputs, _, _ = portfolio.build_project_inputs(
+        config, au_store, copex_library, default_financing_terms
+    )
+    assert inputs.repowering_op_year in portfolio.repowering_candidate_years(20)
+
+
+def test_run_portfolio_row_reports_repowering_year_and_auto_flag(
+    au_store, copex_library, default_financing_terms
+):
+    manual_config = _config(
+        name="Manual",
+        operating_years=20,
+        repowering_year_mode="manual",
+        repowering_op_year_manual=11,
+    )
+    auto_config = _config(name="Auto", operating_years=20, repowering_year_mode="auto")
+    disabled_config = _config(name="Off", operating_years=20, repowering_enabled=False)
+    rows = portfolio.run_portfolio(
+        [manual_config, auto_config, disabled_config],
+        au_store,
+        copex_library,
+        default_financing_terms,
+    )
+    manual_row, auto_row, disabled_row = rows
+    assert manual_row.repowering_op_year_used == 11
+    assert manual_row.repowering_auto_optimized is False
+    assert auto_row.repowering_op_year_used in portfolio.repowering_candidate_years(20)
+    assert auto_row.repowering_auto_optimized is True
+    assert disabled_row.repowering_op_year_used is None
+    assert disabled_row.repowering_auto_optimized is False

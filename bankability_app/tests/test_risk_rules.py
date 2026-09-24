@@ -58,7 +58,7 @@ def test_target_dscr_overrides_generic_amber_threshold(simple_inputs):
     flags_with_target = risk_rules.evaluate_risks(simple_inputs, result, THRESHOLDS)
     dscr_flag = _flag(flags_with_target, "DSCR min")
     assert dscr_flag.level == "amber"
-    assert "cible du projet" in dscr_flag.message
+    assert "project target" in dscr_flag.message
 
 
 def test_revenue_weighted_dscr_threshold_blends_by_mix(simple_inputs):
@@ -86,7 +86,7 @@ def test_revenue_weighted_threshold_used_when_no_target_dscr(simple_inputs):
     flags = risk_rules.evaluate_risks(simple_inputs, result, THRESHOLDS)
     dscr_flag = _flag(flags, "DSCR min")
     assert dscr_flag.level == "amber"
-    assert "pondere par mix de revenu" in dscr_flag.message
+    assert "weighted by" in dscr_flag.message
 
 
 def test_target_dscr_takes_priority_over_revenue_weighted(simple_inputs):
@@ -102,7 +102,7 @@ def test_target_dscr_takes_priority_over_revenue_weighted(simple_inputs):
     dscr_flag = _flag(flags, "DSCR min")
     # DSCR ~1.41 >= target_dscr 1.20 -> vert, alors qu'il serait orange sous 1.44x.
     assert dscr_flag.level == "green"
-    assert "cible du projet" in dscr_flag.message
+    assert "project target" in dscr_flag.message
 
 
 def test_load_thresholds_reads_the_config_file():

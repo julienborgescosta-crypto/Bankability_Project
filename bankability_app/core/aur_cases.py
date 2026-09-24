@@ -86,8 +86,8 @@ class AuStoreLibrary:
             if config.drop_key == drop_key:
                 return config
         raise AuroraConfigError(
-            f"Config Aurora introuvable pour DropKey '{drop_key}' "
-            f"(disponibles : {[c.drop_key for c in self.configs]})."
+            f"Aurora config not found for DropKey '{drop_key}' "
+            f"(available: {[c.drop_key for c in self.configs]})."
         )
 
     def config_by_attributes(
@@ -109,9 +109,9 @@ class AuStoreLibrary:
             ):
                 return config
         raise AuroraConfigError(
-            f"Aucune config Aurora pour {duree_h}h {tension} {turpe_type} "
-            f"gabarit={gabarit} oro={oro} (Aurora n'a pas modelise toutes les combinaisons - "
-            f"disponibles : "
+            f"No Aurora config for {duree_h}h {tension} {turpe_type} "
+            f"gabarit={gabarit} oro={oro} (Aurora has not modeled every combination - "
+            f"available: "
             f"{[(c.duree_h, c.tension, c.turpe_type, c.gabarit, c.oro) for c in self.configs]})."
         )
 
@@ -169,8 +169,8 @@ def dsa_default_keur(*, duree_h: int, power_mw: float, devex_keur: float, terms:
     key = f"target_margin_keur_per_mw_{duree_h}h"
     if key not in terms:
         raise AuroraConfigError(
-            f"Pas de marge de dev cible par defaut pour une duree de {duree_h}h "
-            f"(durees disponibles : 2h, 4h)."
+            f"No default target dev margin for a duration of {duree_h}h "
+            f"(available durations: 2h, 4h)."
         )
     return terms[key] * power_mw + devex_keur
 
@@ -180,7 +180,7 @@ def _find_col(header: list[Any], label: str) -> int:
     for i, cell in enumerate(header):
         if _normalize(cell) == target:
             return i
-    raise AuroraConfigError(f"Colonne '{label}' introuvable dans l'en-tete AU_Store.")
+    raise AuroraConfigError(f"Column '{label}' not found in the AU_Store header.")
 
 
 def _find_scalar_by_label(grid: list[list[Any]], label: str) -> Any:
@@ -189,7 +189,7 @@ def _find_scalar_by_label(grid: list[list[Any]], label: str) -> Any:
         for i, cell in enumerate(row):
             if _normalize(cell) == target and i + 1 < len(row):
                 return row[i + 1]
-    raise AuroraConfigError(f"Libelle '{label}' introuvable dans AU_Store.")
+    raise AuroraConfigError(f"Label '{label}' not found in AU_Store.")
 
 
 def _contiguous_labels(header: list[Any], start_col: int) -> list[str]:
@@ -213,7 +213,9 @@ def _next_non_empty_col(header: list[Any], after_col: int) -> int | None:
 def _parse_duree_h(value: Any) -> int:
     match = _DUREE_PATTERN.search(str(value))
     if match is None:
-        raise AuroraConfigError(f"Duree Aurora illisible : '{value}' (attendu ex. '2h', '4h').")
+        raise AuroraConfigError(
+            f"Unreadable Aurora duration: '{value}' (expected e.g. '2h', '4h')."
+        )
     return int(match.group(1))
 
 
@@ -289,10 +291,10 @@ def load_au_store(file_or_path) -> AuStoreLibrary:
         turpe_header_row = _find_stacked_turpe_header_row(grid, raw_labels)
         if turpe_header_row is None:
             raise AuroraConfigError(
-                "Bloc TURPE introuvable dans AU_Store - ni a cote du bloc RAW sur la meme "
-                "ligne d'entete, ni empile dessous comme un 2e bloc 'Year' avec les memes "
-                "configs. Verifier la mise en page de l'onglet AU_Store "
-                f"(RAW={raw_labels}, colonne trouvee a la place : {turpe_labels})."
+                "TURPE block not found in AU_Store - neither next to the RAW block on the "
+                "same header row, nor stacked below as a 2nd 'Year' block with the same "
+                "configs. Check the AU_Store sheet's layout "
+                f"(RAW={raw_labels}, column found instead: {turpe_labels})."
             )
         turpe_by_key = _read_year_value_block(
             grid, header_row=turpe_header_row, year_col=0, value_start_col=1, labels=raw_labels
@@ -311,8 +313,8 @@ def load_au_store(file_or_path) -> AuStoreLibrary:
     ]
     if metadata_labels != expected_metadata:
         raise AuroraConfigError(
-            f"Colonnes de metadonnees AU_Store inattendues : {metadata_labels} "
-            f"(attendu : {expected_metadata})."
+            f"Unexpected AU_Store metadata columns: {metadata_labels} "
+            f"(expected: {expected_metadata})."
         )
     configs: list[AuStoreConfig] = []
     for row in grid[1:]:
@@ -343,7 +345,7 @@ def load_au_store(file_or_path) -> AuStoreLibrary:
             )
         )
     if not configs:
-        raise AuroraConfigError("Aucune config Aurora trouvee dans la table AU_Store!AP:AV.")
+        raise AuroraConfigError("No Aurora config found in the AU_Store!AP:AV table.")
 
     opyear_col = _find_col(header, "OpYear")
     degradation: dict[int, float] = {}
@@ -447,9 +449,38 @@ def load_aurora_curves(path: Path = DEFAULT_AURORA_CURVES_PATH) -> AuStoreLibrar
 def validate_cod(config: AuStoreConfig, cod_year: int) -> None:
     if config.valide_cod is not None and config.valide_cod != cod_year:
         raise AuroraConfigError(
-            f"La config '{config.drop_key}' n'est valide que pour COD={config.valide_cod} "
-            f"(COD demande : {cod_year})."
+            f"Config '{config.drop_key}' is only valid for COD={config.valide_cod} "
+            f"(requested COD: {cod_year})."
         )
+
+
+def _shifted_degradation(
+    degradation_no_repo: dict[int, float], repowering_op_year: int
+) -> dict[int, float]:
+    """Reconstruit une table de degradation avec reset a `repowering_op_year`
+    depuis la seule courbe brute (`degradation_no_repo`, sans reset) - pas
+    besoin d'une 2e table par annee de repowering candidate. Avant
+    `repowering_op_year`, la courbe brute s'applique telle quelle ; a partir de
+    `repowering_op_year` (inclus - c'est l'annee ou le nouvel equipement entre
+    en service), le compteur d'op-year repart a 1
+    (`degradation_no_repo[op_year - repowering_op_year + 1]`), plafonne sur la
+    derniere valeur connue si ce decalage depasse la couverture de la table -
+    meme discipline que `dev_case.escalated_unit_cost`. Verifie reproduire
+    exactement `AuStoreLibrary.degradation` (reset AU_Store fixe a op-year 15)
+    quand `repowering_op_year=15` (regression, voir tests/test_aur_cases.py)."""
+    if not degradation_no_repo:
+        return {}
+    last_op_year = max(degradation_no_repo)
+    return {
+        op_year: (
+            degradation_no_repo[op_year]
+            if op_year < repowering_op_year
+            else degradation_no_repo.get(
+                op_year - repowering_op_year + 1, degradation_no_repo[last_op_year]
+            )
+        )
+        for op_year in degradation_no_repo
+    }
 
 
 def revenue_and_turpe_series(
@@ -460,22 +491,37 @@ def revenue_and_turpe_series(
     operating_years: int,
     power_mw: float,
     with_repowering: bool = True,
+    repowering_op_year_override: int | None = None,
 ) -> tuple[list[int], list[float], list[float]]:
     """Lit la courbe RAW/TURPE **par annee civile** a partir du COD, x facteur de
     degradation par op-year, x puissance - la courbe elle-meme ne depend jamais
     du COD (voir CONTEXT.md "AU_Store" : courbe COD-independante x degradation
     par op-year, ne jamais re-indexer la courbe RAW). Le TURPE n'est pas degrade
     (charges reseau non liees a la degradation de la batterie - hypothese non
-    verifiee faute de point de validation exact, voir docs/specs/aur_cases.md)."""
+    verifiee faute de point de validation exact, voir docs/specs/aur_cases.md).
+
+    `repowering_op_year_override` : annee de reset a utiliser a la place de
+    `library.repowering_op_year` (15 par defaut) - demande de l'utilisateur,
+    2026-09-24, pour pouvoir choisir/optimiser l'annee de repowering plutot
+    que de la subir figee (voir `core/portfolio.py`
+    `find_best_repowering_op_year`)."""
     validate_cod(config, cod_year)
     if config.austore_key not in library.raw_by_key:
         raise AuroraConfigError(
-            f"Cle Aurora '{config.austore_key}' introuvable dans les courbes AU_Store "
-            f"(disponibles : {sorted(library.raw_by_key)})."
+            f"Aurora key '{config.austore_key}' not found in the AU_Store curves "
+            f"(available: {sorted(library.raw_by_key)})."
         )
     raw_curve = library.raw_by_key[config.austore_key]
     turpe_curve = library.turpe_by_key[config.austore_key]
-    deg_table = library.degradation if with_repowering else library.degradation_no_repo
+    if with_repowering:
+        effective_repowering_op_year = (
+            repowering_op_year_override
+            if repowering_op_year_override is not None
+            else library.repowering_op_year
+        )
+        deg_table = _shifted_degradation(library.degradation_no_repo, effective_repowering_op_year)
+    else:
+        deg_table = library.degradation_no_repo
 
     calendar_years = [cod_year + i for i in range(operating_years)]
     revenue_series = []
@@ -484,8 +530,8 @@ def revenue_and_turpe_series(
         op_year = i + 1
         if year not in raw_curve:
             raise AuroraConfigError(
-                f"Annee {year} hors de la plage AU_Store pour '{config.austore_key}' "
-                f"(plage couverte : {min(raw_curve)}-{max(raw_curve)})."
+                f"Year {year} is outside the AU_Store range for '{config.austore_key}' "
+                f"(covered range: {min(raw_curve)}-{max(raw_curve)})."
             )
         if config.pre_degraded:
             # Courbe deja degradee (databook Aurora, trajectoire COD2030 reelle,
@@ -500,8 +546,8 @@ def revenue_and_turpe_series(
             deg = deg_table.get(op_year)
             if deg is None:
                 raise AuroraConfigError(
-                    f"Pas de facteur de degradation pour l'op-year {op_year} "
-                    f"(plage couverte : 1-{max(deg_table)})."
+                    f"No degradation factor for op-year {op_year} "
+                    f"(covered range: 1-{max(deg_table)})."
                 )
         revenue_series.append(raw_curve[year] * deg * power_mw)
         turpe_series.append(turpe_curve[year] * power_mw)
@@ -579,8 +625,8 @@ def capex_and_opex_keur(
     key = voltage_duration_key(tension, duree_h)
     if key not in copex_library.capex_unit_costs or key not in copex_library.opex_unit_costs:
         raise AuroraConfigError(
-            f"Pas de donnees CAPEX/OPEX dans COPEX_library pour '{key}' "
-            f"(tensions disponibles : {sorted({k.split(' - ')[1] for k in copex_library.capex_unit_costs})})."
+            f"No CAPEX/OPEX data in COPEX_library for '{key}' "
+            f"(available voltages: {sorted({k.split(' - ')[1] for k in copex_library.capex_unit_costs})})."
         )
     icp_library = copex_icp.load_icp_library_cached()
 
@@ -664,6 +710,7 @@ def build_project_inputs(
     power_mw: float,
     operating_years: int = 20,
     with_repowering: bool = True,
+    repowering_op_year_override: int | None = None,
     aggregator_fee: AggregatorFeeTerms | None = None,
     name: str = "",
     location: str = "",
@@ -677,7 +724,15 @@ def build_project_inputs(
     `financial_engine.compute_results()` et tous les onglets existants.
     `connection_capex_mode`/`manual_connection_capex_keur`/`distance_rte_km`/
     `land_lease_opex_keur` : voir `capex_and_opex_keur` - les 2 seuls postes
-    challengeables individuellement."""
+    challengeables individuellement. `repowering_op_year_override` : voir
+    `revenue_and_turpe_series`/`core/portfolio.py` `find_best_repowering_op_year`
+    (demande de l'utilisateur, 2026-09-24 - choisir/optimiser l'annee de
+    repowering plutot que la subir figee a 15)."""
+    effective_repowering_op_year = (
+        repowering_op_year_override
+        if repowering_op_year_override is not None
+        else library.repowering_op_year
+    )
     calendar_years, revenue_series, turpe_series = revenue_and_turpe_series(
         library,
         config,
@@ -685,6 +740,7 @@ def build_project_inputs(
         operating_years=operating_years,
         power_mw=power_mw,
         with_repowering=with_repowering,
+        repowering_op_year_override=repowering_op_year_override,
     )
     if aggregator_fee is not None:
         fees = aggregator_fee_series(revenue_series, turpe_series, power_mw, aggregator_fee)
@@ -711,11 +767,12 @@ def build_project_inputs(
     end_of_life_keur = [0.0] * length
 
     capex_repowering = 0.0
-    if with_repowering and operating_years >= library.repowering_op_year:
+    repowering_op_year_used = None
+    if with_repowering and operating_years >= effective_repowering_op_year:
         # index dans capex_keur/years : la construction occupe l'index 0, donc
         # l'op-year N est a l'index N (pas N-1) - voir revenue_and_turpe_series.
-        repowering_index = library.repowering_op_year
-        repowering_calendar_year = calendar_years[library.repowering_op_year - 1]
+        repowering_index = effective_repowering_op_year
+        repowering_calendar_year = calendar_years[effective_repowering_op_year - 1]
         capex_repowering = repowering_capex_keur(
             tension=config.tension,
             duree_h=config.duree_h,
@@ -724,6 +781,7 @@ def build_project_inputs(
             copex_library=copex_library,
         )
         capex_keur[repowering_index] -= capex_repowering
+        repowering_op_year_used = effective_repowering_op_year
 
     net_cashflow_keur = [
         c + o + t + r + e
@@ -743,6 +801,7 @@ def build_project_inputs(
         capex_initial_keur=capex_initial,
         capex_repowering_keur=capex_repowering,
         repowering=with_repowering,
+        repowering_op_year=repowering_op_year_used,
         opex_year1_keur=opex_year1,
         opex_adjustment_keur=0.0,
         turpe_fixed_eur_per_kw=0.0,

@@ -78,9 +78,19 @@ class IcpCostCell:
 
 @dataclass(frozen=True)
 class IcpPowerLawCost:
-    """cout_unitaire_eur_per_mwh(mwh) = base * mwh**exponent ; cout_total_keur
-    = cout_unitaire * mwh / 1000, escalade par annee (multiplicateur, pas un
-    delta - voir `_icp_escalation_factor`)."""
+    """cout_unitaire_eur_per_kwh(mwh) = base * mwh**exponent ; cout_total_keur
+    = cout_unitaire * mwh, escalade par annee (multiplicateur, pas un delta -
+    voir `_icp_escalation_factor`).
+
+    `base` est en EUR/**kWh** malgre le libelle Excel "€/MWh" des 2 lignes
+    concernees (Batteries and PCS, OPEX - Guarantees) - bug de mislabeling
+    du fichier source, confirme par l'utilisateur le 2026-09-24 : lu comme
+    €/MWh, `base=156.37` donnait un cout Batteries+PCS de ~10 k€ pour 80 MWh
+    (40 MW/2h), soit ~0.12 €/kWh installe - physiquement impossible pour une
+    batterie (plage reelle : 100-300+ €/kWh). Lu comme €/kWh, ce meme
+    coefficient tombe a moins de 1% de la valeur Aurora HTA validee
+    (18 670 k€), qui sert de point de recoupement independant - voir
+    docs/specs/copex_icp.md."""
 
     base: float
     exponent: float
@@ -120,7 +130,7 @@ def _find_row(ws, label_substring: str, *, after_row: int = 1) -> int:
         value = ws.cell(row=row, column=1).value
         if isinstance(value, str) and label_substring in value:
             return row
-    raise ValueError(f"Ligne '{label_substring}' introuvable dans l'onglet {ICP_SHEET}.")
+    raise ValueError(f"Row '{label_substring}' not found in sheet {ICP_SHEET}.")
 
 
 def _read_escalation(ws, row: int) -> dict[int, float]:
@@ -231,16 +241,20 @@ def _scaled_cost_keur(cell: IcpCostCell, *, power_mw: float, duree_h: int) -> fl
         return cell.value
     if cell.unit == "keur_per_mwh_per_year":
         return cell.value * mwh
-    raise ValueError(f"Unite ICP inconnue : '{cell.unit}'.")
+    raise ValueError(f"Unknown ICP unit: '{cell.unit}'.")
 
 
 def _power_law_cost_keur(
     formula: IcpPowerLawCost, *, power_mw: float, duree_h: int, cod_year: int
 ) -> float:
+    """`formula.base` est en EUR/kWh (voir `IcpPowerLawCost`) : cout total EUR
+    = unit_cost(EUR/kWh) x kWh_total(mwh x 1000) ; cout total k€ = /1000 de ce
+    montant, donc numeriquement `unit_cost x mwh` (le x1000/1000 s'annule) -
+    PAS de division supplementaire par 1000."""
     mwh = power_mw * duree_h
-    unit_cost_eur_per_mwh = formula.base * mwh**formula.exponent
+    unit_cost_eur_per_kwh = formula.base * mwh**formula.exponent
     escalation = _icp_escalation_factor(formula.escalation, cod_year)
-    return unit_cost_eur_per_mwh * escalation * mwh / 1000.0
+    return unit_cost_eur_per_kwh * escalation * mwh
 
 
 def _icp_line_item_keur(
@@ -266,7 +280,7 @@ def icp_battery_pcs_keur(
     icp_library: IcpCostLibrary, *, duree_h: int, power_mw: float, cod_year: int
 ) -> float:
     if duree_h not in icp_library.battery_pcs:
-        raise ValueError(f"Pas de formule Batteries and PCS ICP pour {duree_h}h.")
+        raise ValueError(f"No ICP Batteries and PCS formula for {duree_h}h.")
     return _power_law_cost_keur(
         icp_library.battery_pcs[duree_h], power_mw=power_mw, duree_h=duree_h, cod_year=cod_year
     )
@@ -283,7 +297,7 @@ def icp_opex_guarantees_annualized_keur(
     limitee aux 15 premieres annees - simplification documentee, voir
     docs/specs/copex_icp.md "Questions ouvertes"."""
     if duree_h not in icp_library.opex_guarantees:
-        raise ValueError(f"Pas de formule OPEX Guarantees ICP pour {duree_h}h.")
+        raise ValueError(f"No ICP OPEX Guarantees formula for {duree_h}h.")
     total_15y = _power_law_cost_keur(
         icp_library.opex_guarantees[duree_h], power_mw=power_mw, duree_h=duree_h, cod_year=cod_year
     )

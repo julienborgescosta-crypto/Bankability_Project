@@ -10,7 +10,7 @@ _RENDER = {"red": st.error, "amber": st.warning, "green": st.success}
 
 def render(inputs: ProjectInputs, result: ProjectResults) -> None:
     st.caption(
-        "Alertes générées automatiquement par franchissement de seuils (config/risk_thresholds.yaml)."
+        "Alerts generated automatically when thresholds are crossed (config/risk_thresholds.yaml)."
     )
     thresholds = risk_rules.load_thresholds()
     flags = risk_rules.evaluate_risks(inputs, result, thresholds)
@@ -28,10 +28,10 @@ def render(inputs: ProjectInputs, result: ProjectResults) -> None:
         total = total_contracted + total_merchant
         if total > 0:
             st.caption(
-                f"Mix de revenu (PPA + Capacity market vs Merchant) : "
-                f"{total_contracted / total:.0%} contracté / {total_merchant / total:.0%} merchant — "
-                f"seuil DSCR pondéré en conséquence quand le covenant du projet n'est pas disponible."
+                f"Revenue mix (PPA + Capacity market vs Merchant): "
+                f"{total_contracted / total:.0%} contracted / {total_merchant / total:.0%} merchant — "
+                f"DSCR threshold weighted accordingly when the project's own covenant isn't available."
             )
 
-    with st.expander("Seuils appliqués"):
+    with st.expander("Applied thresholds"):
         st.json(thresholds)

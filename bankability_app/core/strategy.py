@@ -40,7 +40,7 @@ def _inputs_with_extra_capex(inputs: ProjectInputs, extra_capex_keur: float) -> 
     capex_keur = list(inputs.capex_keur)
     first_capex_index = next((i for i, c in enumerate(capex_keur) if c < 0), None)
     if first_capex_index is None:
-        raise ValueError("Pas de sortie CAPEX dans la serie - impossible d'y ajouter le DSA.")
+        raise ValueError("No CAPEX outflow in the series - can't add the DSA to it.")
     capex_keur[first_capex_index] -= extra_capex_keur
     net_cashflow_keur = [
         c + o + t + r + e

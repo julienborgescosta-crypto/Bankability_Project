@@ -341,6 +341,52 @@ def test_build_project_inputs_adds_repowering_capex_at_op_year_15(au_store, cope
     )
     assert inputs.capex_keur[15] < 0
     assert inputs.capex_repowering_keur == pytest.approx(-inputs.capex_keur[15])
+    assert inputs.repowering_op_year == 15
+
+
+def test_build_project_inputs_repowering_op_year_override_moves_capex_and_reset(
+    au_store, copex_library
+):
+    """Demande de l'utilisateur, 2026-09-24 : l'annee de repowering doit
+    pouvoir etre choisie plutot que subie figee a 15 - la sortie CAPEX ET le
+    reset de degradation suivent l'override."""
+    config = au_store.config_by_drop_key("2h HTA Classique g0")
+    inputs = aur_cases.build_project_inputs(
+        au_store,
+        config,
+        copex_library,
+        cod_year=2027,
+        power_mw=10.0,
+        operating_years=20,
+        repowering_op_year_override=10,
+    )
+    assert inputs.repowering_op_year == 10
+    assert inputs.capex_keur[10] < 0
+    assert inputs.capex_keur[15] == 0.0  # plus de sortie a l'ancien op-year par defaut
+    # Le revenu de l'op-year 10 (annee du repowering) doit refleter un reset
+    # (deg factor = op1) plutot que la poursuite de la decroissance brute.
+    raw_curve = au_store.raw_by_key[config.austore_key]
+    assert inputs.revenues_keur[10] == pytest.approx(
+        raw_curve[2027 + 10 - 1] * au_store.degradation_no_repo[1] * 10.0
+    )
+
+
+def test_build_project_inputs_repowering_op_year_override_skipped_if_beyond_operating_years(
+    au_store, copex_library
+):
+    config = au_store.config_by_drop_key("2h HTA Classique g0")
+    inputs = aur_cases.build_project_inputs(
+        au_store,
+        config,
+        copex_library,
+        cod_year=2027,
+        power_mw=10.0,
+        operating_years=12,
+        repowering_op_year_override=15,
+    )
+    assert all(c == 0.0 for c in inputs.capex_keur[1:])
+    assert inputs.capex_repowering_keur == 0.0
+    assert inputs.repowering_op_year is None
 
 
 def test_build_project_inputs_skips_repowering_if_operating_years_too_short(
@@ -391,9 +437,15 @@ def test_build_project_inputs_repowering_triggers_second_debt_tranche(au_store, 
 
 
 def test_build_project_inputs_produces_valid_engine_input(au_store, copex_library):
+    # 40 MW (pas 1 MW) : depuis la correction du bug d'unite ICP du 2026-09-24
+    # (voir docs/specs/copex_icp.md "Bugs corriges"), l'OPEX de garanties est
+    # ~1000x plus eleve qu'avant - a 1 MW il domine un revenu HTA trop petit et
+    # le cashflow ne redevient jamais positif (IRR non definie, cf. _safe_irr).
+    # 40 MW reste dans la plage economiquement viable, ce que ce test verifie
+    # (input bien forme + consommable par le moteur financier), pas 1 MW.
     config = au_store.config_by_drop_key("2h HTA Classique g0")
     inputs = aur_cases.build_project_inputs(
-        au_store, config, copex_library, cod_year=2027, power_mw=1.0, operating_years=20
+        au_store, config, copex_library, cod_year=2027, power_mw=40.0, operating_years=20
     )
     assert inputs.years[0] == 2026  # annee de construction = COD - 1
     assert len(inputs.years) == 21
@@ -568,5 +620,5 @@ def test_load_au_store_raises_explicit_error_if_turpe_block_missing_entirely(tmp
     )
     wb.save(path)
 
-    with pytest.raises(aur_cases.AuroraConfigError, match="Bloc TURPE introuvable"):
+    with pytest.raises(aur_cases.AuroraConfigError, match="TURPE block not found"):
         aur_cases.load_au_store(path)

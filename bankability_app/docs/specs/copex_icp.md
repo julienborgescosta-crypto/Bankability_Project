@@ -54,7 +54,8 @@ Postes en % : `Insurances during construction (% of Total Capex)`, `EPC Margin`.
   une loi de puissance `base x MWh^exposant` n'a de sens que si `MWh` est la taille du projet qu'on
   modelise (c'est ce qui produit l'economie d'echelle) — si `MWh` etait une constante de reference,
   le fichier aurait fige directement le `€/MWh` resultant plutot que de garder une formule.
-  `cout_total_keur = (base x MWh^exposant) x MWh / 1000`.
+  `cout_total_keur = (base x MWh^exposant) x MWh` — **`base` est en EUR/kWh, pas EUR/MWh malgre le
+  libelle Excel** de la cellule (`"156,37*MWh^(-0,051) €/MWh"`) : voir "Bugs corriges" ci-dessous.
 - **`OPEX - Guarantees & preventive maint (15 years)` est un cout total pour 15 ans**, pas un taux
   annuel — etale lineairement (`/15`) et ajoute comme une **addition constante** a l'OPEX annuel
   (`opex_year1_keur`), pas une charge limitee aux 15 premieres annees. Simplification : le moteur
@@ -100,6 +101,34 @@ Postes en % : `Insurances during construction (% of Total Capex)`, `EPC Margin`.
   (`ui/configurateur_tab.py`) — liste quels postes viennent d'ICP vs d'Aurora pour la tension
   choisie, jamais un repli silencieux (discipline "zero zero silencieux" du repo).
 
+## Bugs corriges
+
+- **`_power_law_cost_keur` divisait par 1000 en trop (2026-09-24)** — decouvert lors d'un test de
+  coherence globale demande par l'utilisateur ("si on reprend CAPEX/OPEX Aurora sur la meme config,
+  arrive-t-on au meme TRI Projet ?"). En comparant, config par config (HTA/HTB1/HTB2 x 2h/4h), le
+  CAPEX ICP au CAPEX Aurora equivalent (memes revenu/financement, seul le CAPEX/OPEX source varie),
+  l'ecart observe etait enorme et incoherent : -55% a -57% sur HTA (+22 points de TRI Projet), la ou
+  un simple changement de source de cout ne devrait pas a lui seul faire ~tripler le TRI. Cause :
+  `formula.base` (ex. `156.37` pour `Batteries and PCS` 2h) est en **EUR/kWh**, pas EUR/MWh comme le
+  suggere le libelle Excel de la cellule (`"156,37*MWh^(-0,051) €/MWh"` — mislabeling du fichier
+  source, pas du code) ; le code divisait quand meme le total par 1000 en plus, donnant un cout
+  Batteries+PCS d'environ 0.1 €/kWh installe pour un BESS 40 MW/2h — physiquement impossible (plage
+  reelle : 100-300+ €/kWh). Corrige en retirant cette division (`core/copex_icp.py`
+  `_power_law_cost_keur`). Verification post-correction : le CAPEX HTA recalcule (18 711 k€) tombe a
+  moins de 0.5% du CAPEX Aurora HTA validee independamment a l'euro pres (18 670 k€, voir
+  `docs/specs/dev_case.md`) — un point de recoupement qui n'existait pas cote ICP avant cette
+  correction (voir "Questions ouvertes" ci-dessous, 1er point). L'ecart residuel post-correction
+  (+19 a +23% sur HTB1/HTB2) est attribuable a des postes qu'ICP detaille (`HV Transformer`/
+  `HV substation`, plusieurs milliers de k€ forfait) et qu'Aurora ne modelisait que dans une ligne
+  generique `Balance of system` — coherent avec la logique du changement (ICP = couts reels
+  detailles), pas un signe de bug supplementaire. Meme correction appliquee a `OPEX - Guarantees`
+  (le seul autre poste en power-law) : l'OPEX de garantie annualise passe de ~0.2-0.3 k€/an
+  (negligeable, donc jamais remarque) a 170-300 k€/an pour un projet 40 MW.
+  Garde-fous de non-regression sur l'ordre de grandeur (pas une valeur exacte, qui bougera a chaque
+  mise a jour mensuelle du fichier ICP) : `tests/test_copex_icp.py`
+  `test_icp_battery_pcs_keur_order_of_magnitude_is_realistic` /
+  `test_icp_opex_guarantees_order_of_magnitude_is_realistic`.
+
 ## Questions ouvertes
 
 - **`OPEX - Guarantees & preventive maint` etale comme addition constante, pas limitee a 15 ans** —
@@ -111,7 +140,10 @@ Postes en % : `Insurances during construction (% of Total Capex)`, `EPC Margin`.
 - **Pas de ligne "Total" dans le fichier ICP pour verifier l'agregation EPC Margin/Insurance a
   l'euro pres** (contrairement au CAPEX ligne "Battery system"/etc. d'Aurora, valide exactement
   contre `Advise Dev` du BP reel) — la formule d'agregation est confirmee par l'utilisateur
-  (raisonnement metier : convention assurance CAR/TRC), pas verifiee contre un total source.
+  (raisonnement metier : convention assurance CAR/TRC), pas verifiee contre un total source. Le
+  recoupement HTA post-correction (voir "Bugs corriges", <0.5% d'ecart avec Aurora) est rassurant
+  mais reste un proxy indirect, pas une ligne "Total" ICP native — a refaire si un total source
+  devient disponible.
 - **Mapping TSO 90kV pour HTB1** perd la distinction 63kV/90kV que le fichier ICP fournit
   desormais (contrairement a Aurora `COPEX_library`, qui n'a jamais distingue les deux) — ecart
   mineur (<12% sur 2 postes seulement) mais une vraie perte de precision par rapport a ce que le

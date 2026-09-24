@@ -126,10 +126,10 @@ def parse_copex_library(grid: list[list[Any]]) -> CopexLibrary:
         grid, lambda row: bool(row) and _normalize(row[0]).startswith("capex assumptions")
     )
     if capex_title_idx is None:
-        raise ValueError("Section 'CAPEX assumptions - AURORA' introuvable dans COPEX_library.")
+        raise ValueError("Section 'CAPEX assumptions - AURORA' not found in COPEX_library.")
     capex_header_idx = _find_numeric_header_row_after(grid, capex_title_idx + 1)
     if capex_header_idx is None:
-        raise ValueError("Ligne d'en-tête de 'CAPEX assumptions - AURORA' introuvable.")
+        raise ValueError("Header row of 'CAPEX assumptions - AURORA' not found.")
     capex_unit_costs = _parse_segment_keyed_table(grid, capex_header_idx, num_cols=7)
     capex_escalation = _parse_escalation_table(grid, capex_header_idx, num_cols=7)
 
@@ -137,10 +137,10 @@ def parse_copex_library(grid: list[list[Any]]) -> CopexLibrary:
         grid, lambda row: bool(row) and _normalize(row[0]).startswith("opex assumptions")
     )
     if opex_title_idx is None:
-        raise ValueError("Section 'OPEX assumptions - AURORA' introuvable dans COPEX_library.")
+        raise ValueError("Section 'OPEX assumptions - AURORA' not found in COPEX_library.")
     opex_header_idx = _find_numeric_header_row_after(grid, opex_title_idx + 1)
     if opex_header_idx is None:
-        raise ValueError("Ligne d'en-tête de 'OPEX assumptions - AURORA' introuvable.")
+        raise ValueError("Header row of 'OPEX assumptions - AURORA' not found.")
     opex_unit_costs = _parse_segment_keyed_table(grid, opex_header_idx, num_cols=7)
     opex_escalation = _parse_escalation_table(grid, opex_header_idx, num_cols=7)
 

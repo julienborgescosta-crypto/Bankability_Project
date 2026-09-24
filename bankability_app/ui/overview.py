@@ -59,81 +59,83 @@ def render(
 ) -> None:
     col1, col2, col3 = st.columns(3)
     with col1:
-        st.metric("Projet", inputs.name or "n/a")
-        st.metric("Segment tarifaire", inputs.segment or "n/a")
-        st.metric("Localisation", inputs.location or "n/a")
+        st.metric("Project", inputs.name or "n/a")
+        st.metric("Tariff segment", inputs.segment or "n/a")
+        st.metric("Location", inputs.location or "n/a")
     with col2:
-        st.metric("Puissance utile", f"{inputs.usable_power_mw:.0f} MW")
-        st.metric("Énergie utile", f"{inputs.usable_energy_mwh:.0f} MWh")
-        st.metric("Mise en service (COD)", inputs.cod or "n/a")
-        st.metric("Durée d'exploitation", f"{inputs.operating_years} ans")
+        st.metric("Usable power", f"{inputs.usable_power_mw:.0f} MW")
+        st.metric("Usable energy", f"{inputs.usable_energy_mwh:.0f} MWh")
+        st.metric("Commercial operation date (COD)", inputs.cod or "n/a")
+        st.metric("Operating life", f"{inputs.operating_years} years")
     with col3:
-        st.metric("CAPEX initial", _fmt_keur(inputs.capex_initial_keur))
+        st.metric("Initial CAPEX", _fmt_keur(inputs.capex_initial_keur))
         if inputs.reported_capex_i_project_keur is not None:
-            st.caption(f"CAPEX selon I-Project : {_fmt_keur(inputs.reported_capex_i_project_keur)}")
-        st.metric("CAPEX repowering", _fmt_keur(inputs.capex_repowering_keur))
-        st.metric("Repowering prévu", "Oui" if inputs.repowering else "Non")
+            st.caption(f"CAPEX per I-Project: {_fmt_keur(inputs.reported_capex_i_project_keur)}")
+        st.metric("Repowering CAPEX", _fmt_keur(inputs.capex_repowering_keur))
+        st.metric("Repowering planned", "Yes" if inputs.repowering else "No")
 
     st.divider()
-    mode_label = "dette dimensionnée par DSCR" if debt_sizing_mode == "dscr" else "gearing fixe"
-    st.subheader(f"Résultats économiques ({mode_label})")
+    mode_label = "DSCR-sized debt" if debt_sizing_mode == "dscr" else "fixed gearing"
+    st.subheader(f"Economic results ({mode_label})")
     c1, c2, c3, c4 = st.columns(4)
     with c1.container(border=True):
         st.metric("Project IRR", _fmt_pct(result.project_irr))
         if inputs.reported_irr is not None:
-            st.caption(f"IRR déclaré dans le BP : {inputs.reported_irr:.2%}")
+            st.caption(f"IRR reported in the Business Plan: {inputs.reported_irr:.2%}")
     with c2.container(border=True):
         st.metric("Equity IRR", _fmt_pct(result.equity_irr))
         if inputs.reported_equity_irr is not None:
-            st.caption(f"Equity IRR déclaré dans le BP : {inputs.reported_equity_irr:.2%}")
+            st.caption(
+                f"Equity IRR reported in the Business Plan: {inputs.reported_equity_irr:.2%}"
+            )
     with c3.container(border=True):
         st.metric("DSCR min", f"{result.dscr_min:.2f}x" if result.dscr_min is not None else "n/a")
         captions = []
         if inputs.reported_dscr_min is not None:
             captions.append(
-                f"BP (dette réelle sculptée) : DSCR moyen {inputs.reported_dscr_avg:.2f}x, "
+                f"Business Plan (actual sculpted debt): DSCR avg {inputs.reported_dscr_avg:.2f}x, "
                 f"min {inputs.reported_dscr_min:.2f}x"
             )
         if inputs.target_dscr is not None:
-            captions.append(f"Target DSCR du projet (I-Project) : {inputs.target_dscr:.2f}x")
+            captions.append(f"Project Target DSCR (I-Project): {inputs.target_dscr:.2f}x")
         if captions:
             st.caption(" — ".join(captions))
     with c4.container(border=True):
-        st.metric("NPV (projet)", _fmt_keur(result.npv_keur))
+        st.metric("NPV (project)", _fmt_keur(result.npv_keur))
         if inputs.reported_npv_keur is not None:
-            st.caption(f"NPV déclarée dans le BP : {_fmt_keur(inputs.reported_npv_keur)}")
+            st.caption(f"NPV reported in the Business Plan: {_fmt_keur(inputs.reported_npv_keur)}")
 
     st.divider()
-    st.subheader("Profil de cashflow annuel")
+    st.subheader("Annual cashflow profile")
     st.plotly_chart(_cash_profile_chart(result), use_container_width=True)
     st.caption(
-        "Revenue, CFADS et service de la dette par année — le service de la dette retombe à "
-        "zéro une fois le tenor écoulé ; un creux de CFADS marque une année de repowering "
-        "(CAPEX, pas d'exploitation) si le projet en a une."
+        "Revenue, CFADS and debt service by year — debt service drops to zero once the tenor "
+        "has elapsed; a dip in CFADS marks a repowering year (CAPEX, no operations) if the "
+        "project has one."
     )
 
     st.divider()
-    st.subheader("Structure de financement")
+    st.subheader("Financing structure")
     c1, c2, c3 = st.columns(3)
-    c1.metric("CAPEX total", _fmt_keur(result.capex_total_keur))
-    c2.metric("Dette", _fmt_keur(result.debt_amount_keur))
-    c3.metric("Fonds propres", _fmt_keur(result.equity_amount_keur))
+    c1.metric("Total CAPEX", _fmt_keur(result.capex_total_keur))
+    c2.metric("Debt", _fmt_keur(result.debt_amount_keur))
+    c3.metric("Equity", _fmt_keur(result.equity_amount_keur))
     if result.funding_uses_addon_initial_keur > 0:
         st.caption(
-            "Dette + Fonds propres dépassent le CAPEX total de "
-            f"{_fmt_keur(result.funding_uses_addon_initial_keur)} : le mode gearing applique "
-            "le gearing à CAPEX + DSRA + frais de financement construction + cash minimum "
-            '(bloc "Uses & Sources" de O-Control), pas au CAPEX seul.'
+            "Debt + Equity exceed total CAPEX by "
+            f"{_fmt_keur(result.funding_uses_addon_initial_keur)}: gearing mode applies the "
+            "gearing to CAPEX + DSRA + construction financing fees + minimum cash "
+            '(O-Control "Uses & Sources" block), not to CAPEX alone.'
         )
 
     if result.capex_total_repowering_keur > 0:
-        st.caption("Répartie en 2 tranches (dette initiale + dette de repowering) :")
+        st.caption("Split into 2 tranches (initial debt + repowering debt):")
         r1, r2 = st.columns(2)
         with r1:
-            st.markdown("**Tranche initiale**")
+            st.markdown("**Initial tranche**")
             st.metric("CAPEX", _fmt_keur(result.capex_total_initial_keur))
-            st.metric("Dette", _fmt_keur(result.debt_amount_initial_keur))
+            st.metric("Debt", _fmt_keur(result.debt_amount_initial_keur))
         with r2:
-            st.markdown("**Tranche repowering**")
+            st.markdown("**Repowering tranche**")
             st.metric("CAPEX", _fmt_keur(result.capex_total_repowering_keur))
-            st.metric("Dette", _fmt_keur(result.debt_amount_repowering_keur))
+            st.metric("Debt", _fmt_keur(result.debt_amount_repowering_keur))

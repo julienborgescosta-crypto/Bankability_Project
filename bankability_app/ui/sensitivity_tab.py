@@ -18,7 +18,7 @@ def _tornado_chart(
     fig = go.Figure()
     fig.add_bar(y=labels, x=low, orientation="h", name="-20%", marker_color="#f4a6a6")
     fig.add_bar(y=labels, x=high, orientation="h", name="+20%", marker_color="#a6c8f4")
-    fig.update_layout(barmode="relative", title=title, xaxis_title=f"Écart vs base ({fmt})")
+    fig.update_layout(barmode="relative", title=title, xaxis_title=f"Delta vs base ({fmt})")
     return fig
 
 
@@ -41,8 +41,8 @@ def _npv_heatmap(grid: list[list[float | None]]) -> go.Figure:
     fig.update_yaxes(autorange="reversed")
     fig.update_layout(
         title="Project NPV sensitivity (k€)",
-        xaxis_title="Taux d'actualisation",
-        yaxis_title="Variation du revenu",
+        xaxis_title="Discount rate",
+        yaxis_title="Revenue shock",
     )
     return fig
 
@@ -116,18 +116,18 @@ def render(inputs: ProjectInputs, debt_kwargs: dict) -> None:
         )
 
     st.divider()
-    st.subheader("Project NPV Sensitivity (Revenu × Taux d'actualisation)")
+    st.subheader("Project NPV Sensitivity (Revenue x Discount rate)")
     grid = sensitivity.run_npv_sensitivity_grid(inputs, debt_kwargs)
     st.plotly_chart(_npv_heatmap(grid), use_container_width=True)
     st.caption(
-        "Grille indépendante du WACC courant du projet : chaque colonne recalcule la NPV à un "
-        "taux d'actualisation différent, chaque ligne applique le même choc de revenu que le "
-        "tornado ci-dessus — utile pour situer le taux auquel la NPV bascule en négatif."
+        "Grid independent of the project's current WACC: each column recalculates NPV at a "
+        "different discount rate, each row applies the same revenue shock as the tornado "
+        "above — useful to see at which rate NPV turns negative."
     )
 
     st.divider()
     st.caption(
-        "Sensibilités marché détaillées (DAM Spread, ID Spread, Cycles, Capacity Price) : "
+        "Detailed market sensitivities (DAM Spread, ID Spread, Cycles, Capacity Price): "
         + ", ".join(sensitivity.DETAILED_VARIABLES)
-        + " — disponibles une fois le détail par flux de revenu extrait du classeur multi-onglets complet."
+        + " — available once the per-flow revenue detail is extracted from the full multi-sheet workbook."
     )

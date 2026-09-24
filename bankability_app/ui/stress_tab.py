@@ -9,8 +9,8 @@ from core.models import ProjectInputs
 
 def render(inputs: ProjectInputs, debt_kwargs: dict) -> None:
     st.caption(
-        "Matrice combinant stress sur les revenus (Bear = -15%) et sur la dégradation "
-        "(courbe additionnelle, indépendante de celle déjà intégrée au BP)."
+        "Matrix combining a revenue stress (Bear = -15%) and a degradation stress "
+        "(additional curve, independent of the one already baked into the Business Plan)."
     )
     rows = stress_test.run_stress_matrix(inputs, debt_kwargs)
     df = pd.DataFrame(rows)
@@ -20,13 +20,13 @@ def render(inputs: ProjectInputs, debt_kwargs: dict) -> None:
     display = df.rename(
         columns={
             "revenue_case": "Revenue",
-            "degradation_case": "Dégradation",
-            "combined": "Stress combiné",
+            "degradation_case": "Degradation",
+            "combined": "Combined stress",
         }
     )
     st.dataframe(
         display[
-            ["Revenue", "Dégradation", "Stress combiné", "Project IRR", "Equity IRR", "DSCR min"]
+            ["Revenue", "Degradation", "Combined stress", "Project IRR", "Equity IRR", "DSCR min"]
         ],
         hide_index=True,
         use_container_width=True,

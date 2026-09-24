@@ -91,8 +91,8 @@ class DevCaseParams:
             return FIXED_VOLTAGE_CLASS_BY_CONNECTION_TYPE[self.connection_type]
         except KeyError as exc:
             raise ValueError(
-                f"connection_type '{self.connection_type}' n'a pas de classe de tension fixe "
-                "(raccordement Industrial) - voltage_class_override est requis."
+                f"connection_type '{self.connection_type}' has no fixed voltage class "
+                "(Industrial connection) - voltage_class_override is required."
             ) from exc
 
 
@@ -223,7 +223,7 @@ def connection_capex_keur(params: DevCaseParams, library: CopexLibrary) -> float
             params.cod_year,
         )
         return unit_cost * params.power_mw
-    raise ValueError(f"connection_capex_mode inconnu : '{params.connection_capex_mode}'")
+    raise ValueError(f"Unknown connection_capex_mode: '{params.connection_capex_mode}'")
 
 
 def capex_total_keur(params: DevCaseParams, library: CopexLibrary) -> float:
@@ -287,14 +287,14 @@ def _revenue_and_turpe_series(
     combo_key = aurora_combo_key(params.voltage_class, params.turpe_type, params.gabarit)
     if combo_key not in library.combos:
         raise ValueError(
-            f"Combo Aurora '{combo_key}' introuvable dans CF Aurora "
-            f"(classes disponibles : {sorted(library.combos)})."
+            f"Aurora combo '{combo_key}' not found in CF Aurora "
+            f"(available classes: {sorted(library.combos)})."
         )
     durations_available = library.combos[combo_key]
     if params.duration_h not in durations_available:
         raise ValueError(
-            f"Durée {params.duration_h}h introuvable pour la combo Aurora '{combo_key}' "
-            f"(durées disponibles : {sorted(durations_available)})."
+            f"Duration {params.duration_h}h not found for Aurora combo '{combo_key}' "
+            f"(available durations: {sorted(durations_available)})."
         )
     combo = durations_available[params.duration_h]
 

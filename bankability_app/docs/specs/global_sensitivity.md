@@ -50,6 +50,12 @@ projets saisis par l'utilisateur dans le Configurateur — voir `docs/adr/0003` 
   plus proposer HTB3 du tout (2026-09-18) plutôt que de simplement lever une erreur si choisi —
   `config_space.has_cost_data` exclut la tension en amont, dans le Configurateur (`tensions()`)
   comme dans l'analyse globale (`enumerate_configs`), voir `docs/specs/config_space.md`.
+- **`run_global_sensitivity` ne mentionne plus HTB3 du tout, même dans `skipped`** (demande de
+  l'utilisateur, 2026-09-24) : HTB3 est une limite **permanente** (aucune tension n'aura jamais de
+  données CAPEX/OPEX pour elle, ni Aurora ni ICP), pas une donnée manquante ponctuelle qui
+  mériterait d'être signalée à chaque utilisation — filtré explicitement hors du résumé
+  `excluded_configs` par `c.tension != "HTB3"`. Le mécanisme `skipped` générique reste actif pour
+  toute *autre* tension qui manquerait de données à l'avenir.
 
 ## UI (`ui/global_sensitivity_tab.py`)
 

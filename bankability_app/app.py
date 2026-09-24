@@ -21,34 +21,34 @@ from ui import (
     stress_tab,
 )
 
-st.set_page_config(page_title="Bancabilité BESS", layout="wide")
+st.set_page_config(page_title="BESS Bankability", layout="wide")
 
 mode = st.sidebar.radio(
     "Mode",
     [
-        "Analyser un Business Plan",
-        "Configurateur Aurora (multi-projets)",
-        "Analyse globale Aurora",
+        "Analyze a Business Plan",
+        "Aurora Configurator (multi-project)",
+        "Aurora Global Analysis",
     ],
 )
 st.sidebar.divider()
 
-if mode == "Configurateur Aurora (multi-projets)":
-    st.title("Configurateur Aurora — portefeuille multi-projets")
+if mode == "Aurora Configurator (multi-project)":
+    st.title("Aurora Configurator — multi-project portfolio")
     configurateur_tab.render()
     st.stop()
 
-if mode == "Analyse globale Aurora":
-    st.title("Analyse globale Aurora — espace des configs")
+if mode == "Aurora Global Analysis":
+    st.title("Aurora Global Analysis — config space")
     global_sensitivity_tab.render()
     st.stop()
 
-st.title("Outil de bancabilité BESS")
+st.title("BESS Bankability Tool")
 
-uploaded = st.file_uploader("Déposer le Business Plan (.xlsx ou .xlsm)", type=["xlsx", "xlsm"])
+uploaded = st.file_uploader("Upload the Business Plan (.xlsx or .xlsm)", type=["xlsx", "xlsm"])
 
 if uploaded is None:
-    st.info("Déposez un fichier Excel de Business Plan pour lancer l'analyse.")
+    st.info("Upload a Business Plan Excel file to start the analysis.")
     st.stop()
 
 if st.session_state.get("bp_filename") != uploaded.name:
@@ -58,7 +58,7 @@ if st.session_state.get("bp_filename") != uploaded.name:
         st.session_state["bp_filename"] = uploaded.name
         st.session_state["bp_format"] = fmt
     except Exception as exc:
-        st.error(f"Erreur de lecture du fichier : {exc}")
+        st.error(f"Error reading the file: {exc}")
         st.stop()
 
     has_dev_case = dev_case_parser.has_dev_case_sheets(uploaded)
@@ -73,27 +73,27 @@ inputs = st.session_state["bp_inputs"]
 has_dev_case = st.session_state.get("has_dev_case", False)
 bp_format = st.session_state.get("bp_format", "summary")
 st.caption(
-    "Format détecté : classeur complet (O-Financials / O-Control)"
+    "Detected format: full workbook (O-Financials / O-Control)"
     if bp_format == "full"
-    else "Format détecté : onglet résumé"
+    else "Detected format: summary sheet"
 )
 
 with st.sidebar:
-    st.header("Hypothèses de financement")
+    st.header("Financing assumptions")
     if bp_format == "full":
         st.caption(
-            "Valeurs par défaut extraites du BP (gearing, taux, maturité) — ajustables ci-dessous."
+            "Default values extracted from the Business Plan (gearing, rate, tenor) — "
+            "adjustable below."
         )
     else:
-        st.caption("Non extraites du BP — à définir ici (ou par défaut).")
+        st.caption("Not extracted from the Business Plan — set here (or use the defaults).")
     gearing_pct = (
-        st.slider("Gearing (dette / CAPEX)", 0, 95, int(inputs.gearing_pct * 100), step=5) / 100
+        st.slider("Gearing (debt / CAPEX)", 0, 95, int(inputs.gearing_pct * 100), step=5) / 100
     )
     interest_rate = (
-        st.slider("Taux d'intérêt de la dette", 1.0, 10.0, inputs.interest_rate * 100, step=0.1)
-        / 100
+        st.slider("Debt interest rate", 1.0, 10.0, inputs.interest_rate * 100, step=0.1) / 100
     )
-    debt_tenor = st.slider("Tenor de la dette (années)", 5, 20, inputs.debt_tenor_years, step=1)
+    debt_tenor = st.slider("Debt tenor (years)", 5, 20, inputs.debt_tenor_years, step=1)
     wacc = st.slider("WACC", 1.0, 15.0, inputs.wacc * 100, step=0.1) / 100
     inputs.wacc = wacc
 
@@ -106,48 +106,49 @@ with st.sidebar:
     st.divider()
     if inputs.target_dscr is not None:
         debt_sizing_mode = st.radio(
-            "Dimensionnement de la dette",
+            "Debt sizing",
             options=["gearing", "dscr"],
             format_func=lambda m: (
-                "Gearing fixe"
+                "Fixed gearing"
                 if m == "gearing"
-                else f"Dimensionné par DSCR (cible {inputs.target_dscr:.2f}x)"
+                else f"DSCR-sized (target {inputs.target_dscr:.2f}x)"
             ),
         )
         if debt_sizing_mode == "dscr":
             st.caption(
-                "La dette est calculée (sculptée) pour que CFADS / service ≥ DSCR cible chaque "
-                "année, plafonnée par le gearing ci-dessus — comme dans votre BP source. Le "
-                "gearing devient un plafond, pas un montant fixe."
+                "Debt is calculated (sculpted) so that CFADS / debt service ≥ target DSCR every "
+                "year, capped by the gearing above — as in your source Business Plan. Gearing "
+                "becomes a cap, not a fixed amount."
             )
         else:
             st.caption(
-                "La dette est un montant fixe : gearing × CAPEX (+ DSRA/frais de financement/cash "
-                "minimum si extraits du BP). Le DSCR devient alors un résultat, pas une cible — il "
-                "peut sortir en dessous du Target DSCR ci-dessus si le CFADS est trop faible face à "
-                "ce montant de dette."
+                "Debt is a fixed amount: gearing × CAPEX (+ DSRA/financing fees/minimum cash if "
+                "extracted from the Business Plan). DSCR then becomes an output, not a target — "
+                "it can come out below the Target DSCR above if CFADS is too low relative to "
+                "this debt amount."
             )
         debt_kwargs["debt_sizing_mode"] = debt_sizing_mode
     else:
         st.caption(
-            "Dimensionnement par DSCR indisponible (pas de Target DSCR extrait du BP) — "
-            "gearing fixe utilisé."
+            "DSCR sizing unavailable (no Target DSCR extracted from the Business Plan) — "
+            "fixed gearing used."
         )
 
     has_repowering_capex = sum(1 for c in inputs.capex_keur if c < 0) > 1
     if has_repowering_capex:
         st.divider()
-        st.header("Dette de repowering")
+        st.header("Repowering debt")
         st.caption(
-            "Facility séparée de la dette initiale (2e sortie de CAPEX détectée dans le BP)."
+            "A facility separate from the initial debt (2nd CAPEX outflow detected in the "
+            "Business Plan)."
         )
         repowering_gearing_pct = (
-            st.slider("Gearing repowering", 0, 95, int(inputs.repowering_gearing_pct * 100), step=5)
+            st.slider("Repowering gearing", 0, 95, int(inputs.repowering_gearing_pct * 100), step=5)
             / 100
         )
         repowering_interest_rate = (
             st.slider(
-                "Taux d'intérêt repowering",
+                "Repowering interest rate",
                 1.0,
                 10.0,
                 inputs.repowering_interest_rate * 100,
@@ -156,7 +157,7 @@ with st.sidebar:
             / 100
         )
         repowering_debt_tenor = st.slider(
-            "Tenor repowering (années)", 5, 20, inputs.repowering_debt_tenor_years, step=1
+            "Repowering tenor (years)", 5, 20, inputs.repowering_debt_tenor_years, step=1
         )
         debt_kwargs.update(
             {
@@ -168,7 +169,7 @@ with st.sidebar:
 base_result = financial_engine.compute_results(inputs, **debt_kwargs)
 
 tab_labels = [
-    "Vue Projet",
+    "Project Overview",
     "Cashflow",
     "Scenario Analysis",
     "Sensitivity Analysis",
@@ -177,7 +178,7 @@ tab_labels = [
     "Acquisition (M&A)",
 ]
 if has_dev_case:
-    tab_labels = ["Cas de développement"] + tab_labels
+    tab_labels = ["Development Case"] + tab_labels
 tabs = st.tabs(tab_labels)
 
 offset = 0
@@ -191,10 +192,10 @@ if has_dev_case:
         )
         if override is not None:
             inputs, base_result = override
-            # Un cas de développement synthétique n'a pas de covenant DSCR
-            # propre au projet (target_dscr) - repli sur le gearing fixe pour
-            # les autres onglets, quel que soit le mode choisi dans le sidebar
-            # (qui reflète les hypothèses du BP principal éventuellement uploadé).
+            # A synthetic development case has no project-specific DSCR covenant
+            # (target_dscr) - fall back to fixed gearing for the other tabs,
+            # regardless of the mode chosen in the sidebar (which reflects the
+            # assumptions of a main Business Plan that may have been uploaded).
             debt_kwargs = {
                 k: v for k, v in debt_kwargs.items() if k not in ("debt_sizing_mode", "target_dscr")
             }

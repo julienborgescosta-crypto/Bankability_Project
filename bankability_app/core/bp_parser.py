@@ -87,7 +87,7 @@ def _series_values(
     row, idx = _find_label(grid, label)
     if row is None:
         if required:
-            raise ValueError(f"Ligne introuvable dans le BP pour le libelle '{label}'.")
+            raise ValueError(f"Row not found in the BP for label '{label}'.")
         return [0.0] * length
     values = row[start_col : start_col + length]
     values = list(values) + [None] * (length - len(values))
@@ -109,8 +109,8 @@ def parse_summary_bp(file_or_path, mapping_path: Path = DEFAULT_MAPPING_PATH) ->
     year_row, year_col = _find_label(grid, series_fields["years"])
     if year_row is None:
         raise ValueError(
-            "Impossible de localiser la ligne 'Year' dans le fichier BP. "
-            "Verifiez que le fichier correspond au format attendu (voir config/bp_mapping.yaml)."
+            "Unable to locate the 'Year' row in the BP file. "
+            "Check that the file matches the expected format (see config/bp_mapping.yaml)."
         )
 
     year_values: list[int] = []
@@ -120,7 +120,7 @@ def parse_summary_bp(file_or_path, mapping_path: Path = DEFAULT_MAPPING_PATH) ->
         else:
             break
     if not year_values:
-        raise ValueError("La ligne 'Year' du BP ne contient aucune annee exploitable.")
+        raise ValueError("The BP's 'Year' row contains no usable year.")
 
     length = len(year_values)
     start_col = year_col + 1
@@ -215,8 +215,8 @@ def parse_full_bp(file_or_path, mapping_path: Path = DEFAULT_FULL_MAPPING_PATH) 
     year_row, year_col = _find_label(series_grid, years_label)
     if year_row is None:
         raise ValueError(
-            f"Impossible de localiser la ligne 'Year' dans l'onglet '{mapping['series_sheet']}'. "
-            "Verifiez config/bp_mapping_full.yaml."
+            f"Unable to locate the 'Year' row in sheet '{mapping['series_sheet']}'. "
+            "Check config/bp_mapping_full.yaml."
         )
     year_values: list[int] = []
     for cell in year_row[year_col + 1 :]:
@@ -225,7 +225,7 @@ def parse_full_bp(file_or_path, mapping_path: Path = DEFAULT_FULL_MAPPING_PATH) 
         else:
             break
     if not year_values:
-        raise ValueError("La ligne 'Year' ne contient aucune annee exploitable.")
+        raise ValueError("The 'Year' row contains no usable year.")
 
     length = len(year_values)
     start_col = year_col + 1

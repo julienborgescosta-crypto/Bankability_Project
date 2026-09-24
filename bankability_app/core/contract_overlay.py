@@ -50,7 +50,7 @@ def apply_contract_overlay(
     if structure.kind == FULL_MERCHANT:
         return list(revenue_keur), [0.0] * len(revenue_keur)
     if structure.kind not in (FLOOR, TOLLING):
-        raise ValueError(f"Structure contractuelle inconnue : '{structure.kind}'.")
+        raise ValueError(f"Unknown contract structure: '{structure.kind}'.")
 
     guaranteed_keur = structure.price_keur_per_mw_per_year * power_mw
     adjusted: list[float] = []

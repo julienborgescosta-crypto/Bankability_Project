@@ -88,6 +88,13 @@ class ProjectInputs:
     reported_opex_during_construction_keur: float | None = None
     reported_minimum_cash_keur: float | None = None
 
+    # Op-year effectivement utilise pour le reset de degradation/la sortie CAPEX
+    # de repowering (moteur Aurora v2 uniquement) - None si `repowering` est faux,
+    # sinon l'annee reellement appliquee (par defaut celle d'AU_Store/du JSON de
+    # reference, ou une valeur choisie/optimisee - voir core/portfolio.py
+    # `find_best_repowering_op_year`). Purement informatif pour l'affichage.
+    repowering_op_year: int | None = None
+
     revenue_detail: RevenueBreakdown | None = None
 
 
