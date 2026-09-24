@@ -43,11 +43,16 @@ def _npv_heatmap(grid: list[list[float | None]]) -> go.Figure:
             colorbar={"title": "NPV (k€)"},
         )
     )
-    fig.update_yaxes(autorange="reversed")
+    # x/y sont des paliers discrets (taux, choc de revenu), jamais un champ
+    # continu - meme garde-fou que ui/global_sensitivity_tab.py::_single_heatmap
+    # (les labels ont deja un suffixe % qui empeche Plotly de les detecter comme
+    # numeriques, mais on le rend explicite plutot que de compter dessus).
     fig.update_layout(
         title="Project NPV sensitivity (k€)",
         xaxis_title="Discount rate",
         yaxis_title="Revenue shock",
+        xaxis={"type": "category"},
+        yaxis={"type": "category", "autorange": "reversed"},
     )
     return chart_theme.apply_layout(fig, legend_horizontal=False)
 

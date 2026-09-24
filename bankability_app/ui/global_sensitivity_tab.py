@@ -247,7 +247,17 @@ def _single_heatmap(
             zmid=0.0 if not is_pct else None,
         )
     )
-    fig.update_layout(title=title, margin={"t": 40, "b": 20})
+    # x/y sont des dimensions categorielles (tension, gabarit, duree, annee de
+    # COD...), jamais un champ continu - sans ce forcage, Plotly detecte "2"/"4"
+    # (duree) ou "2028".."2040" (COD) comme numeriques et bascule l'axe en
+    # lineaire, ce qui etale 2 categories sur une echelle 1-5 au lieu de 2
+    # bandes egales (repere par l'utilisateur, 2026-09-24).
+    fig.update_layout(
+        title=title,
+        margin={"t": 40, "b": 20},
+        xaxis={"type": "category"},
+        yaxis={"type": "category"},
+    )
     return chart_theme.apply_layout(fig, legend_horizontal=False)
 
 
