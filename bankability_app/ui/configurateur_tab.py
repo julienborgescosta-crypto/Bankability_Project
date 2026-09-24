@@ -147,6 +147,18 @@ def _render_add_project_form(
                 "- adjust the COD year above (the 'Add the project' button is disabled "
                 "until then)."
             )
+        elif not config_space.is_year_range_covered(
+            resolved.library,
+            au_config,
+            cod_year=int(cod_year),
+            operating_years=int(operating_years),
+        ):
+            cod_invalid = True
+            st.warning(
+                "This config's data doesn't cover the full COD -> COD + operating life span "
+                "- adjust the COD year or the operating life above (the 'Add the project' "
+                "button is disabled until then)."
+            )
     except aur_cases.AuroraConfigError as exc:
         st.error(f"Combination with no business equivalent: {exc}")
         return

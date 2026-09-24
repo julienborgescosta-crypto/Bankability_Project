@@ -64,6 +64,22 @@ def test_is_cod_valid(au_store):
     assert config_space.is_cod_valid(config, 2027) is False
 
 
+def test_is_year_range_covered_true_for_real_config(au_store):
+    config = au_store.config_by_drop_key("2h HTA Classique g0")
+    assert (
+        config_space.is_year_range_covered(au_store, config, cod_year=2027, operating_years=20)
+        is True
+    )
+
+
+def test_is_year_range_covered_false_when_operating_life_exceeds_data(au_store):
+    config = au_store.config_by_drop_key("2h HTA Classique g0")
+    assert (
+        config_space.is_year_range_covered(au_store, config, cod_year=2050, operating_years=20)
+        is False
+    )
+
+
 def test_turpe_types_always_full_set_even_when_aurora_didnt_model_it(au_store):
     # HTB1 n'a que Classique g0 dans AU_Store - les 3 types restent proposables
     # (extrapoles via core.config_extrapolation si necessaire, 2026-09-24).

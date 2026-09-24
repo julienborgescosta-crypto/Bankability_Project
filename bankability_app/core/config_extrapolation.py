@@ -65,6 +65,24 @@ def _load_curtailment_losses(path: Path = CURTAILMENT_LOSSES_PATH) -> dict:
         return yaml.safe_load(handle)
 
 
+def _clamped(table: dict[int, float], year: int) -> float:
+    """Valeur de `table` a `year`, plafonnee sur la borne connue la plus
+    proche si `year` est hors de sa couverture - meme convention que
+    `aur_cases._shifted_degradation`/`copex_icp.escalated_unit_cost` (jamais
+    de trou silencieux, jamais d'extrapolation au-dela de ce qui est connu -
+    on retient juste la derniere valeur observee). Necessaire ici car la
+    seule reference ORO reelle (HTB2, voir `_oro_raw_factor`) est elle-meme
+    verrouillee sur un seul COD et zero-remplie hors de sa propre fenetre -
+    sans ce plafonnement, `resolve_config` perdrait silencieusement les
+    annees hors de cette fenetre (bug signale par l'utilisateur, 2026-09-24 :
+    une config HTA extrapolee via ce ratio se retrouvait couverte 2030-2059
+    au lieu de la pleine plage Aurora, cassant tout COD < 2030)."""
+    if year in table:
+        return table[year]
+    years = table.keys()
+    return table[min(years)] if year < min(years) else table[max(years)]
+
+
 def _real_config(
     au_store: AuStoreLibrary, *, duree_h: int, tension: str, turpe_type: str, gabarit: bool
 ) -> AuStoreConfig | None:
@@ -88,7 +106,14 @@ def _turpe_type_raw_factor(
     )
     raw_classique = au_store.raw_by_key[classique.austore_key]
     raw_target = au_store.raw_by_key[target.austore_key]
-    return {y: raw_target[y] / raw_classique[y] for y in raw_classique if y in raw_target}
+    # 0.0 = annee hors de la fenetre reelle d'une config verrouillee sur un
+    # COD (voir _oro_raw_factor ci-dessous, meme convention) - jamais un
+    # RAW reel, a exclure plutot que produire un ratio ou un delta invalide.
+    return {
+        y: raw_target[y] / raw_classique[y]
+        for y in raw_classique
+        if y in raw_target and raw_classique[y] and raw_target[y]
+    }
 
 
 def _turpe_type_turpe_delta(
@@ -102,7 +127,11 @@ def _turpe_type_turpe_delta(
     )
     turpe_classique = au_store.turpe_by_key[classique.austore_key]
     turpe_target = au_store.turpe_by_key[target.austore_key]
-    return {y: turpe_target[y] - turpe_classique[y] for y in turpe_classique if y in turpe_target}
+    return {
+        y: turpe_target[y] - turpe_classique[y]
+        for y in turpe_classique
+        if y in turpe_target and turpe_classique[y] and turpe_target[y]
+    }
 
 
 def _gabarit_raw_factor(
@@ -117,7 +146,12 @@ def _gabarit_raw_factor(
     )
     raw_g0 = au_store.raw_by_key[g0.austore_key]
     raw_g1 = au_store.raw_by_key[g1.austore_key]
-    return {y: raw_g1[y] / raw_g0[y] for y in raw_g0 if y in raw_g1}
+    # Certaines configs gabarit=True reelles sont elles-memes verrouillees sur
+    # un COD (ex. HTB2 4h Soutirage gabarit) et zero-remplies hors de leur
+    # fenetre - meme exclusion que _turpe_type_raw_factor ci-dessus (bug
+    # signale par l'utilisateur, 2026-09-24 : sans elle, un ratio 0.0 de
+    # cette annee ecrasait silencieusement le RAW de la config extrapolee).
+    return {y: raw_g1[y] / raw_g0[y] for y in raw_g0 if y in raw_g1 and raw_g0[y] and raw_g1[y]}
 
 
 def _gabarit_turpe_delta(
@@ -131,7 +165,11 @@ def _gabarit_turpe_delta(
     )
     turpe_g0 = au_store.turpe_by_key[g0.austore_key]
     turpe_g1 = au_store.turpe_by_key[g1.austore_key]
-    return {y: turpe_g1[y] - turpe_g0[y] for y in turpe_g0 if y in turpe_g1}
+    return {
+        y: turpe_g1[y] - turpe_g0[y]
+        for y in turpe_g0
+        if y in turpe_g1 and turpe_g0[y] and turpe_g1[y]
+    }
 
 
 def _oro_raw_factor(au_store: AuStoreLibrary, *, duree_h: int, turpe_type: str) -> dict[int, float]:
@@ -145,7 +183,11 @@ def _oro_raw_factor(au_store: AuStoreLibrary, *, duree_h: int, turpe_type: str) 
     )
     raw_standard = au_store.raw_by_key[standard.austore_key]
     raw_oro = au_store.raw_by_key[oro.austore_key]
-    return {y: raw_oro[y] / raw_standard[y] for y in raw_standard if y in raw_oro and raw_oro[y]}
+    return {
+        y: raw_oro[y] / raw_standard[y]
+        for y in raw_standard
+        if y in raw_oro and raw_standard[y] and raw_oro[y]
+    }
 
 
 def _oro_turpe_delta(
@@ -159,7 +201,11 @@ def _oro_turpe_delta(
     )
     turpe_standard = au_store.turpe_by_key[standard.austore_key]
     turpe_oro = au_store.turpe_by_key[oro.austore_key]
-    return {y: turpe_oro[y] - turpe_standard[y] for y in turpe_standard if y in turpe_oro}
+    return {
+        y: turpe_oro[y] - turpe_standard[y]
+        for y in turpe_standard
+        if y in turpe_oro and turpe_standard[y] and turpe_oro[y]
+    }
 
 
 def curtailment_loss_pct(hours: int, *, path: Path = CURTAILMENT_LOSSES_PATH) -> dict[int, float]:
@@ -242,8 +288,8 @@ def resolve_config(
         if turpe_type != "Classique":
             factor = _turpe_type_raw_factor(au_store, duree_h=duree_h, turpe_type=turpe_type)
             delta = _turpe_type_turpe_delta(au_store, duree_h=duree_h, turpe_type=turpe_type)
-            raw = {y: raw[y] * factor[y] for y in raw if y in factor}
-            turpe = {y: turpe[y] + delta[y] for y in turpe if y in delta}
+            raw = {y: raw[y] * _clamped(factor, y) for y in raw}
+            turpe = {y: turpe[y] + _clamped(delta, y) for y in turpe}
             notes.append(
                 f"TURPE type {turpe_type} not modeled by Aurora for {tension} {duree_h}h - "
                 f"estimated by transferring the RAW/TURPE ratio/delta observed between "
@@ -253,8 +299,8 @@ def resolve_config(
         if gabarit:
             gfactor = _gabarit_raw_factor(au_store, duree_h=duree_h, turpe_type=turpe_type)
             gdelta = _gabarit_turpe_delta(au_store, duree_h=duree_h, turpe_type=turpe_type)
-            raw = {y: raw[y] * gfactor[y] for y in raw if y in gfactor}
-            turpe = {y: turpe[y] + gdelta[y] for y in turpe if y in gdelta}
+            raw = {y: raw[y] * _clamped(gfactor, y) for y in raw}
+            turpe = {y: turpe[y] + _clamped(gdelta, y) for y in turpe}
             notes.append(
                 f"Gabarit not modeled by Aurora for {tension} {turpe_type} {duree_h}h - "
                 f"estimated by transferring the gabarit effect observed on {REFERENCE_TENSION} "
@@ -287,13 +333,27 @@ def resolve_config(
             extrapolated = True
             oro_factor = _oro_raw_factor(au_store, duree_h=duree_h, turpe_type=turpe_type)
             oro_delta = _oro_turpe_delta(au_store, duree_h=duree_h, turpe_type=turpe_type)
-            raw = {y: raw[y] * oro_factor[y] for y in raw if y in oro_factor}
-            turpe = {y: turpe[y] + oro_delta[y] for y in turpe if y in oro_delta}
+            # oro_factor/oro_delta ne couvrent que les annees ou la reference
+            # ORO reelle (HTB2) a une valeur non nulle - certaines references
+            # sont elles-memes verrouillees sur un seul COD et zero-remplies
+            # hors de cette fenetre (ex. "4h HTB2 Soutirage ORO" : 0 en dehors
+            # de 2030-2059). Sans _clamped, ces annees disparaitraient de la
+            # courbe extrapolee au lieu d'etre couvertes par le ratio le plus
+            # proche connu (bug signale par l'utilisateur, 2026-09-24).
+            raw = {y: raw[y] * _clamped(oro_factor, y) for y in raw}
+            turpe = {y: turpe[y] + _clamped(oro_delta, y) for y in turpe}
+            clamp_note = ""
+            if min(raw) < min(oro_factor) or max(raw) > max(oro_factor):
+                clamp_note = (
+                    f" Outside {min(oro_factor)}-{max(oro_factor)} (the reference's own "
+                    "coverage), the nearest known ratio is held constant."
+                )
             notes.append(
                 f"ORO not modeled by Aurora for {tension} {turpe_type} {duree_h}h"
                 f"{' gabarit' if gabarit else ''} - estimated by transferring the ORO vs "
                 f"standard RAW/TURPE ratio/delta observed on {REFERENCE_TENSION} {turpe_type} "
                 f"{duree_h}h (the only real ORO combination for this duration/type)."
+                f"{clamp_note}"
             )
 
         target_hours = (
@@ -306,7 +366,7 @@ def resolve_config(
             rescale = {
                 y: (1 - loss_target[y]) / (1 - loss_3000[y]) for y in loss_target if y in loss_3000
             }
-            raw = {y: raw[y] * rescale[y] for y in raw if y in rescale}
+            raw = {y: raw[y] * _clamped(rescale, y) for y in raw}
             notes.append(
                 f"ORO curve rescaled from 3000h (reference for the rest of the app) to "
                 f"{target_hours}h via the Aurora databook's per-year loss % profile "

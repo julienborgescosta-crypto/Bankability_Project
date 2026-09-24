@@ -135,6 +135,49 @@ def test_curtailment_loss_pct_raises_outside_analysed_range():
         config_extrapolation.curtailment_loss_pct(5000)
 
 
+def test_resolve_config_oro_extrapolation_keeps_full_calendar_year_coverage(au_store):
+    """La seule reference ORO reelle pour 4h (HTB2 Soutirage, voir
+    `_oro_raw_factor`) est verrouillee sur COD2030 : son propre ratio annee
+    par annee ne couvre que 2030-2059. Avant le fix (2026-09-24, bug signale
+    par l'utilisateur), une config extrapolee via ce ratio (ex. HTA 4h
+    Soutirage gabarit ORO) perdait silencieusement 2027-2029 - `revenue_and_
+    turpe_series` levait ensuite "Year 2029 is outside the AU_Store range"
+    pour n'importe quel COD < 2030, alors que la config n'est pourtant pas
+    verrouillee sur un COD (`valide_cod` reste None, "toute")."""
+    resolved = config_extrapolation.resolve_config(
+        au_store, duree_h=4, tension="HTA", turpe_type="Soutirage", gabarit=True, oro=True
+    )
+    assert resolved.config.extrapolated is True
+    assert resolved.config.valide_cod is None
+    raw = resolved.library.raw_by_key[resolved.config.austore_key]
+    assert min(raw) == 2027
+    assert max(raw) == 2060
+    assert any("held constant" in note for note in resolved.notes)
+
+
+def test_resolve_config_oro_extrapolation_usable_for_cod_before_2030(au_store, copex_library):
+    """Meme scenario que ci-dessus, verifie de bout en bout via
+    build_project_inputs (COD=2029 aurait leve AuroraConfigError avant le
+    fix, alors que rien dans la config elle-meme n'interdit ce COD)."""
+    from core import aur_cases
+
+    resolved = config_extrapolation.resolve_config(
+        au_store, duree_h=4, tension="HTA", turpe_type="Soutirage", gabarit=True, oro=True
+    )
+    inputs = aur_cases.build_project_inputs(
+        resolved.library,
+        resolved.config,
+        copex_library,
+        cod_year=2029,
+        power_mw=10.0,
+        operating_years=5,
+    )
+    # index 0 = annee de construction (COD-1), legitimement a 0 - le premier
+    # revenu reel est a l'index 1 (meme convention que
+    # test_resolve_config_extrapolated_curve_usable_downstream ci-dessus).
+    assert inputs.revenues_keur[1] > 0.0
+
+
 def test_resolve_config_custom_curtailment_hours_rescales_relative_to_3000h(au_store):
     resolved_3000 = config_extrapolation.resolve_config(
         au_store,

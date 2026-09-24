@@ -86,3 +86,24 @@ def valid_cod_years(config: AuStoreConfig, candidate_years: list[int]) -> list[i
 
 def is_cod_valid(config: AuStoreConfig, cod_year: int) -> bool:
     return config.valide_cod is None or config.valide_cod == cod_year
+
+
+def is_year_range_covered(
+    library: AuStoreLibrary, config: AuStoreConfig, *, cod_year: int, operating_years: int
+) -> bool:
+    """`valide_cod` (voir `is_cod_valid`) n'attrape que les configs
+    explicitement verrouillees sur un seul COD - une config extrapolee
+    (`config_extrapolation.resolve_config`) peut rester `valide_cod=None`
+    ("toute") tout en ayant, dans les faits, une couverture calendaire plus
+    etroite que la plage Aurora complete (bug signale par l'utilisateur,
+    2026-09-24 : cas HTA gabarit+ORO, `valide_cod` a None mais RAW absent
+    avant 2030 avant le fix de `config_extrapolation._clamped` - reste un
+    garde-fou utile pour toute future config qui referrait la meme situation
+    sans que le fix generique la couvre). Verifie directement sur les
+    donnees plutot que sur une metadonnee separee, pour ne jamais se
+    desynchroniser d'elles."""
+    raw = library.raw_by_key.get(config.austore_key)
+    if not raw:
+        return False
+    last_operating_year = cod_year + operating_years - 1
+    return min(raw) <= cod_year and max(raw) >= last_operating_year
