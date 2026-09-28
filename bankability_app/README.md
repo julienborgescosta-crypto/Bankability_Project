@@ -304,6 +304,7 @@ Modules (`core/`) :
 | `acquisition.py` | Prime d'acquisition maximale (M&A) + sensibilite | extension hors 6 couches |
 | `dev_case.py` / `dev_case_parser.py` | Construit un `ProjectInputs` depuis des hypotheses de developpement (COD, puissance, duree, segment, TURPE) + bibliotheques CAPEX/revenu (`COPEX_library`/`CF Aurora`) | extension hors 6 couches, en amont |
 | `copex_icp.py` | CAPEX/OPEX BESS depuis `config/copex_icp.xlsx` (couts unitaires QEF reels, "ICP", mis a jour mensuellement) - source primaire pour le moteur Aurora v2, Aurora `COPEX_library` en repli pour les postes non couverts (Development, Insurance/Grid charges/Land lease/Accise/Other, HTB3) | 5bis (CAPEX/OPEX du moteur Aurora v2) |
+| `portfolio_import.py` | Import/export en masse du portefeuille Configurateur via Excel (`ProjectConfig` par ligne, template telechargeable) - l'app n'ayant pas de memoire entre sessions, voir `docs/specs/portfolio_import.md` | extension hors 6 couches (Configurateur Aurora v2) |
 
 Configuration (`config/`) :
 

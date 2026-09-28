@@ -18,6 +18,7 @@ travail du projet, pas une donnee UI)."""
 
 from __future__ import annotations
 
+import io
 from pathlib import Path
 
 import pandas as pd
@@ -31,6 +32,7 @@ from core import (
     contract_overlay,
     copex_icp,
     portfolio,
+    portfolio_import,
 )
 from ui import chart_theme
 
@@ -62,6 +64,61 @@ def _fmt_keur(value: float | None) -> str:
 
 def _fmt_pct(value: float | None) -> str:
     return "n/a" if value is None else f"{value:.1%}"
+
+
+def _df_to_excel_bytes(df: pd.DataFrame, sheet_name: str) -> bytes:
+    buffer = io.BytesIO()
+    with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
+        df.to_excel(writer, sheet_name=sheet_name, index=False)
+    return buffer.getvalue()
+
+
+def _download_results_button(df: pd.DataFrame, *, label: str, filename: str, key: str) -> None:
+    st.download_button(
+        f"Download {label} results (Excel)",
+        data=_df_to_excel_bytes(df, sheet_name=label[:31]),
+        file_name=filename,
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        key=key,
+    )
+
+
+def _render_bulk_import() -> None:
+    """Alternative a la saisie projet par projet (`_render_add_project_form`)
+    - demande de l'utilisateur, 2026-09-28 : l'app n'a pas de memoire entre
+    sessions, donc plutot que de re-saisir chaque projet a la main a chaque
+    ouverture, l'utilisateur maintient sa propre liste dans un fichier Excel
+    qu'il reupload. Remplace entierement `portfolio_projects` (pas un ajout)
+    - plus simple, pas d'ambiguite sur d'eventuels doublons avec la saisie
+    manuelle deja en session."""
+    with st.expander("Bulk import from Excel (replaces the list below)"):
+        st.caption(
+            "One row per project. Download the template for the exact column format and "
+            "allowed values (a 'Legend' sheet explains each column)."
+        )
+        st.download_button(
+            "Download template (.xlsx)",
+            data=portfolio_import.template_bytes(),
+            file_name="aurora_configurator_template.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+        uploaded = st.file_uploader("Upload a filled-in template", type=["xlsx"], key="bulk_import")
+        # `file_uploader` keeps its value across reruns until the user picks a
+        # new file - sans ce garde-fou, le st.rerun() ci-dessous re-parserait
+        # et re-remplacerait la liste en boucle a chaque interaction ulterieure
+        # de la page (widget non "consomme" par nature dans Streamlit).
+        if uploaded is not None and uploaded.file_id != st.session_state.get(
+            "_bulk_import_last_file_id"
+        ):
+            try:
+                projects = portfolio_import.parse_portfolio_excel(uploaded)
+            except ValueError as exc:
+                st.error(f"Import error: {exc}")
+                return
+            st.session_state["_bulk_import_last_file_id"] = uploaded.file_id
+            st.session_state["portfolio_projects"] = projects
+            st.success(f"{len(projects)} project(s) loaded from the file.")
+            st.rerun()
 
 
 def _render_add_project_form(
@@ -472,6 +529,9 @@ def _render_hold_and_operate(rows: list[portfolio.PortfolioRow]) -> None:
         ]
     )
     st.dataframe(df, use_container_width=True, hide_index=True)
+    _download_results_button(
+        df, label="Hold & Operate", filename="hold_and_operate_results.xlsx", key="dl_hold_operate"
+    )
     st.caption(
         "Target DSCR and tenor already reflect the floor/tolling contract's effect on debt "
         "(secured tiering 1.20x/10yr vs merchant 1.40x/PPA+3yr, docs/adr/... section 2.2 of "
@@ -534,6 +594,9 @@ def _render_dev_and_sell(rows: list[portfolio.PortfolioRow]) -> None:
         ]
     )
     st.dataframe(df, use_container_width=True, hide_index=True)
+    _download_results_button(
+        df, label="Develop & sell", filename="develop_and_sell_results.xlsx", key="dl_dev_sell"
+    )
     margin_per_mw = [r.net_margin_keur / r.power_mw if r.power_mw else None for r in rows]
     fig = _bar_chart([r.name for r in rows], margin_per_mw, y_title="Net margin (k€/MW)")
     fig.add_hline(
@@ -593,6 +656,9 @@ def _render_build_and_flip(rows: list[portfolio.PortfolioRow]) -> None:
         ]
     )
     st.dataframe(df, use_container_width=True, hide_index=True)
+    _download_results_button(
+        df, label="Buy & flip", filename="buy_rtb_and_flip_results.xlsx", key="dl_buy_flip"
+    )
     st.plotly_chart(
         _bar_chart(
             [r.name for r in rows],
@@ -680,6 +746,8 @@ def render() -> None:
     st.session_state.setdefault("portfolio_projects", [])
     au_store, copex_library, financing_terms = load_library()
 
+    _render_bulk_import()
+    st.divider()
     _render_add_project_form(au_store, copex_library, financing_terms)
     st.divider()
     _render_project_list()

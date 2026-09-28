@@ -12,6 +12,8 @@ from pathlib import Path
 
 from streamlit.testing.v1 import AppTest
 
+from core import portfolio_import
+
 APP_PATH = str(Path(__file__).resolve().parent.parent / "app.py")
 
 
@@ -174,3 +176,27 @@ def test_configurateur_repowering_manual_year_used_in_results():
     assert not at.exception
     df = at.dataframe[0].value
     assert "year 11" in df["Repowering"].iloc[0]
+
+
+def test_configurateur_bulk_import_replaces_project_list():
+    """Demande de l'utilisateur, 2026-09-28 : l'app n'a pas de memoire entre
+    sessions - upload du template rempli, verifie que la liste (2 projets du
+    template) remplace bien la saisie manuelle, et que les resultats/export
+    s'affichent normalement dessus."""
+    at = AppTest.from_file(APP_PATH)
+    at.run(timeout=_TIMEOUT)
+    at.sidebar.radio[0].set_value("Aurora Configurator (multi-project)")
+    at.run(timeout=_TIMEOUT)
+
+    at.file_uploader[0].set_value(
+        (
+            "projects.xlsx",
+            portfolio_import.template_bytes(),
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+    )
+    at.run(timeout=_TIMEOUT)
+    assert not at.exception
+    assert "Portfolio projects (2)" in "".join(h.value for h in at.subheader)
+    assert "Portfolio results" in "".join(h.value for h in at.subheader)
+    assert any(b.label.startswith("Download Hold & Operate results") for b in at.download_button)
