@@ -49,14 +49,16 @@ _CONTRACT_LABELS = {
 
 
 @st.cache_resource
-def load_library() -> tuple[aur_cases.AuStoreLibrary, object, dict]:
+def load_library() -> tuple[aur_cases.AuStoreLibrary, object, object, dict]:
+    from core.dev_case import load_copex_library_q2_2026
     from core.dev_case_parser import load_dev_case_grids, parse_copex_library
 
     au_store = aur_cases.load_aurora_curves()
     _, copex_grid, _ = load_dev_case_grids(SAMPLE_AURORA_BP_PATH)
     copex_library = parse_copex_library(copex_grid)
+    copex_library_q2_2026 = load_copex_library_q2_2026()
     financing_terms = aur_cases.load_financing_terms()
-    return au_store, copex_library, financing_terms
+    return au_store, copex_library, copex_library_q2_2026, financing_terms
 
 
 def _fmt_keur(value: float | None) -> str:
@@ -478,30 +480,8 @@ def _bar_chart(
     return chart_theme.apply_layout(fig)
 
 
-def _render_hold_and_operate(rows: list[portfolio.PortfolioRow]) -> None:
-    st.caption(
-        "Hold & Operate: the project stays in QEF's portfolio for its entire operating life — "
-        "project and shareholder returns, no transaction."
-    )
-    with st.expander("How are these figures calculated?"):
-        st.markdown(
-            "This is the standard financial engine applied directly to the project, with no "
-            "intermediate transaction:\n"
-            "- **Project IRR**: IRR on the project's cashflows *before financing* — initial "
-            "CAPEX (and any repowering) as outflows, revenue + OPEX + TURPE (CFADS) as inflows "
-            "each year.\n"
-            "- **Equity IRR**: IRR on *shareholder* cashflows — the equity contribution as the "
-            "initial outflow (CAPEX minus the debt-financed share), debt service already "
-            "deducted from CFADS as it comes in.\n"
-            "- **Debt**: sized either by a fixed gearing ratio or to hold a target DSCR (default "
-            "mode) — that target is itself a weighted average based on the secured/merchant "
-            "revenue mix of the chosen contract (1.20x if 100% secured by floor/tolling, 1.40x "
-            "if 100% merchant).\n"
-            "- **NPV**: project cashflows discounted at the WACC.\n"
-            "- **DSCR avg/min**: CFADS / debt service ratio, each operating year — the minimum "
-            "is the metric lenders watch."
-        )
-    df = pd.DataFrame(
+def _hold_and_operate_df(rows: list[portfolio.PortfolioRow]) -> pd.DataFrame:
+    return pd.DataFrame(
         [
             {
                 "Project": r.name,
@@ -529,6 +509,40 @@ def _render_hold_and_operate(rows: list[portfolio.PortfolioRow]) -> None:
             for r in rows
         ]
     )
+
+
+def _render_hold_and_operate(
+    rows: list[portfolio.PortfolioRow],
+    *,
+    projects: list[portfolio.ProjectConfig],
+    au_store: aur_cases.AuStoreLibrary,
+    copex_library,
+    copex_library_q2_2026,
+    financing_terms: dict,
+) -> None:
+    st.caption(
+        "Hold & Operate: the project stays in QEF's portfolio for its entire operating life — "
+        "project and shareholder returns, no transaction."
+    )
+    with st.expander("How are these figures calculated?"):
+        st.markdown(
+            "This is the standard financial engine applied directly to the project, with no "
+            "intermediate transaction:\n"
+            "- **Project IRR**: IRR on the project's cashflows *before financing* — initial "
+            "CAPEX (and any repowering) as outflows, revenue + OPEX + TURPE (CFADS) as inflows "
+            "each year.\n"
+            "- **Equity IRR**: IRR on *shareholder* cashflows — the equity contribution as the "
+            "initial outflow (CAPEX minus the debt-financed share), debt service already "
+            "deducted from CFADS as it comes in.\n"
+            "- **Debt**: sized either by a fixed gearing ratio or to hold a target DSCR (default "
+            "mode) — that target is itself a weighted average based on the secured/merchant "
+            "revenue mix of the chosen contract (1.20x if 100% secured by floor/tolling, 1.40x "
+            "if 100% merchant).\n"
+            "- **NPV**: project cashflows discounted at the WACC.\n"
+            "- **DSCR avg/min**: CFADS / debt service ratio, each operating year — the minimum "
+            "is the metric lenders watch."
+        )
+    df = _hold_and_operate_df(rows)
     st.dataframe(df, use_container_width=True, hide_index=True)
     _download_results_button(
         df, label="Hold & Operate", filename="hold_and_operate_results.xlsx", key="dl_hold_operate"
@@ -550,6 +564,45 @@ def _render_hold_and_operate(rows: list[portfolio.PortfolioRow]) -> None:
         st.plotly_chart(
             _bar_chart(names, [r.equity_irr for r in rows], y_title="Equity IRR", pct=True),
             use_container_width=True,
+        )
+
+    st.divider()
+    if st.checkbox(
+        "Also show results with Aurora's own CAPEX/OPEX assumptions",
+        help="Recomputes the table above using Aurora's own CAPEX/OPEX instead of ours "
+        "(ICP + Aurora fallback) - same revenue, same financing terms, only the cost source "
+        "changes. See core/copex_comparison.py for how our costs compare to Aurora's.",
+    ):
+        cost_vintage = st.radio(
+            "Which Aurora cost assumptions?",
+            ["COPEX_library (base fixture)", "Aurora Q2 2026 update (databook)"],
+            horizontal=True,
+            help="'COPEX_library (base fixture)' is the same reference used everywhere else in "
+            "the app (unchanged default). 'Aurora Q2 2026 update' uses a separate, more recent "
+            "cost table extracted from the user-provided Aurora Q2 2026 databook ('Costs "
+            "assumptions' sheet) - kept as an independent option rather than overwriting the "
+            "base fixture (docs/specs/copex_comparison.md).",
+        )
+        library_to_use = (
+            copex_library_q2_2026
+            if cost_vintage == "Aurora Q2 2026 update (databook)"
+            else copex_library
+        )
+        try:
+            rows_aurora = portfolio.run_portfolio(
+                projects, au_store, library_to_use, financing_terms, capex_opex_source="aurora"
+            )
+        except aur_cases.AuroraConfigError as exc:
+            st.error(f"Calculation error with Aurora's CAPEX/OPEX assumptions: {exc}")
+            return
+        st.markdown(f"**With Aurora's own CAPEX/OPEX assumptions ({cost_vintage})**")
+        df_aurora = _hold_and_operate_df(rows_aurora)
+        st.dataframe(df_aurora, use_container_width=True, hide_index=True)
+        _download_results_button(
+            df_aurora,
+            label="Hold & Operate (Aurora CAPEX-OPEX)",
+            filename="hold_and_operate_results_aurora_costs.xlsx",
+            key="dl_hold_operate_aurora",
         )
 
 
@@ -730,15 +783,17 @@ def _render_copex_comparison(projects: list[portfolio.ProjectConfig], copex_libr
     moteur) a ce que la bibliotheque Aurora COPEX_library aurait donne
     seule - demande de l'utilisateur, 2026-09-30, sur le modele d'une macro
     VBA equivalente (`ModAuroraComparison`) deja utilisee sur le vrai BP
-    Excel. Un tableau CAPEX + un tableau OPEX par projet (pas un seul
-    tableau plat multi-projets, illisible - retour utilisateur 2026-10-01) ;
-    export Excel = un onglet par projet, meme raison. Voir
+    Excel. Export Excel seul (un onglet CAPEX/OPEX par projet + un onglet
+    Notes), rien affiche a l'ecran - demande de l'utilisateur, 2026-10-01
+    ("pas la peine de faire apparaitre tous les tableaux dans la web app,
+    juste le fichier excel d'extract me suffit"). Voir
     core/copex_comparison.py, docs/specs/copex_comparison.md."""
     if not st.checkbox("Aurora COPEX Comparison"):
         return
     st.caption(
         "Is our CAPEX/OPEX (ICP + Aurora fallback, as actually applied) below or above Aurora's "
-        "own COPEX_library assumption? One CAPEX table and one OPEX table per project."
+        "own COPEX_library assumption? Download the Excel export below (one CAPEX/OPEX sheet per "
+        "project, plus a Notes sheet)."
     )
     icp_library = copex_icp.load_icp_library_cached()
     all_notes: list[str] = []
@@ -756,18 +811,6 @@ def _render_copex_comparison(projects: list[portfolio.ProjectConfig], copex_libr
         )
         capex_df = _copex_rows_to_df(comparison.capex_rows)
         opex_df = _copex_rows_to_df(comparison.opex_rows)
-
-        st.markdown(
-            f"**{project.name}** — {project.tension} {project.duree_h}h, COD {project.cod_year}"
-        )
-        c1, c2 = st.columns(2)
-        with c1:
-            st.caption("CAPEX")
-            st.dataframe(capex_df, use_container_width=True, hide_index=True)
-        with c2:
-            st.caption("OPEX")
-            st.dataframe(opex_df, use_container_width=True, hide_index=True)
-
         sheet_df = pd.concat(
             [
                 pd.DataFrame([{"Line item": "CAPEX"}]),
@@ -783,15 +826,13 @@ def _render_copex_comparison(projects: list[portfolio.ProjectConfig], copex_libr
             if note not in all_notes:
                 all_notes.append(note)
 
+    sheets["Notes"] = pd.DataFrame({"Note": all_notes})
     _download_multi_sheet_button(
         sheets,
         label="Aurora COPEX Comparison",
         filename="aurora_copex_comparison.xlsx",
         key="dl_copex_comp",
     )
-    with st.expander("Notes"):
-        for note in all_notes:
-            st.caption(f"- {note}")
 
 
 def _render_best_configs(rows: list[portfolio.PortfolioRow]) -> None:
@@ -821,7 +862,10 @@ def _render_best_configs(rows: list[portfolio.PortfolioRow]) -> None:
 
 
 def _render_results(
-    au_store: aur_cases.AuStoreLibrary, copex_library, financing_terms: dict
+    au_store: aur_cases.AuStoreLibrary,
+    copex_library,
+    copex_library_q2_2026,
+    financing_terms: dict,
 ) -> None:
     projects: list[portfolio.ProjectConfig] = st.session_state["portfolio_projects"]
     if not projects:
@@ -854,7 +898,14 @@ def _render_results(
 
     tab1, tab2, tab3 = st.tabs(["Hold & Operate", "Develop & sell at RtB", "Buy RtB & sell at COD"])
     with tab1:
-        _render_hold_and_operate(rows)
+        _render_hold_and_operate(
+            rows,
+            projects=projects,
+            au_store=au_store,
+            copex_library=copex_library,
+            copex_library_q2_2026=copex_library_q2_2026,
+            financing_terms=financing_terms,
+        )
     with tab2:
         _render_dev_and_sell(rows)
     with tab3:
@@ -868,11 +919,11 @@ def render() -> None:
         "Aurora for line items it doesn't cover. See docs/specs/aur_v2_methodology.md."
     )
     st.session_state.setdefault("portfolio_projects", [])
-    au_store, copex_library, financing_terms = load_library()
+    au_store, copex_library, copex_library_q2_2026, financing_terms = load_library()
 
     _render_bulk_import()
     st.divider()
     _render_add_project_form(au_store, copex_library, financing_terms)
     st.divider()
     _render_project_list()
-    _render_results(au_store, copex_library, financing_terms)
+    _render_results(au_store, copex_library, copex_library_q2_2026, financing_terms)

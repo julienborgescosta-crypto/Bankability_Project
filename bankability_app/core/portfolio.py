@@ -141,6 +141,7 @@ def find_best_repowering_op_year(
     au_store: AuStoreLibrary,
     copex_library: CopexLibrary,
     financing_terms: dict,
+    capex_opex_source: str = "icp",
 ) -> tuple[int | None, float | None, list[tuple[int, float | None]]]:
     """Balaie `repowering_candidate_years(config.operating_years)` et retourne
     celle qui maximise l'Equity IRR de la strategie Garder & exploiter
@@ -150,7 +151,10 @@ def find_best_repowering_op_year(
     `(None, None, [])` si le projet est trop court pour offrir le repowering.
 
     Chaque candidat force `repowering_year_mode='manual'` pour eviter toute
-    recursion avec ce meme balayage."""
+    recursion avec ce meme balayage. `capex_opex_source` : voir
+    `aur_cases.build_project_inputs` - la meme source doit etre utilisee ici
+    et dans le calcul final, sous peine d'optimiser l'annee de repowering sur
+    un cout different de celui affiche."""
     candidates = repowering_candidate_years(config.operating_years)
     if not candidates:
         return None, None, []
@@ -164,7 +168,7 @@ def find_best_repowering_op_year(
             repowering_op_year_manual=candidate_year,
         )
         inputs, secured_revenue, _ = build_project_inputs(
-            candidate_config, au_store, copex_library, financing_terms
+            candidate_config, au_store, copex_library, financing_terms, capex_opex_source
         )
         operating_revenue = inputs.revenues_keur[1:]
         financing_kwargs = _financing_kwargs(
@@ -185,6 +189,7 @@ def _effective_repowering_op_year(
     au_store: AuStoreLibrary,
     copex_library: CopexLibrary,
     financing_terms: dict,
+    capex_opex_source: str = "icp",
 ) -> tuple[int | None, bool]:
     """Resout l'annee de repowering a utiliser pour CE projet - retourne
     `(annee_ou_None, auto_optimisee)`. `None` = repowering desactive (case
@@ -193,7 +198,9 @@ def _effective_repowering_op_year(
         return None, False
     if config.repowering_year_mode == "manual":
         return config.repowering_op_year_manual, False
-    best_year, _, _ = find_best_repowering_op_year(config, au_store, copex_library, financing_terms)
+    best_year, _, _ = find_best_repowering_op_year(
+        config, au_store, copex_library, financing_terms, capex_opex_source
+    )
     return best_year, True
 
 
@@ -217,6 +224,7 @@ def build_project_inputs(
     au_store: AuStoreLibrary,
     copex_library: CopexLibrary,
     financing_terms: dict,
+    capex_opex_source: str = "icp",
 ) -> tuple[ProjectInputs, list[float], ResolvedConfig]:
     """Construit le `ProjectInputs` Aurora pour ce projet : revenu de base
     (`aur_cases`), overlay contractuel (`contract_overlay`), puis frais
@@ -226,10 +234,13 @@ def build_project_inputs(
     porte la config Aurora effectivement utilisee (reelle ou extrapolee, voir
     `_resolve_au_config`/`core.config_extrapolation`). L'annee de repowering
     (si active) est resolue ici - manuelle telle quelle, ou optimisee via
-    `find_best_repowering_op_year` en mode 'auto' (2026-09-24)."""
+    `find_best_repowering_op_year` en mode 'auto' (2026-09-24). `capex_opex_source`
+    ("icp" par defaut ou "aurora") : voir `aur_cases.build_project_inputs" -
+    option "Use Aurora's own CAPEX/OPEX assumptions" du Configurateur
+    (demande de l'utilisateur, 2026-10-01)."""
     resolved = _resolve_au_config(config, au_store)
     repowering_op_year, _auto_optimized = _effective_repowering_op_year(
-        config, au_store, copex_library, financing_terms
+        config, au_store, copex_library, financing_terms, capex_opex_source
     )
     base_inputs = aur_cases.build_project_inputs(
         resolved.library,
@@ -245,6 +256,7 @@ def build_project_inputs(
         manual_connection_capex_keur=config.manual_connection_capex_keur,
         distance_rte_km=config.distance_rte_km,
         land_lease_opex_keur=config.land_lease_opex_keur,
+        capex_opex_source=capex_opex_source,
     )
     operating_revenue = base_inputs.revenues_keur[1:]
     operating_turpe = base_inputs.turpe_keur[1:]
@@ -317,15 +329,20 @@ def run_portfolio(
     au_store: AuStoreLibrary,
     copex_library: CopexLibrary,
     financing_terms: dict | None = None,
+    capex_opex_source: str = "icp",
 ) -> list[PortfolioRow]:
     """Execute les 3 strategies pour chaque projet et agrege les KPI en une
     table comparable. `financing_terms` defaut a
-    `aur_cases.load_financing_terms()` si non fourni."""
+    `aur_cases.load_financing_terms()` si non fourni. `capex_opex_source`
+    ("icp" par defaut ou "aurora") : voir `aur_cases.build_project_inputs` -
+    permet de recalculer tout le portefeuille avec les hypotheses CAPEX/OPEX
+    d'Aurora plutot que les notres (option "Use Aurora's own CAPEX/OPEX
+    assumptions" du Configurateur, demande de l'utilisateur, 2026-10-01)."""
     terms = financing_terms if financing_terms is not None else aur_cases.load_financing_terms()
     rows = []
     for config in configs:
         inputs, secured_revenue, resolved = build_project_inputs(
-            config, au_store, copex_library, terms
+            config, au_store, copex_library, terms, capex_opex_source
         )
         operating_revenue = inputs.revenues_keur[1:]
         financing_kwargs = _financing_kwargs(config, secured_revenue, operating_revenue, terms)

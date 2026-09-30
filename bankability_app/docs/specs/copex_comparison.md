@@ -9,6 +9,11 @@ applique reellement) est en dessous ou au-dessus de ce que la bibliotheque Auror
 donnerait seule, poste par poste et au total. Option "Aurora COPEX Comparison" dans le
 Configurateur, avant les tableaux de resultats/export.
 
+**Export Excel uniquement depuis le 2026-10-01** (retour utilisateur : "pas la peine de faire
+apparaitre tous les tableaux dans la web app, juste le fichier excel d'extract me suffit") - la
+case a cocher ne fait plus qu'un bouton de telechargement (un onglet CAPEX/OPEX par projet + un
+onglet Notes), aucun tableau affiche a l'ecran. Voir `ui/configurateur_tab.py::_render_copex_comparison`.
+
 ## Difference avec la macro VBA source
 
 La macro VBA reconciliait 2 taxonomies de bucket **differentes** (les lignes CAPEX du BP dans
@@ -95,6 +100,73 @@ Execution manuelle sur HTA/HTB1/HTB2/HTB3 x 2h/4h, COD 2028, 40 MW :
   limite du fixture de test, pas d'un vrai raccordement gratuit. Sur un classeur reel avec une
   colonne HTB3 dans `COPEX_library`, le repli Aurora produirait une comparaison non-triviale.
 
+## Recalculer le portefeuille avec les hypotheses Aurora (`capex_opex_source`)
+
+Ajoute le 2026-10-01, demande de l'utilisateur : au-dela de la simple comparaison poste par poste,
+voir directement **quel TRI on obtiendrait** si on faisait confiance aux hypotheses generiques
+d'Aurora plutot qu'aux couts reels QEF (ICP). Case a cocher "Use Aurora's own CAPEX/OPEX
+assumptions" sous le tableau Hold & Operate du Configurateur - affiche un 2e tableau en dessous,
+memes projets/revenu/financement, seul le CAPEX/OPEX change de source.
+
+Implemente par un nouveau parametre `capex_opex_source: "icp" | "aurora"` (defaut `"icp"`, aucun
+changement de comportement si non precise) qui traverse toute la chaine : `aur_cases.
+build_project_inputs` -> `portfolio.build_project_inputs`/`find_best_repowering_op_year`/
+`_effective_repowering_op_year` -> `portfolio.run_portfolio`. Cote "aurora", 2 nouvelles fonctions
+miroir des fonctions ICP existantes, jamais un patch post-hoc sur un `ProjectInputs` deja construit
+(plus sur, plus facile a tester en isolation) :
+
+- `aur_cases.capex_and_opex_keur_aurora_only` - meme perimetre exact que `capex_and_opex_keur`
+  (les 2 postes challengeables individuellement, raccordement/loyer foncier, restent
+  source-independants), mais les 5+1 lignes `CAPEX_LINE_ITEMS`/`Grid connection` et les 6 lignes
+  `OPEX_LINE_ITEMS` viennent toutes de `COPEX_library` - jamais ICP. Reutilise directement les
+  memes totaux que `copex_comparison.compare_capex_opex()` calcule deja pour son tableau (verifie
+  par test qu'ils correspondent exactement).
+- `aur_cases.repowering_capex_keur_aurora_only` - pendant pour la tranche de repowering
+  (`REPOWERING_CAPEX_LINE_ITEMS` = Battery system + Inverter, Aurora seul).
+
+## Back-test contre le TRI reel Aurora (2026-10-01) : le TRI Projet doit matcher exactement
+
+Question de l'utilisateur : "pour les TRI projets on est censé avoir les mêmes [qu'Aurora]".
+Confirme dans le code : `project_irr` (`core/financial_engine.py`) est l'IRR d'un
+`net_cashflow_series` = `cfads + capex_out`, ou `cfads = revenue + opex + turpe + end_of_life` -
+**aucune hypothese de financement** (gearing, taux, mode de dette) n'y entre. Le TRI Projet est
+donc theoriquement independant du capital structure, et devrait matcher le TRI Projet reel
+d'Aurora des lors que revenu ET CAPEX/OPEX sont identiques.
+
+Back-test initial (8 cas reels, non extrapoles, `capex_opex_source="aurora"` avec le
+`COPEX_library` fixture) : ecart systematique de -1.4 a -7.2 pts vs le TRI reel rapporte par
+Aurora (pire en HTA qu'en HTB2). Root-cause identifiee : le `COPEX_library` utilise (lu depuis
+`sample_data/160926_BP_Stockage_Standalone__.xlsx`, donnees d'un BP client a une date figee)
+n'est PAS le meme millesime que le databook Aurora Q2 2026 fourni par l'utilisateur - un
+"Grid connection" different, une pente d'escalade differente sur Battery system/Fixed O&M, etc.
+Verifie en rejouant 2 cas avec les chiffres du Q2 26 : l'ecart tombe de -2.2/-7.2 pts a -0.8/-1.6
+pt - la quasi-totalite du gap venait du millesime, pas d'un defaut du moteur.
+
+### 2e base COPEX optionnelle : `copex_library_q2_2026.json`
+
+Retour de l'utilisateur (2026-10-01) : ne PAS remplacer le `COPEX_library` fixture existant (base
+par defaut de toute l'app, y compris le repli ICP) - ajouter une **option supplementaire**,
+seulement sous la case "Use Aurora's own CAPEX/OPEX assumptions" du Configurateur, pour comparer
+contre ce millesime plus recent sans rien changer ailleurs.
+
+- Asset : `config/copex_library_q2_2026.json`, extrait de l'onglet "Costs assumptions" du
+  classeur `Aurora_Q2_26_FRA_Flexible_Data_Forecast_Investment_Cases_v1.1.xlsm` (fourni par
+  l'utilisateur, hors repo) - **committe normalement** (choix explicite de l'utilisateur
+  2026-10-01, malgre l'onglet Disclaimer du classeur source ; a la difference du databook TRI/NPV
+  par cas, ce sont des couts unitaires generiques €/kW, pas des resultats de cas nommes).
+- Chargeur : `core.dev_case.load_copex_library_q2_2026()` -> `CopexLibrary` (meme dataclass que
+  le fixture). Base annee 2028 ; escalade = delta moyen (`statistics.mean`) sur toutes les
+  combinaisons tension/duree qui portent ce poste - verifie avant de moyenner que la tendance
+  est bien identique quelle que soit la tension/duree pour un meme poste (ex. Battery system
+  2h et 4h ont exactement le meme ratio 2028->2030), donc la moyenne ne lisse aucune vraie
+  divergence. "Grid connection"/"Grid charges" sont plats (memes €/kW toutes annees dans la
+  source) -> escalade nulle, verifie par test.
+- UI (`ui/configurateur_tab.py::_render_hold_and_operate`) : un `st.radio` apparait sous la case
+  a cocher, "COPEX_library (base fixture)" (defaut, comportement inchange) vs "Aurora Q2 2026
+  update (databook)". `load_library()` charge les 2 bibliotheques ; le radio choisit laquelle est
+  passee a `portfolio.run_portfolio(..., capex_opex_source="aurora")` - aucun changement cote
+  `core.aur_cases`/`core.portfolio` (le parametre `copex_library` etait deja generique).
+
 ## Questions ouvertes
 
 - **Perimetre exact du "Grid connection" d'Aurora non confirme** - l'hypothese qu'il inclut la
@@ -102,12 +174,18 @@ Execution manuelle sur HTA/HTB1/HTB2/HTB3 x 2h/4h, COD 2028, 40 MW :
   (l'ecart s'aggrave, ne se resorbe pas, voir "Verification faite"). A trancher avec l'utilisateur :
   soit Aurora sous-estime reellement ce poste, soit son "Grid connection" ne couvre en fait que le
   PTF (comme ICP) et la sous-station n'a simplement pas d'equivalent Aurora du tout.
-- **Repowering (2e tranche CAPEX) non couvert** - seul le CAPEX/OPEX initial (a la COD) l'est.
-  `icp_repowering_capex_keur` existe deja (voir `copex_icp.py`) mais n'a pas d'equivalent Aurora
-  "pur" facilement isolable dans cette premiere version - a ajouter si le besoin se confirme.
+- ~~Repowering (2e tranche CAPEX) non couvert~~ - resolu le 2026-10-01 par
+  `aur_cases.repowering_capex_keur_aurora_only` (voir section suivante), utilise par l'option
+  "Use Aurora's own CAPEX/OPEX assumptions" du Configurateur, meme si `compare_capex_opex()`
+  lui-meme (le tableau de comparaison poste par poste) ne l'inclut toujours pas explicitement.
 - **Comparaison au niveau portefeuille, pas agregee** : la table UI liste un groupe de lignes par
   projet (CAPEX puis OPEX) - pas de vue "moyenne du portefeuille" ni de tri par ampleur d'ecart.
   A envisager si le portefeuille grossit au point de rendre la table brute difficile a lire.
 - **Seuils OK/Watch/Large gap non valides par l'utilisateur** - repris par analogie avec la macro
   VBA source, jamais confirmes explicitement pour ce contexte precis (ICP vs Aurora, par opposition
   a BP reel vs Aurora).
+- **Reliquat -0.8/-1.6 pt meme avec les couts Q2 2026** (voir section back-test ci-dessus) - non
+  investigue plus loin (dans l'epaisseur du trait), plausiblement un detail fin (contingence,
+  arrondi du "Grid connection", convention de temporisation du CAPEX) plutot qu'un vrai defaut de
+  modelisation, etant donne que le TRI Projet est deja confirme independant du financement dans le
+  code.

@@ -283,3 +283,61 @@ def test_run_cod_year_sensitivity_reslices_same_calendar_curve(base_params, cope
     # Decaler le COD lit une autre annee de la MEME courbe -> revenu different chaque fois.
     irrs = [r["project_irr"] for r in rows]
     assert len({round(x, 6) for x in irrs}) == 3
+
+
+def test_load_copex_library_q2_2026_covers_all_tension_duration_keys():
+    library = dev_case.load_copex_library_q2_2026()
+    expected_keys = {
+        dev_case.voltage_duration_key(tension, duree_h)
+        for tension in ["HTA", "HTB1", "HTB2", "HTB3"]
+        for duree_h in [2, 4]
+    }
+    assert expected_keys <= set(library.capex_unit_costs.keys())
+    assert expected_keys <= set(library.opex_unit_costs.keys())
+    for label in dev_case.CAPEX_LINE_ITEMS + [dev_case.CAPEX_GRID_CONNECTION_LABEL]:
+        assert label in library.capex_escalation
+    for label in dev_case.OPEX_LINE_ITEMS:
+        assert label in library.opex_escalation
+
+
+def test_load_copex_library_q2_2026_grid_connection_does_not_escalate():
+    # Le raccordement (Grid connection) est une valeur plate dans le databook source
+    # (memes euros/kW toutes annees) - l'escalade doit donc rester nulle.
+    library = dev_case.load_copex_library_q2_2026()
+    deltas = library.capex_escalation[dev_case.CAPEX_GRID_CONNECTION_LABEL].values()
+    assert all(delta == pytest.approx(0.0, abs=1e-9) for delta in deltas)
+
+
+def test_load_copex_library_q2_2026_2030_totals_match_databook_costs_assumptions_sheet():
+    # Valeurs lues directement dans l'onglet 'Costs assumptions' du databook
+    # Aurora Q2 2026 fourni par l'utilisateur (2026-10-01) - non recopiees dans
+    # le repo, seulement verifiees ici a la decimale pres.
+    library = dev_case.load_copex_library_q2_2026()
+    for key, expected_capex_excl_grid, expected_grid, expected_opex in [
+        ("2h - HTB2", 432.70, 125.36, 22.37),
+        ("4h - HTA", 657.37, 10.2352992955043, 41.15),
+    ]:
+        capex_total = sum(
+            dev_case.escalated_unit_cost(
+                library.capex_unit_costs[key].get(label, 0.0),
+                library.capex_escalation.get(label, {}),
+                2030,
+            )
+            for label in dev_case.CAPEX_LINE_ITEMS
+        )
+        grid = dev_case.escalated_unit_cost(
+            library.capex_unit_costs[key].get(dev_case.CAPEX_GRID_CONNECTION_LABEL, 0.0),
+            library.capex_escalation.get(dev_case.CAPEX_GRID_CONNECTION_LABEL, {}),
+            2030,
+        )
+        opex_total = sum(
+            dev_case.escalated_unit_cost(
+                library.opex_unit_costs[key].get(label, 0.0),
+                library.opex_escalation.get(label, {}),
+                2030,
+            )
+            for label in dev_case.OPEX_LINE_ITEMS
+        )
+        assert capex_total == pytest.approx(expected_capex_excl_grid, abs=0.05)
+        assert grid == pytest.approx(expected_grid, abs=0.01)
+        assert opex_total == pytest.approx(expected_opex, abs=0.05)

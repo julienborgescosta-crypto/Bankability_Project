@@ -10,7 +10,6 @@ ui/configurateur_tab.py)."""
 
 from pathlib import Path
 
-import pandas as pd
 from streamlit.testing.v1 import AppTest
 
 from core import portfolio_import
@@ -203,10 +202,12 @@ def test_configurateur_bulk_import_replaces_project_list():
     assert any(b.label.startswith("Download Hold & Operate results") for b in at.download_button)
 
 
-def test_configurateur_copex_comparison_checkbox_shows_table():
+def test_configurateur_copex_comparison_checkbox_shows_download_only():
     """Demande de l'utilisateur, 2026-09-30 : voir si notre CAPEX/OPEX est en
     dessous ou au-dessus des hypotheses Aurora, sur le modele d'une macro VBA
-    equivalente (voir core/copex_comparison.py)."""
+    equivalente (voir core/copex_comparison.py). Depuis le 2026-10-01, export
+    Excel uniquement, aucun tableau affiche a l'ecran (demande de
+    l'utilisateur - "juste le fichier excel d'extract me suffit")."""
     at = AppTest.from_file(APP_PATH)
     at.run(timeout=_TIMEOUT)
     at.sidebar.radio[0].set_value("Aurora Configurator (multi-project)")
@@ -217,12 +218,71 @@ def test_configurateur_copex_comparison_checkbox_shows_table():
     at.run(timeout=_TIMEOUT)
     assert not at.exception
 
+    dataframes_before = len(at.dataframe)
     next(cb for cb in at.checkbox if cb.label == "Aurora COPEX Comparison").set_value(True)
     at.run(timeout=_TIMEOUT)
     assert not at.exception
-    line_item_values = pd.concat(
-        [d.value["Line item"] for d in at.dataframe if "Line item" in d.value.columns]
-    )
-    assert "TOTAL CAPEX" in line_item_values.values
-    assert "TOTAL OPEX" in line_item_values.values
+    assert len(at.dataframe) == dataframes_before  # aucun tableau supplementaire a l'ecran
     assert any(b.label.startswith("Download Aurora COPEX Comparison") for b in at.download_button)
+
+
+def test_configurateur_aurora_costs_checkbox_shows_second_table():
+    """Demande de l'utilisateur, 2026-10-01 : voir le TRI avec les hypotheses
+    CAPEX/OPEX d'Aurora plutot que les notres, en 2e tableau sous le tableau
+    Hold & Operate habituel."""
+    at = AppTest.from_file(APP_PATH)
+    at.run(timeout=_TIMEOUT)
+    at.sidebar.radio[0].set_value("Aurora Configurator (multi-project)")
+    at.run(timeout=_TIMEOUT)
+
+    add_button = next(b for b in at.button if b.label == "Add the project")
+    add_button.click()
+    at.run(timeout=_TIMEOUT)
+    assert not at.exception
+
+    dataframes_before = len(at.dataframe)
+    next(
+        cb
+        for cb in at.checkbox
+        if cb.label == "Also show results with Aurora's own CAPEX/OPEX assumptions"
+    ).set_value(True)
+    at.run(timeout=_TIMEOUT)
+    assert not at.exception
+    assert len(at.dataframe) == dataframes_before + 1
+    assert any(
+        b.label.startswith("Download Hold & Operate (Aurora CAPEX-OPEX)")
+        for b in at.download_button
+    )
+
+
+def test_configurateur_aurora_costs_radio_switches_to_q2_2026_vintage():
+    """Demande de l'utilisateur, 2026-10-01 : garder COPEX_library (fixture) comme
+    base par defaut, mais offrir en plus les couts Aurora Q2 2026 (databook) sans
+    remplacer la base existante - voir core.dev_case.load_copex_library_q2_2026."""
+    at = AppTest.from_file(APP_PATH)
+    at.run(timeout=_TIMEOUT)
+    at.sidebar.radio[0].set_value("Aurora Configurator (multi-project)")
+    at.run(timeout=_TIMEOUT)
+
+    add_button = next(b for b in at.button if b.label == "Add the project")
+    add_button.click()
+    at.run(timeout=_TIMEOUT)
+    assert not at.exception
+
+    next(
+        cb
+        for cb in at.checkbox
+        if cb.label == "Also show results with Aurora's own CAPEX/OPEX assumptions"
+    ).set_value(True)
+    at.run(timeout=_TIMEOUT)
+    assert not at.exception
+    radio = next(r for r in at.radio if r.label == "Which Aurora cost assumptions?")
+    assert radio.value == "COPEX_library (base fixture)"  # defaut inchange
+
+    radio.set_value("Aurora Q2 2026 update (databook)")
+    at.run(timeout=_TIMEOUT)
+    assert not at.exception
+    assert any(
+        b.label.startswith("Download Hold & Operate (Aurora CAPEX-OPEX)")
+        for b in at.download_button
+    )

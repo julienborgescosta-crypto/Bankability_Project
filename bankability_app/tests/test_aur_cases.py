@@ -334,6 +334,91 @@ def test_repowering_capex_keur_excludes_other_capex_line_items(copex_library):
     assert 0.0 < repowering < capex
 
 
+def test_capex_and_opex_keur_aurora_only_matches_copex_comparison_totals(au_store, copex_library):
+    """`capex_and_opex_keur_aurora_only` doit reproduire exactement les
+    totaux Aurora deja calcules par `copex_comparison.compare_capex_opex`
+    (meme formule, juste restitue en (capex, opex) directement utilisable
+    par `build_project_inputs`) - option "Use Aurora's own CAPEX/OPEX
+    assumptions" du Configurateur, demande de l'utilisateur, 2026-10-01."""
+    from core import copex_comparison, copex_icp
+
+    icp_library = copex_icp.load_icp_library_cached()
+    comparison = copex_comparison.compare_capex_opex(
+        tension="HTA",
+        duree_h=2,
+        cod_year=2027,
+        power_mw=1.0,
+        icp_library=icp_library,
+        aurora_library=copex_library,
+    )
+    expected_capex = next(r.aurora_keur for r in comparison.capex_rows if r.label == "TOTAL CAPEX")
+    expected_opex = next(r.aurora_keur for r in comparison.opex_rows if r.label == "TOTAL OPEX")
+
+    capex, opex = aur_cases.capex_and_opex_keur_aurora_only(
+        tension="HTA", duree_h=2, cod_year=2027, power_mw=1.0, copex_library=copex_library
+    )
+    assert capex == pytest.approx(expected_capex)
+    assert opex == pytest.approx(expected_opex)
+
+
+def test_capex_and_opex_keur_aurora_only_differs_from_icp(au_store, copex_library):
+    capex_icp, opex_icp = aur_cases.capex_and_opex_keur(
+        tension="HTB2", duree_h=4, cod_year=2030, power_mw=10.0, copex_library=copex_library
+    )
+    capex_aurora, opex_aurora = aur_cases.capex_and_opex_keur_aurora_only(
+        tension="HTB2", duree_h=4, cod_year=2030, power_mw=10.0, copex_library=copex_library
+    )
+    assert capex_aurora != pytest.approx(capex_icp)
+    assert opex_aurora != pytest.approx(opex_icp)
+
+
+def test_repowering_capex_keur_aurora_only_uses_battery_and_inverter_line_items(copex_library):
+    expected = sum(
+        aur_cases.escalated_unit_cost(
+            copex_library.capex_unit_costs["4h - HTA"][label],
+            copex_library.capex_escalation.get(label, {}),
+            2041,
+        )
+        * 1.0
+        for label in aur_cases.REPOWERING_CAPEX_LINE_ITEMS
+    )
+    result = aur_cases.repowering_capex_keur_aurora_only(
+        tension="HTA", duree_h=4, repowering_year=2041, power_mw=1.0, copex_library=copex_library
+    )
+    assert result == pytest.approx(expected)
+
+
+def test_build_project_inputs_capex_opex_source_aurora_differs_from_icp(au_store, copex_library):
+    config = au_store.config_by_drop_key("2h HTA Classique g0")
+    inputs_icp = aur_cases.build_project_inputs(
+        au_store, config, copex_library, cod_year=2027, power_mw=10.0, operating_years=20
+    )
+    inputs_aurora = aur_cases.build_project_inputs(
+        au_store,
+        config,
+        copex_library,
+        cod_year=2027,
+        power_mw=10.0,
+        operating_years=20,
+        capex_opex_source="aurora",
+    )
+    assert inputs_aurora.capex_initial_keur != pytest.approx(inputs_icp.capex_initial_keur)
+
+
+def test_build_project_inputs_rejects_unknown_capex_opex_source(au_store, copex_library):
+    config = au_store.config_by_drop_key("2h HTA Classique g0")
+    with pytest.raises(aur_cases.AuroraConfigError):
+        aur_cases.build_project_inputs(
+            au_store,
+            config,
+            copex_library,
+            cod_year=2027,
+            power_mw=10.0,
+            operating_years=20,
+            capex_opex_source="bogus",
+        )
+
+
 def test_build_project_inputs_adds_repowering_capex_at_op_year_15(au_store, copex_library):
     config = au_store.config_by_drop_key("2h HTA Classique g0")
     inputs = aur_cases.build_project_inputs(

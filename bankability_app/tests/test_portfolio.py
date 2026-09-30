@@ -60,6 +60,34 @@ def test_build_project_inputs_extrapolates_unmodelled_combo(
     assert inputs.revenues_keur[1] > 0.0
 
 
+def test_build_project_inputs_capex_opex_source_aurora_differs_from_icp(
+    au_store, copex_library, default_financing_terms
+):
+    """Option "Use Aurora's own CAPEX/OPEX assumptions" du Configurateur
+    (demande de l'utilisateur, 2026-10-01) : voir a quoi ressemblerait le TRI
+    avec les hypotheses Aurora plutot que les notres (ICP)."""
+    config = _config(tension="HTB2", turpe_type="Soutirage")
+    inputs_icp, _, _ = portfolio.build_project_inputs(
+        config, au_store, copex_library, default_financing_terms
+    )
+    inputs_aurora, _, _ = portfolio.build_project_inputs(
+        config, au_store, copex_library, default_financing_terms, capex_opex_source="aurora"
+    )
+    assert inputs_aurora.capex_initial_keur != pytest.approx(inputs_icp.capex_initial_keur)
+
+
+def test_run_portfolio_capex_opex_source_aurora_differs_from_icp(
+    au_store, copex_library, default_financing_terms
+):
+    config = _config(tension="HTB2", turpe_type="Soutirage")
+    rows_icp = portfolio.run_portfolio([config], au_store, copex_library, default_financing_terms)
+    rows_aurora = portfolio.run_portfolio(
+        [config], au_store, copex_library, default_financing_terms, capex_opex_source="aurora"
+    )
+    assert rows_aurora[0].capex_total_keur != pytest.approx(rows_icp[0].capex_total_keur)
+    assert rows_aurora[0].project_irr != pytest.approx(rows_icp[0].project_irr)
+
+
 def test_build_project_inputs_raises_for_gabarit_with_classique(
     au_store, copex_library, default_financing_terms
 ):

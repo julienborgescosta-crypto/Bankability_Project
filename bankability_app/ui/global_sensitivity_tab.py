@@ -352,7 +352,7 @@ def render() -> None:
             "future cashflows at the final buyer's target IRR. Return = resale value − RtB "
             "price − construction CAPEX − carry cost."
         )
-    au_store, copex_library, financing_terms = load_library()
+    au_store, copex_library, _copex_library_q2_2026, financing_terms = load_library()
     controls = _render_controls(au_store)
 
     rows, skipped = _run_cached(

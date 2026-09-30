@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field, replace
+from pathlib import Path
 
 from . import degradation as degradation_module
 from . import financial_engine
@@ -120,6 +122,45 @@ class CopexLibrary:
     opex_unit_costs: dict[str, dict[str, float]]
     capex_escalation: dict[str, dict[int, float]] = field(default_factory=dict)
     opex_escalation: dict[str, dict[int, float]] = field(default_factory=dict)
+
+
+DEFAULT_COPEX_LIBRARY_Q2_2026_PATH = (
+    Path(__file__).resolve().parent.parent / "config" / "copex_library_q2_2026.json"
+)
+
+
+def load_copex_library_q2_2026(path: Path = DEFAULT_COPEX_LIBRARY_Q2_2026_PATH) -> CopexLibrary:
+    """Deuxieme jeu d'hypotheses CAPEX/OPEX Aurora, independant du `COPEX_library`
+    lu depuis `sample_data/160926_BP_Stockage_Standalone__.xlsx` (celui-la reste
+    la base par defaut - demande explicite de l'utilisateur, 2026-10-01, de ne
+    pas remplacer ses hypotheses existantes). Cette bibliotheque-ci vient du
+    databook Aurora Q2 2026 fourni par l'utilisateur (onglet 'Costs assumptions'),
+    et sert uniquement de 2e option, sous l'option 'Use Aurora's own CAPEX/OPEX
+    assumptions' du Configurateur, pour comparer contre un millesime plus recent
+    des hypotheses Aurora - voir docs/specs/copex_comparison.md, section
+    'Mise a jour Q2 2026 (2e base, optionnelle)'.
+
+    `capex_unit_costs`/`opex_unit_costs` = valeur 2028 (annee de base de la
+    table source) ; `capex_escalation`/`opex_escalation` = delta moyen (sur
+    toutes les combinaisons tension/duree qui portent ce poste) entre l'annee
+    consideree et 2028 - la table source a une tendance identique quelle que
+    soit la tension/duree pour un meme poste (verifie avant de moyenner), donc
+    cette moyenne ne lisse aucune vraie divergence."""
+    with open(path, encoding="utf-8") as handle:
+        data = json.load(handle)
+
+    def _int_keys(escalation: dict[str, dict[str, float]]) -> dict[str, dict[int, float]]:
+        return {
+            label: {int(year): delta for year, delta in by_year.items()}
+            for label, by_year in escalation.items()
+        }
+
+    return CopexLibrary(
+        capex_unit_costs=data["capex_unit_costs"],
+        opex_unit_costs=data["opex_unit_costs"],
+        capex_escalation=_int_keys(data["capex_escalation"]),
+        opex_escalation=_int_keys(data["opex_escalation"]),
+    )
 
 
 @dataclass

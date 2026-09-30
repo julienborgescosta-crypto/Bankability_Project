@@ -21,9 +21,13 @@ import yaml
 from . import copex_icp
 from .bp_parser import _normalize, load_grid
 from .dev_case import (
+    CAPEX_GRID_CONNECTION_LABEL,
+    CAPEX_LINE_ITEMS,
+    OPEX_LINE_ITEMS,
     CopexLibrary,
     DevCaseParams,
     connection_capex_keur,
+    escalated_unit_cost,
     voltage_duration_key,
 )
 from .models import ProjectInputs
@@ -672,6 +676,107 @@ def capex_and_opex_keur(
     return capex_generic_keur + connection_keur, opex_generic_keur + land_lease_opex_keur
 
 
+def capex_and_opex_keur_aurora_only(
+    *,
+    tension: str,
+    duree_h: int,
+    cod_year: int,
+    power_mw: float,
+    copex_library: CopexLibrary,
+    connection_capex_mode: str = "library",
+    manual_connection_capex_keur: float = 0.0,
+    distance_rte_km: float = 0.0,
+    land_lease_opex_keur: float = 0.0,
+) -> tuple[float, float]:
+    """CAPEX/OPEX total avec les hypotheses Aurora `COPEX_library` SEULES
+    (jamais ICP) - option "Use Aurora's own CAPEX/OPEX assumptions" du
+    Configurateur (demande de l'utilisateur, 2026-10-01) : voir a quoi
+    ressemblerait le TRI si on faisait confiance a l'hypothese generique
+    d'Aurora plutot qu'aux couts reels QEF (ICP) - le meme calcul que
+    `core/copex_comparison.py` fait deja pour construire son tableau de
+    comparaison, mais restitue ici sous la forme (capex, opex) directement
+    utilisable par `build_project_inputs`, avec le meme perimetre exact que
+    `capex_and_opex_keur` (les 2 memes postes challengeables
+    individuellement - raccordement/loyer foncier - restent source-independants,
+    ce sont des valeurs/formules saisies directement, pas une hypothese
+    Aurora vs ICP)."""
+    key = voltage_duration_key(tension, duree_h)
+    if key not in copex_library.capex_unit_costs or key not in copex_library.opex_unit_costs:
+        raise AuroraConfigError(
+            f"No CAPEX/OPEX data in COPEX_library for '{key}' "
+            f"(available voltages: {sorted({k.split(' - ')[1] for k in copex_library.capex_unit_costs})})."
+        )
+
+    capex_unit_costs = copex_library.capex_unit_costs.get(key, {})
+    capex_keur = sum(
+        escalated_unit_cost(
+            capex_unit_costs.get(label, 0.0),
+            copex_library.capex_escalation.get(label, {}),
+            cod_year,
+        )
+        * power_mw
+        for label in CAPEX_LINE_ITEMS
+    )
+    if connection_capex_mode == "library":
+        connection_keur = (
+            escalated_unit_cost(
+                capex_unit_costs.get(CAPEX_GRID_CONNECTION_LABEL, 0.0),
+                copex_library.capex_escalation.get(CAPEX_GRID_CONNECTION_LABEL, {}),
+                cod_year,
+            )
+            * power_mw
+        )
+    else:
+        params = DevCaseParams(
+            cod_year=cod_year,
+            power_mw=power_mw,
+            duration_h=duree_h,
+            connection_type="",
+            voltage_class_override=tension,
+            connection_capex_mode=connection_capex_mode,
+            manual_connection_capex_keur=manual_connection_capex_keur,
+            distance_rte_km=distance_rte_km,
+        )
+        connection_keur = connection_capex_keur(params, copex_library)
+
+    opex_unit_costs = copex_library.opex_unit_costs.get(key, {})
+    opex_keur = sum(
+        escalated_unit_cost(
+            opex_unit_costs.get(label, 0.0), copex_library.opex_escalation.get(label, {}), cod_year
+        )
+        * power_mw
+        for label in OPEX_LINE_ITEMS
+    )
+
+    return capex_keur + connection_keur, opex_keur + land_lease_opex_keur
+
+
+def repowering_capex_keur_aurora_only(
+    *,
+    tension: str,
+    duree_h: int,
+    repowering_year: int,
+    power_mw: float,
+    copex_library: CopexLibrary,
+) -> float:
+    """Cout de repowering avec les hypotheses Aurora SEULES (Battery system +
+    Inverter, `REPOWERING_CAPEX_LINE_ITEMS`) - pendant de
+    `capex_and_opex_keur_aurora_only` pour la tranche de repowering, jamais
+    ICP (contrairement a `repowering_capex_keur`, qui suit ICP par coherence
+    avec un CAPEX initial ICP)."""
+    key = voltage_duration_key(tension, duree_h)
+    unit_costs = copex_library.capex_unit_costs.get(key, {})
+    return sum(
+        escalated_unit_cost(
+            unit_costs.get(label, 0.0),
+            copex_library.capex_escalation.get(label, {}),
+            repowering_year,
+        )
+        * power_mw
+        for label in REPOWERING_CAPEX_LINE_ITEMS
+    )
+
+
 def repowering_capex_keur(
     *,
     tension: str,
@@ -718,6 +823,7 @@ def build_project_inputs(
     manual_connection_capex_keur: float = 0.0,
     distance_rte_km: float = 0.0,
     land_lease_opex_keur: float = 0.0,
+    capex_opex_source: str = "icp",
 ) -> ProjectInputs:
     """Construit un `ProjectInputs` pour une config Aurora - meme forme que
     `dev_case.build_project_inputs`, utilisable tel quel par
@@ -727,7 +833,13 @@ def build_project_inputs(
     challengeables individuellement. `repowering_op_year_override` : voir
     `revenue_and_turpe_series`/`core/portfolio.py` `find_best_repowering_op_year`
     (demande de l'utilisateur, 2026-09-24 - choisir/optimiser l'annee de
-    repowering plutot que la subir figee a 15)."""
+    repowering plutot que la subir figee a 15). `capex_opex_source` :
+    `"icp"` (defaut, couts reels QEF + repli Aurora, voir `capex_and_opex_keur`)
+    ou `"aurora"` (hypotheses Aurora `COPEX_library` seules, voir
+    `capex_and_opex_keur_aurora_only` - option "Use Aurora's own CAPEX/OPEX
+    assumptions" du Configurateur, demande de l'utilisateur, 2026-10-01, pour
+    voir a quoi ressemblerait le TRI avec les hypotheses Aurora plutot que
+    les notres)."""
     effective_repowering_op_year = (
         repowering_op_year_override
         if repowering_op_year_override is not None
@@ -746,7 +858,14 @@ def build_project_inputs(
         fees = aggregator_fee_series(revenue_series, turpe_series, power_mw, aggregator_fee)
         revenue_series = [r + f for r, f in zip(revenue_series, fees, strict=True)]
 
-    capex_initial, opex_year1 = capex_and_opex_keur(
+    if capex_opex_source not in ("icp", "aurora"):
+        raise AuroraConfigError(
+            f"Unknown capex_opex_source: '{capex_opex_source}' (expected 'icp' or 'aurora')."
+        )
+    capex_opex_fn = (
+        capex_and_opex_keur_aurora_only if capex_opex_source == "aurora" else capex_and_opex_keur
+    )
+    capex_initial, opex_year1 = capex_opex_fn(
         tension=config.tension,
         duree_h=config.duree_h,
         cod_year=cod_year,
@@ -773,7 +892,12 @@ def build_project_inputs(
         # l'op-year N est a l'index N (pas N-1) - voir revenue_and_turpe_series.
         repowering_index = effective_repowering_op_year
         repowering_calendar_year = calendar_years[effective_repowering_op_year - 1]
-        capex_repowering = repowering_capex_keur(
+        repowering_fn = (
+            repowering_capex_keur_aurora_only
+            if capex_opex_source == "aurora"
+            else repowering_capex_keur
+        )
+        capex_repowering = repowering_fn(
             tension=config.tension,
             duree_h=config.duree_h,
             repowering_year=repowering_calendar_year,
