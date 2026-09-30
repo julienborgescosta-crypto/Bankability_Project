@@ -305,6 +305,7 @@ Modules (`core/`) :
 | `dev_case.py` / `dev_case_parser.py` | Construit un `ProjectInputs` depuis des hypotheses de developpement (COD, puissance, duree, segment, TURPE) + bibliotheques CAPEX/revenu (`COPEX_library`/`CF Aurora`) | extension hors 6 couches, en amont |
 | `copex_icp.py` | CAPEX/OPEX BESS depuis `config/copex_icp.xlsx` (couts unitaires QEF reels, "ICP", mis a jour mensuellement) - source primaire pour le moteur Aurora v2, Aurora `COPEX_library` en repli pour les postes non couverts (Development, Insurance/Grid charges/Land lease/Accise/Other, HTB3) | 5bis (CAPEX/OPEX du moteur Aurora v2) |
 | `portfolio_import.py` | Import/export en masse du portefeuille Configurateur via Excel (`ProjectConfig` par ligne, template telechargeable) - l'app n'ayant pas de memoire entre sessions, voir `docs/specs/portfolio_import.md` | extension hors 6 couches (Configurateur Aurora v2) |
+| `copex_comparison.py` | Compare notre CAPEX/OPEX (ICP + repli Aurora, applique par le moteur) a la bibliotheque Aurora `COPEX_library` seule, poste par poste et au total (option "Aurora COPEX Comparison" du Configurateur) - voir `docs/specs/copex_comparison.md` | extension hors 6 couches (Configurateur Aurora v2) |
 
 Configuration (`config/`) :
 

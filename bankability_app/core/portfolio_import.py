@@ -32,6 +32,18 @@ _CONTRACT_LABEL_TO_KIND = {
     "tolling": contract_overlay.TOLLING,
 }
 
+# Valeurs litterales attendues (pas de mapping "libelle humain -> code" comme
+# pour _CONTRACT_LABEL_TO_KIND : ce sont les memes 3 modes que le selectbox du
+# Configurateur, voir ui/configurateur_tab.py). Une valeur hors de cet
+# ensemble doit lever une erreur claire ici, pas planter loin plus tard dans
+# dev_case.connection_capex_keur avec un ValueError generique illisible en
+# prod (trouve le 2026-09-29 : un utilisateur avait tape "distance" au lieu
+# de "distance_rte" dans son fichier, l'app a plante sur Streamlit Cloud avec
+# une trace opaque - "zero zero silencieux" s'applique aussi aux erreurs, pas
+# seulement aux valeurs manquantes).
+_VALID_CONNECTION_CAPEX_MODES = {"library", "manual", "distance_rte"}
+_VALID_REPOWERING_YEAR_MODES = {"auto", "manual"}
+
 # (libelle de colonne, description, valeurs attendues) - sert a la fois de
 # feuille "Legend" du template et de documentation inline ici. Ordre =
 # ordre des colonnes generees.
@@ -180,10 +192,21 @@ def parse_portfolio_excel(file_or_path) -> list[ProjectConfig]:
             repowering_year_mode = (
                 "manual" if _is_blank(repowering_year_mode) else _normalize(repowering_year_mode)
             )
+            if repowering_year_mode not in _VALID_REPOWERING_YEAR_MODES:
+                raise ValueError(
+                    f"'Repowering year mode' must be one of: "
+                    f"{', '.join(sorted(_VALID_REPOWERING_YEAR_MODES))} - got '{repowering_year_mode}'."
+                )
             connection_capex_mode = _cell(row, index, "Grid connection CAPEX mode")
             connection_capex_mode = (
                 "library" if _is_blank(connection_capex_mode) else _normalize(connection_capex_mode)
             )
+            if connection_capex_mode not in _VALID_CONNECTION_CAPEX_MODES:
+                raise ValueError(
+                    f"'Grid connection CAPEX mode' must be one of: "
+                    f"{', '.join(sorted(_VALID_CONNECTION_CAPEX_MODES))} - got "
+                    f"'{connection_capex_mode}'."
+                )
 
             configs.append(
                 ProjectConfig(

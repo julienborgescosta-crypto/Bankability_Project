@@ -119,6 +119,50 @@ def test_blank_trailing_rows_are_skipped(tmp_path):
     assert len(configs) == 1
 
 
+def test_invalid_connection_capex_mode_raises_clear_error(tmp_path):
+    """Reproduit le bug signale par l'utilisateur le 2026-09-29 : 'distance'
+    au lieu de 'distance_rte' plantait tres loin dans dev_case.connection_capex_keur
+    avec une erreur generique illisible en prod - doit maintenant etre rejete
+    des l'import, avec un message clair."""
+    path = tmp_path / "bad_mode.xlsx"
+    _write_projects_sheet(
+        path,
+        [
+            "Project name",
+            "BESS duration (h)",
+            "Voltage (Tension)",
+            "TURPE type",
+            "Gabarit",
+            "COD year",
+            "Power (MW)",
+            "Grid connection CAPEX mode",
+        ],
+        [["Kerlo", 2, "HTB2", "Classique", "No", 2028, 65, "distance"]],
+    )
+    with pytest.raises(ValueError, match="Grid connection CAPEX mode.*library, manual"):
+        portfolio_import.parse_portfolio_excel(path)
+
+
+def test_invalid_repowering_year_mode_raises_clear_error(tmp_path):
+    path = tmp_path / "bad_repowering_mode.xlsx"
+    _write_projects_sheet(
+        path,
+        [
+            "Project name",
+            "BESS duration (h)",
+            "Voltage (Tension)",
+            "TURPE type",
+            "Gabarit",
+            "COD year",
+            "Power (MW)",
+            "Repowering year mode",
+        ],
+        [["Site A", 2, "HTA", "Classique", "No", 2028, 10, "automatic"]],
+    )
+    with pytest.raises(ValueError, match="Repowering year mode.*auto, manual"):
+        portfolio_import.parse_portfolio_excel(path)
+
+
 def test_no_project_rows_raises_clear_error(tmp_path):
     path = tmp_path / "empty.xlsx"
     _write_projects_sheet(

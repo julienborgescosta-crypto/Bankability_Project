@@ -200,3 +200,26 @@ def test_configurateur_bulk_import_replaces_project_list():
     assert "Portfolio projects (2)" in "".join(h.value for h in at.subheader)
     assert "Portfolio results" in "".join(h.value for h in at.subheader)
     assert any(b.label.startswith("Download Hold & Operate results") for b in at.download_button)
+
+
+def test_configurateur_copex_comparison_checkbox_shows_table():
+    """Demande de l'utilisateur, 2026-09-30 : voir si notre CAPEX/OPEX est en
+    dessous ou au-dessus des hypotheses Aurora, sur le modele d'une macro VBA
+    equivalente (voir core/copex_comparison.py)."""
+    at = AppTest.from_file(APP_PATH)
+    at.run(timeout=_TIMEOUT)
+    at.sidebar.radio[0].set_value("Aurora Configurator (multi-project)")
+    at.run(timeout=_TIMEOUT)
+
+    add_button = next(b for b in at.button if b.label == "Add the project")
+    add_button.click()
+    at.run(timeout=_TIMEOUT)
+    assert not at.exception
+
+    next(cb for cb in at.checkbox if cb.label == "Aurora COPEX Comparison").set_value(True)
+    at.run(timeout=_TIMEOUT)
+    assert not at.exception
+    df = next(d.value for d in at.dataframe if "Line item" in d.value.columns)
+    assert "TOTAL CAPEX" in df["Line item"].values
+    assert "TOTAL OPEX" in df["Line item"].values
+    assert any(b.label.startswith("Download Aurora COPEX Comparison") for b in at.download_button)

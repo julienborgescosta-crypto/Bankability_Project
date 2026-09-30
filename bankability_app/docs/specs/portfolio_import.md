@@ -61,8 +61,20 @@ session pour repeupler `portfolio_projects` d'un coup.
 
 ## Questions ouvertes
 
-- Pas de validation amont des valeurs de colonnes "libres" (tension/type TURPE inconnus, etc.) au
-  moment du parsing - les erreurs de ce type remontent seulement au calcul du portefeuille
-  (`aur_cases.AuroraConfigError`), comme pour la saisie manuelle. Acceptable pour l'instant (memes
-  messages d'erreur qu'ailleurs dans l'app), a revisiter si les retours utilisateur montrent que
-  situer l'erreur a la ligne Excel plutot qu'au calcul aiderait.
+- Pas de validation amont des valeurs de colonnes "libres" texte (tension/type TURPE inconnus,
+  etc.) au moment du parsing - les erreurs de ce type remontent seulement au calcul du portefeuille
+  (`aur_cases.AuroraConfigError`)/l'extrapolation (`config_extrapolation.resolve_config`), comme
+  pour la saisie manuelle. Acceptable pour l'instant (memes messages d'erreur qu'ailleurs dans
+  l'app, et `resolve_config` ne bloque plus que les combinaisons sans sens business), a revisiter
+  si les retours utilisateur montrent que situer l'erreur a la ligne Excel plutot qu'au calcul
+  aiderait.
+- **`connection_capex_mode`/`repowering_year_mode` valides explicitement, eux** (corrige le
+  2026-09-29, suite a un plantage en production) : contrairement aux colonnes ci-dessus, ce sont
+  des enums fermes (pas un espace de configs Aurora) - une valeur hors de
+  `_VALID_CONNECTION_CAPEX_MODES`/`_VALID_REPOWERING_YEAR_MODES` levait auparavant une simple
+  `_normalize()` sans verification, laissant passer n'importe quelle chaine jusqu'a
+  `dev_case.connection_capex_keur()`, qui plante avec un `ValueError` generique tres loin de la
+  ligne Excel fautive - illisible sur Streamlit Cloud (message d'erreur redacte "pour eviter les
+  fuites de donnees"). Cas reel observe : un utilisateur avait tape `"distance"` au lieu de
+  `"distance_rte"` sur 3 lignes de son fichier. Desormais rejete des l'import avec le numero de
+  ligne et les valeurs valides attendues.

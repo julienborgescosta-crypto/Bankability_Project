@@ -30,6 +30,7 @@ from core import (
     config_extrapolation,
     config_space,
     contract_overlay,
+    copex_comparison,
     copex_icp,
     portfolio,
     portfolio_import,
@@ -673,6 +674,67 @@ def _render_build_and_flip(rows: list[portfolio.PortfolioRow]) -> None:
     )
 
 
+def _render_copex_comparison(projects: list[portfolio.ProjectConfig], copex_library) -> None:
+    """Compare notre CAPEX/OPEX (ICP + repli Aurora, deja applique par le
+    moteur) a ce que la bibliotheque Aurora COPEX_library aurait donne
+    seule - demande de l'utilisateur, 2026-09-30, sur le modele d'une macro
+    VBA equivalente (`ModAuroraComparison`) deja utilisee sur le vrai BP
+    Excel. Voir core/copex_comparison.py, docs/specs/copex_comparison.md."""
+    if not st.checkbox("Aurora COPEX Comparison"):
+        return
+    st.caption(
+        "Is our CAPEX/OPEX (ICP + Aurora fallback, as actually applied) below or above Aurora's "
+        "own COPEX_library assumption? One row group per project, split CAPEX/OPEX."
+    )
+    icp_library = copex_icp.load_icp_library_cached()
+    rows_out: list[dict] = []
+    all_notes: list[str] = []
+    for project in projects:
+        comparison = copex_comparison.compare_capex_opex(
+            tension=project.tension,
+            duree_h=project.duree_h,
+            cod_year=project.cod_year,
+            power_mw=project.power_mw,
+            icp_library=icp_library,
+            aurora_library=copex_library,
+            connection_capex_mode=project.connection_capex_mode,
+        )
+        for section, comp_rows in (
+            ("CAPEX", comparison.capex_rows),
+            ("OPEX", comparison.opex_rows),
+        ):
+            for row in comp_rows:
+                rows_out.append(
+                    {
+                        "Project": project.name,
+                        "Section": section,
+                        "Line item": row.label,
+                        "Ours (k€)": _fmt_keur(row.ours_keur),
+                        "Aurora (k€)": _fmt_keur(row.aurora_keur),
+                        "Delta (k€)": _fmt_keur(row.delta_keur),
+                        "Delta %": (
+                            f"{row.delta_pct:+.1%}" if row.delta_pct is not None else "n/a"
+                        ),
+                        "Status": row.status,
+                    }
+                )
+        for note in comparison.notes:
+            if note not in all_notes:
+                all_notes.append(note)
+
+    df = pd.DataFrame(rows_out)
+    st.dataframe(df, use_container_width=True, hide_index=True)
+    _download_results_button(
+        df,
+        label="Aurora COPEX Comparison",
+        filename="aurora_copex_comparison.xlsx",
+        key="dl_copex_comp",
+    )
+    with st.expander("Notes"):
+        for note in all_notes:
+            st.caption(f"- {note}")
+
+
 def _render_best_configs(rows: list[portfolio.PortfolioRow]) -> None:
     st.subheader("Best configs")
     with_project_irr = [r for r in rows if r.project_irr is not None]
@@ -724,6 +786,9 @@ def _render_results(
                 st.write(f"**{r.name}** ({r.config_label}):")
                 for note in r.extrapolation_notes:
                     st.caption(f"- {note}")
+
+    _render_copex_comparison(projects, copex_library)
+    st.divider()
 
     _render_best_configs(rows)
     st.divider()
