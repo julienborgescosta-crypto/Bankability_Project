@@ -225,3 +225,44 @@ def test_gabarit_raw_factor_same_order_of_magnitude_regardless_of_duration(au_st
         au_store, duree_h=4, turpe_type="Injection"
     )
     assert factor_2h == pytest.approx(factor_4h, abs=0.05)
+
+
+def test_turpe_magnitude_scale_is_one_for_reference_tension(au_store):
+    assert config_extrapolation._turpe_magnitude_scale(au_store, duree_h=2, tension="HTB2") == 1.0
+
+
+def test_turpe_magnitude_scale_reflects_real_turpe_tariffs_by_tension(au_store):
+    """Retour utilisateur, 2026-10-01 : le TURPE (facture au kW de tarif
+    reseau) pese beaucoup plus a HTA qu'a HTB2 - verifie sur les courbes
+    Classique reelles (seules disponibles pour toutes les tensions) : HTA
+    environ 2.2x HTB2, HTB3 environ 0.57x, stable 2h/4h (docs/specs/
+    config_extrapolation.md)."""
+    scale_hta = config_extrapolation._turpe_magnitude_scale(au_store, duree_h=2, tension="HTA")
+    scale_htb3 = config_extrapolation._turpe_magnitude_scale(au_store, duree_h=2, tension="HTB3")
+    assert scale_hta > 1.5  # HTA paie beaucoup plus de TURPE que HTB2
+    assert scale_htb3 < 1.0  # HTB3 en paie beaucoup moins
+    scale_hta_4h = config_extrapolation._turpe_magnitude_scale(au_store, duree_h=4, tension="HTA")
+    assert scale_hta == pytest.approx(scale_hta_4h, abs=0.1)  # stable 2h/4h
+
+
+def test_resolve_config_scales_turpe_delta_by_target_tension_magnitude(au_store):
+    """Coeur du retour utilisateur 2026-10-01 : HTA, plus sensible au TURPE
+    que HTB2, doit tirer un gain TURPE PLUS grand (pas plus petit) du passage
+    a Injection - jamais un delta absolu copie tel quel depuis HTB2 (qui
+    sous-estimerait ce gain a HTA)."""
+    htb2_delta = config_extrapolation._turpe_type_turpe_delta(
+        au_store, duree_h=2, turpe_type="Injection"
+    )
+    resolved_hta = config_extrapolation.resolve_config(
+        au_store, duree_h=2, tension="HTA", turpe_type="Injection", gabarit=False
+    )
+    classique_hta = au_store.config_by_attributes(
+        duree_h=2, tension="HTA", turpe_type="Classique", gabarit=False
+    )
+    turpe_classique_hta = au_store.turpe_by_key[classique_hta.austore_key]
+    turpe_injection_hta = resolved_hta.library.turpe_by_key[resolved_hta.config.austore_key]
+    applied_delta = turpe_injection_hta[2027] - turpe_classique_hta[2027]
+    # Le delta effectivement applique a HTA doit etre strictement plus grand
+    # (en valeur absolue) que le delta brut mesure sur HTB2 - jamais identique
+    # (ce qui signalerait un transfert non mis a l'echelle).
+    assert abs(applied_delta) > abs(htb2_delta)

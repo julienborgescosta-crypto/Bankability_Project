@@ -33,6 +33,21 @@ trou) :
   TURPE/gabarit), seulement celle deja portee par la courbe Classique/g0 reelle
   de depart - un compromis defendable faute d'assez de points reels pour
   calibrer un effet variable dans le temps de facon fiable.
+
+  **Le delta TURPE est remis a l'echelle de la tension cible, pas transfere
+  brut** - corrige le 2026-10-01, suite a un retour utilisateur (heatmap
+  "Aurora Global Analysis" montrant le TRI HTA Injection chuter sous celui de
+  HTB2 des 2029, alors qu'HTA - bien plus sensible au TURPE que HTB2 - devrait
+  au contraire tirer un gain TURPE plus grand du passage a Injection/gabarit,
+  pas plus petit). Le TURPE est facture au kW de tarif reseau, pas au MWh : sa
+  magnitude varie fortement et systematiquement d'une tension a l'autre
+  (verifie sur les 4 courbes Classique reelles - HTA environ 2.2x HTB2, HTB1
+  environ 1.6x, HTB3 environ 0.57x, stable 2h/4h). Transferer le delta absolu
+  mesure sur HTB2 sans le mettre a l'echelle de cette magnitude sous-estimait
+  donc le gain TURPE a HTA/HTB1 (et le surestimait a HTB3) - voir
+  `_turpe_magnitude_scale`. Le facteur RAW (multiplicatif, deja tension-
+  independant par construction) n'est pas concerne, seul le delta TURPE
+  (additif) l'est.
 - **Effet ORO (limitation non-firm 3000h/an)** : meme principe (ratio/delta
   moyen, pas par annee), calibre sur les 4 cas HTB2 ORO reels (injection/
   soutirage x 2h/4h) et transfere aux autres combinaisons injection/soutirage.
@@ -155,6 +170,36 @@ def _turpe_type_turpe_delta(au_store: AuStoreLibrary, *, duree_h: int, turpe_typ
     return _mean_delta(
         au_store.turpe_by_key[target.austore_key], au_store.turpe_by_key[classique.austore_key]
     )
+
+
+def _turpe_magnitude_scale(au_store: AuStoreLibrary, *, duree_h: int, tension: str) -> float:
+    """Ratio |TURPE Classique(tension)| / |TURPE Classique(HTB2)|, moyenne sur
+    les annees communes (1.0 si `tension` est deja HTB2 - rien a mettre a
+    l'echelle). Le TURPE est facture au kW (tarif reseau), pas au MWh : sa
+    magnitude varie fortement et systematiquement d'une tension a l'autre
+    (verifie sur les courbes reelles Classique - 2026-10-01 : HTA environ
+    2.2x HTB2, HTB1 environ 1.6x, HTB3 environ 0.57x, stable 2h/4h) - un
+    delta TURPE absolu mesure sur HTB2 (type TURPE ou gabarit) transfere tel
+    quel a une autre tension sous-estime (HTA, HTB1) ou surestime (HTB3) le
+    gain/cout reel, puisqu'il ignore ce facteur d'echelle propre a la
+    tension. Voir docstring du module, section 'gain TURPE' (retour
+    utilisateur 2026-10-01)."""
+    if tension == REFERENCE_TENSION:
+        return 1.0
+    target_classique = au_store.config_by_attributes(
+        duree_h=duree_h, tension=tension, turpe_type="Classique", gabarit=False
+    )
+    reference_classique = au_store.config_by_attributes(
+        duree_h=duree_h, tension=REFERENCE_TENSION, turpe_type="Classique", gabarit=False
+    )
+    target_turpe = au_store.turpe_by_key[target_classique.austore_key]
+    reference_turpe = au_store.turpe_by_key[reference_classique.austore_key]
+    ratios = [
+        abs(target_turpe[y]) / abs(reference_turpe[y])
+        for y in reference_turpe
+        if y in target_turpe and reference_turpe[y] and target_turpe[y]
+    ]
+    return sum(ratios) / len(ratios)
 
 
 def _gabarit_raw_factor(au_store: AuStoreLibrary, *, duree_h: int, turpe_type: str) -> float:
@@ -281,26 +326,34 @@ def resolve_config(
         raw = dict(au_store.raw_by_key[anchor.austore_key])
         turpe = dict(au_store.turpe_by_key[anchor.austore_key])
         valide_cod = anchor.valide_cod
+        turpe_scale = _turpe_magnitude_scale(au_store, duree_h=duree_h, tension=tension)
         if turpe_type != "Classique":
             factor = _turpe_type_raw_factor(au_store, duree_h=duree_h, turpe_type=turpe_type)
             delta = _turpe_type_turpe_delta(au_store, duree_h=duree_h, turpe_type=turpe_type)
             raw = {y: raw[y] * factor for y in raw}
-            turpe = {y: turpe[y] + delta for y in turpe}
+            turpe = {y: turpe[y] + delta * turpe_scale for y in turpe}
             notes.append(
                 f"TURPE type {turpe_type} not modeled by Aurora for {tension} {duree_h}h - "
-                f"estimated by transferring the average RAW/TURPE ratio/delta observed between "
-                f"{turpe_type} and Classique on {REFERENCE_TENSION} (the only voltage with "
-                f"this real combination) to the real Classique curve for {tension}."
+                f"estimated by transferring the average RAW ratio and the average TURPE delta "
+                f"observed between {turpe_type} and Classique on {REFERENCE_TENSION} (the only "
+                f"voltage with this real combination) to the real Classique curve for {tension} "
+                f"- the TURPE delta is rescaled by {turpe_scale:.2f}x, the ratio between "
+                f"{tension}'s and {REFERENCE_TENSION}'s own TURPE magnitude (TURPE is billed per "
+                f"kW of network tariff, not per MWh, so its scale differs sharply by voltage - "
+                f"transferring HTB2's absolute delta unscaled understates the TURPE benefit at "
+                f"higher-TURPE tensions like HTA)."
             )
         if gabarit:
             gfactor = _gabarit_raw_factor(au_store, duree_h=duree_h, turpe_type=turpe_type)
             gdelta = _gabarit_turpe_delta(au_store, duree_h=duree_h, turpe_type=turpe_type)
             raw = {y: raw[y] * gfactor for y in raw}
-            turpe = {y: turpe[y] + gdelta for y in turpe}
+            turpe = {y: turpe[y] + gdelta * turpe_scale for y in turpe}
             notes.append(
                 f"Gabarit not modeled by Aurora for {tension} {turpe_type} {duree_h}h - "
-                f"estimated by transferring the average gabarit effect observed on "
-                f"{REFERENCE_TENSION} {turpe_type} {duree_h}h."
+                f"estimated by transferring the average gabarit RAW ratio and TURPE delta "
+                f"observed on {REFERENCE_TENSION} {turpe_type} {duree_h}h, the TURPE delta "
+                f"rescaled by {turpe_scale:.2f}x (same TURPE magnitude scaling as the TURPE "
+                f"type transfer above)."
             )
 
     # --- Etape 2 : ORO (limitation 3000h/an) ---
@@ -329,19 +382,25 @@ def resolve_config(
             extrapolated = True
             oro_factor = _oro_raw_factor(au_store, duree_h=duree_h, turpe_type=turpe_type)
             oro_delta = _oro_turpe_delta(au_store, duree_h=duree_h, turpe_type=turpe_type)
+            oro_turpe_scale = _turpe_magnitude_scale(au_store, duree_h=duree_h, tension=tension)
             # Ratio/delta moyens (pas par annee, voir docstring du module) -
             # une config ORO reelle verrouillee sur un seul COD (ex. "4h
             # HTB2 Soutirage ORO", 0 en dehors de 2030-2059) ne contamine
             # donc plus la courbe extrapolee d'un artefact annee par annee
             # (bug signale par l'utilisateur, 2026-09-24, corrige une 1ere
             # fois par plafonnement puis par cette moyenne le 2026-10-01).
+            # Le delta TURPE est lui aussi remis a l'echelle de la tension
+            # cible (meme raison que le transfert type TURPE/gabarit -
+            # 2026-10-01).
             raw = {y: raw[y] * oro_factor for y in raw}
-            turpe = {y: turpe[y] + oro_delta for y in turpe}
+            turpe = {y: turpe[y] + oro_delta * oro_turpe_scale for y in turpe}
             notes.append(
                 f"ORO not modeled by Aurora for {tension} {turpe_type} {duree_h}h"
                 f"{' gabarit' if gabarit else ''} - estimated by transferring the average ORO "
-                f"vs standard RAW/TURPE ratio/delta observed on {REFERENCE_TENSION} {turpe_type} "
-                f"{duree_h}h (the only real ORO combination for this duration/type)."
+                f"vs standard RAW ratio and TURPE delta observed on {REFERENCE_TENSION} "
+                f"{turpe_type} {duree_h}h (the only real ORO combination for this "
+                f"duration/type) - the TURPE delta rescaled by {oro_turpe_scale:.2f}x, same "
+                f"TURPE magnitude scaling as the TURPE type/gabarit transfer above."
             )
 
         target_hours = (

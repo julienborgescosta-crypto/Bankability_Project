@@ -29,15 +29,56 @@ retournées à côté.
   Classique/Injection/Soutirage × gabarit 0/1 en intégralité) :
   - Effet type TURPE : `RAW_cible = RAW_cible(Classique) × [RAW_HTB2(type) / RAW_HTB2(Classique)]`
     (multiplicatif) ; `TURPE_cible = TURPE_cible(Classique) + [TURPE_HTB2(type) −
-    TURPE_HTB2(Classique)]` (additif — un ratio n'a pas de sens sur du TURPE qui peut changer de
-    signe entre Classique et Injection).
+    TURPE_HTB2(Classique)] × echelle_TURPE(cible)` (additif — un ratio direct n'a pas de sens sur
+    du TURPE qui peut changer de signe entre Classique et Injection, voir "Mise à l'échelle du
+    delta TURPE" ci-dessous pour `echelle_TURPE`).
   - Effet gabarit : même principe, `RAW_HTB2(type, g1) / RAW_HTB2(type, g0)` et
-    `TURPE_HTB2(type, g1) − TURPE_HTB2(type, g0)`.
+    `[TURPE_HTB2(type, g1) − TURPE_HTB2(type, g0)] × echelle_TURPE(cible)`.
   - Les deux se combinent (multiplication/addition successive) quand type ET gabarit manquent tous
     les deux pour la tension cible.
-  - Hypothèse non vérifiée au-delà de HTB2 : que l'effet d'un changement de type TURPE ou de
-    gabarit est le même quelle que soit la tension. Chaque extrapolation porte une note explicite
-    le rappelant.
+  - Hypothèse non vérifiée au-delà de HTB2 : que l'effet RELATIF (une fois mis à l'échelle de la
+    tension cible) d'un changement de type TURPE ou de gabarit est le même quelle que soit la
+    tension. Chaque extrapolation porte une note explicite le rappelant.
+
+### Mise à l'échelle du delta TURPE (`_turpe_magnitude_scale`, 2026-10-01)
+
+Retour utilisateur : la heatmap "Aurora Global Analysis" montrait le TRI HTA (TURPE Injection)
+passer sous celui de HTB2 dès 2029, alors que HTA — beaucoup plus sensible au TURPE que HTB2 —
+devrait au contraire tirer un gain TURPE plus GRAND du passage à Injection/gabarit, pas plus
+petit ("en HTB2 le TRI est meilleur en gabarit grâce au TURPE, donc en HTA vu que le TURPE pèse
+plus ça devrait avoir un effet d'autant plus grand").
+
+Root cause : le delta TURPE (`TURPE_HTB2(type) − TURPE_HTB2(Classique)`, un nombre absolu en k€
+normalisé 1 MW) était transféré tel quel à la tension cible, sans tenir compte du fait que le
+TURPE est facturé au **kW de tarif réseau** (pas au MWh) — sa magnitude varie fortement et
+systématiquement d'une tension à l'autre. Vérifié sur les 4 courbes Classique réelles (seules
+disponibles pour toutes les tensions) :
+
+| Tension | \|TURPE Classique\| / \|TURPE Classique HTB2\| (2h, moyenne 2027-2031) |
+|---|---|
+| HTA | ≈ 2.2x |
+| HTB1 | ≈ 1.6x |
+| HTB2 | 1.0x (référence) |
+| HTB3 | ≈ 0.57x |
+
+(stable entre 2h et 4h, à ±0.1 près). Un delta HTB2 transféré sans cette mise à l'échelle
+sous-estimait donc le gain TURPE à HTA/HTB1 (et le surestimait à HTB3).
+
+`_turpe_magnitude_scale(au_store, duree_h, tension)` retourne ce ratio (1.0 si `tension ==
+"HTB2"`) ; chaque delta TURPE transféré (type TURPE, gabarit, ORO) est multiplié par ce facteur
+avant d'être ajouté à la courbe Classique réelle de la tension cible. Exemple concret (2h,
+Injection sans gabarit, COD2027, k€ normalisé 1 MW) :
+
+| | avant le fix | après le fix |
+|---|---|---|
+| Delta HTB2 brut | +11.7 | +11.7 |
+| Échelle HTA | (non appliquée) | ×2.2 |
+| TURPE HTA Classique | -22.2 | -22.2 |
+| TURPE HTA Injection résultant | **-10.5** (reste un coût) | **+5.99** (devient un vrai crédit) |
+
+Le facteur RAW (multiplicatif, déjà indépendant de la tension par construction — validé
+2026-10-01, voir "Benchmark de référence") n'est pas concerné, seul le delta TURPE (additif)
+l'était.
   - **Un seul ratio/delta MOYEN (pas un par année)** — corrigé le 2026-10-01, suite à un retour
     utilisateur ("le TRI extrapolé doit rester du même ordre de grandeur que celui d'Aurora") : la
     version précédente calculait un ratio par année, ce qui propageait fidèlement les années où la
