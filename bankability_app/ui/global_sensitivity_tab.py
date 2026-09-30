@@ -47,7 +47,7 @@ def _run_cached(
     _copex_library,
     _financing_terms: dict,
     operating_years: int,
-    power_mw: float,
+    power_mw_by_tension: tuple[tuple[str, float], ...],
     contract_kinds: tuple[str, ...],
     floor_tolling_price: float,
     floor_tolling_duration: int,
@@ -58,7 +58,7 @@ def _run_cached(
         _copex_library,
         _financing_terms,
         operating_years=operating_years,
-        power_mw=power_mw,
+        power_mw_by_tension=dict(power_mw_by_tension),
         contract_kinds=list(contract_kinds),
         floor_tolling_price_keur_per_mw_per_year=floor_tolling_price,
         floor_tolling_duration_years=floor_tolling_duration,
@@ -94,13 +94,23 @@ def _render_controls(au_store: aur_cases.AuStoreLibrary) -> dict:
         operating_years = st.number_input(
             "Reference operating life (years)", value=20, min_value=1, step=1
         )
-        power_mw = st.number_input(
-            "Reference power (MW)",
-            value=10.0,
-            min_value=0.1,
-            help="Fixed to compare configs at equal size — the k€ metrics (NPV, margin, "
-            "return) depend on it, IRRs don't.",
+        st.caption("Reference power (MW), one per voltage class:")
+        st.caption(
+            "A single power for every voltage class produces cases with no real connection "
+            "equivalent (e.g. a 50 MW HTA case - HTA is an Enedis distribution connection, "
+            "capped well below what an RTE HTB1/HTB2 connection supports). It also matters "
+            "more than it should: the default CAPEX source (ICP) has flat-fee components "
+            "(DSO connection, civil works) that make IRR swing heavily at unrealistic sizes - "
+            "not just an HTA quirk. Defaults below are indicative connection-capacity "
+            "gauges, **not Aurora-confirmed** — adjust freely (docs/specs/global_sensitivity.md)."
         )
+        power_mw_by_tension = {}
+        for tension, default in global_sensitivity.DEFAULT_POWER_MW_BY_TENSION.items():
+            if tension == "HTB3":
+                continue  # jamais utilise (HTB3 exclu, pas de donnees CAPEX/OPEX)
+            power_mw_by_tension[tension] = st.number_input(
+                f"{tension} (MW)", value=default, min_value=0.1, key=f"power_mw_{tension}"
+            )
     with c2:
         contract_kinds = st.multiselect(
             "Contract structures to sweep",
@@ -131,7 +141,9 @@ def _render_controls(au_store: aur_cases.AuStoreLibrary) -> dict:
         )
     return {
         "operating_years": int(operating_years),
-        "power_mw": float(power_mw),
+        "power_mw_by_tension": tuple(
+            sorted((t, float(mw)) for t, mw in power_mw_by_tension.items())
+        ),
         "contract_kinds": tuple(contract_kinds) or (contract_overlay.FULL_MERCHANT,),
         "floor_tolling_price": float(floor_tolling_price),
         "floor_tolling_duration": int(floor_tolling_duration),
@@ -360,7 +372,7 @@ def render() -> None:
         copex_library,
         financing_terms,
         controls["operating_years"],
-        controls["power_mw"],
+        controls["power_mw_by_tension"],
         controls["contract_kinds"],
         controls["floor_tolling_price"],
         controls["floor_tolling_duration"],

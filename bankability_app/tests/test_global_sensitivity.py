@@ -1,3 +1,5 @@
+import pytest
+
 from core import contract_overlay, global_sensitivity
 
 
@@ -109,3 +111,45 @@ def test_run_global_sensitivity_oro_row_has_lower_revenue_than_standard_sibling(
         and r.cod_year == oro_row.cod_year
     )
     assert oro_row.row.revenue_total_keur < standard_row.row.revenue_total_keur
+
+
+def test_enumerate_configs_uses_a_different_power_per_tension(au_store, copex_library):
+    """Retour utilisateur, 2026-10-01 : une seule puissance pour toutes les
+    tensions produit des cas incoherents (ex. 50 MW en HTA, un raccordement
+    distribution qui ne supporte pas ce calibre) - chaque tension doit garder
+    sa propre puissance de reference."""
+    entries = global_sensitivity.enumerate_configs(
+        au_store,
+        copex_library,
+        contract_kinds=[contract_overlay.FULL_MERCHANT],
+        power_mw_by_tension={"HTA": 7.0, "HTB1": 30.0, "HTB2": 60.0, "HTB3": 60.0},
+    )
+    power_by_tension = {
+        project_config.tension: project_config.power_mw for _, _, project_config in entries
+    }
+    assert power_by_tension["HTA"] == 7.0
+    assert power_by_tension["HTB1"] == 30.0
+    assert power_by_tension["HTB2"] == 60.0
+
+
+def test_enumerate_configs_raises_for_tension_missing_from_power_mw_mapping(
+    au_store, copex_library
+):
+    with pytest.raises(ValueError, match="HTA"):
+        global_sensitivity.enumerate_configs(
+            au_store,
+            copex_library,
+            contract_kinds=[contract_overlay.FULL_MERCHANT],
+            power_mw_by_tension={"HTB1": 30.0, "HTB2": 60.0, "HTB3": 60.0},
+        )
+
+
+def test_enumerate_configs_defaults_to_default_power_mw_by_tension(au_store, copex_library):
+    entries = global_sensitivity.enumerate_configs(
+        au_store, copex_library, contract_kinds=[contract_overlay.FULL_MERCHANT]
+    )
+    for _, _, project_config in entries:
+        assert (
+            project_config.power_mw
+            == global_sensitivity.DEFAULT_POWER_MW_BY_TENSION[project_config.tension]
+        )

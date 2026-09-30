@@ -40,3 +40,21 @@ def test_global_sensitivity_heatmap_facet_renders_one_chart_per_value():
     # Plus d'une heatmap : les valeurs de la dimension choisie ne sont plus
     # melangees dans une seule moyenne (le bug signale par l'utilisateur).
     assert len(at.get("plotly_chart")) > 1
+
+
+def test_global_sensitivity_has_one_power_input_per_tension():
+    """Retour utilisateur, 2026-10-01 : une seule puissance de reference pour
+    toutes les tensions produisait des cas incoherents (ex. 50 MW en HTA) -
+    doit desormais exposer un champ separe par tension, pre-rempli avec le
+    defaut indicatif de core.global_sensitivity.DEFAULT_POWER_MW_BY_TENSION."""
+    from core import global_sensitivity
+
+    at = AppTest.from_file(APP_PATH)
+    at.run(timeout=_TIMEOUT)
+    at.sidebar.radio[0].set_value("Aurora Global Analysis")
+    at.run(timeout=_TIMEOUT)
+    assert not at.exception
+
+    for tension in ["HTA", "HTB1", "HTB2"]:
+        field = at.number_input(key=f"power_mw_{tension}")
+        assert field.value == global_sensitivity.DEFAULT_POWER_MW_BY_TENSION[tension]

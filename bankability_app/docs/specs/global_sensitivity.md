@@ -56,6 +56,22 @@ projets saisis par l'utilisateur dans le Configurateur — voir `docs/adr/0003` 
   mériterait d'être signalée à chaque utilisation — filtré explicitement hors du résumé
   `excluded_configs` par `c.tension != "HTB3"`. Le mécanisme `skipped` générique reste actif pour
   toute *autre* tension qui manquerait de données à l'avenir.
+- **Une puissance de référence PAR TENSION, pas une seule pour tout l'espace**
+  (`power_mw_by_tension`, corrigé 2026-10-01 suite à un retour utilisateur) : appliquer une seule
+  puissance (ex. 50 MW, réaliste pour HTB2) à toutes les tensions produit des cas incohérents — une
+  config "50 MW HTA" ne correspond à aucun raccordement réel (HTA = raccordement distribution
+  Enedis, plafonné bien en-dessous de ce que supporte un raccordement RTE HTB1/HTB2). Le problème
+  compte plus qu'il n'y paraît : le CAPEX ICP (source par défaut) a des composantes forfaitaires
+  (raccordement DSO, génie civil) qui font varier le TRI très fortement à puissance non réaliste —
+  vérifié 2026-10-01, HTA 2h Classique COD2030 : TRI de -11.5 % à 10 MW à +3.3 % à 100 MW, seule la
+  puissance changeant — donc pas seulement un problème de "cohérence terrain", un vrai artefact de
+  modèle si on compare 2 tensions à une puissance qui n'a de sens réel que pour l'une des deux.
+  `enumerate_configs(power_mw_by_tension=...)` remplace le paramètre unique `power_mw` ; défaut
+  `DEFAULT_POWER_MW_BY_TENSION` (HTA 10 MW, HTB1 30 MW, HTB2 50 MW) — des gabarits de raccordement
+  **indicatifs**, pas confirmés par l'utilisateur (même statut que les prix floor/tolling
+  ci-dessus), éditables librement dans l'UI (un champ par tension). Lève une erreur explicite si
+  une tension d'`AU_Store` n'a pas d'entrée dans le mapping (jamais un repli silencieux sur une
+  valeur arbitraire).
 
 ## UI (`ui/global_sensitivity_tab.py`)
 
@@ -86,6 +102,16 @@ projets saisis par l'utilisateur dans le Configurateur — voir `docs/adr/0003` 
 - Prix/durée floor-tolling par défaut (80 k€/MW/an, 10 ans, partage 40 %) non confirmés par
   l'utilisateur — mêmes valeurs que les exemples déjà utilisés ailleurs dans le code, pas une
   hypothèse business validée.
+- **`DEFAULT_POWER_MW_BY_TENSION` (HTA 10 MW, HTB1 30 MW, HTB2 50 MW) non confirmés** — des
+  gabarits de raccordement indicatifs, pas des plafonds réglementaires Enedis/RTE vérifiés avec
+  l'utilisateur. Éditables dans l'UI, donc pas bloquant, mais à ajuster si l'utilisateur a des
+  chiffres de raccordement plus précis.
+- **La sensibilité forte du TRI à la puissance (composantes CAPEX ICP forfaitaires) n'est pas
+  elle-même questionnée ici** — elle peut refléter une vraie économie d'échelle (réaliste : un
+  raccordement DSO forfaitaire coûte proportionnellement moins cher dilué sur un plus gros projet)
+  ou un artefact du modèle ICP (voir `docs/specs/copex_icp.md`) : non tranché, ce fix choisit des
+  puissances de référence réalistes par tension plutôt que de statuer sur la validité de l'économie
+  d'échelle elle-même.
 - **N'énumère pas l'espace extrapolé** (2026-09-24, voir `docs/specs/config_extrapolation.md`) :
   `enumerate_configs` continue de ne balayer que les 22 configs réelles d'`AU_Store`, pas les
   combinaisons type TURPE/gabarit/ORO manquantes que le Configurateur sait désormais extrapoler

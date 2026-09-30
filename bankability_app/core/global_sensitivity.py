@@ -17,7 +17,28 @@ from .aur_cases import AuStoreConfig, AuStoreLibrary
 from .contract_overlay import ContractStructure
 from .dev_case import CopexLibrary
 
-DEFAULT_POWER_MW = 10.0
+# Taille de reference par tension - pas une seule valeur pour tout l'espace
+# (retour utilisateur, 2026-10-01) : une meme puissance appliquee a toutes les
+# tensions produit des cas incoherents (une config HTA 50 MW ne correspond a
+# rien de realiste - HTA est un raccordement distribution Enedis, plafonne en
+# pratique bien en-dessous de ce que supporte un raccordement RTE HTB2). Ce
+# choix compte d'autant plus que le CAPEX ICP (source par defaut) a des
+# composantes forfaitaires (raccordement DSO, genie civil) qui font varier le
+# TRI tres fortement selon la puissance a puissance non realiste (verifie
+# 2026-10-01 : TRI HTA 2h Classique COD2030 de -11.5% a 10 MW a +3.3% a 100 MW,
+# meme config sinon) - une raison de plus pour ne jamais comparer 2 tensions a
+# une puissance qui n'a de sens reel que pour l'une des deux.
+# Valeurs indicatives (gabarit de raccordement typique par tension en France -
+# HTA distribution Enedis plafonne en pratique bien plus bas qu'un
+# raccordement RTE HTB1/HTB2), PAS confirmees par l'utilisateur comme les
+# autres hypotheses business de ce module (floor/tolling price ci-dessous) -
+# a ajuster librement via l'UI (docs/specs/global_sensitivity.md).
+DEFAULT_POWER_MW_BY_TENSION: dict[str, float] = {
+    "HTA": 10.0,
+    "HTB1": 30.0,
+    "HTB2": 50.0,
+    "HTB3": 50.0,  # jamais utilise en pratique (HTB3 exclu, pas de donnees CAPEX/OPEX)
+}
 DEFAULT_OPERATING_YEARS = 20
 DEFAULT_CONTRACT_KINDS = [
     contract_overlay.FULL_MERCHANT,
@@ -77,7 +98,7 @@ def enumerate_configs(
     copex_library: CopexLibrary,
     *,
     operating_years: int = DEFAULT_OPERATING_YEARS,
-    power_mw: float = DEFAULT_POWER_MW,
+    power_mw_by_tension: dict[str, float] | None = None,
     contract_kinds: list[str] | None = None,
     floor_tolling_price_keur_per_mw_per_year: float = DEFAULT_FLOOR_TOLLING_PRICE_KEUR_PER_MW_PER_YEAR,
     floor_tolling_duration_years: int = DEFAULT_FLOOR_TOLLING_DURATION_YEARS,
@@ -87,8 +108,18 @@ def enumerate_configs(
     valides - garde-fou COD2030 applique automatiquement (`config_space`).
     Exclut en amont les configs sans donnees CAPEX/OPEX dans `copex_library`
     (ex. HTB3 - voir `config_space.has_cost_data`) plutot que de les generer
-    pour les voir echouer une par une au calcul."""
+    pour les voir echouer une par une au calcul.
+
+    `power_mw_by_tension` : une puissance par tension (pas une seule valeur
+    pour tout l'espace, voir `DEFAULT_POWER_MW_BY_TENSION` - une meme
+    puissance appliquee a HTA et HTB2 produit des cas dont l'un des deux n'a
+    aucun sens de raccordement reel). `None` = `DEFAULT_POWER_MW_BY_TENSION`.
+    Leve une erreur explicite si une tension rencontree dans `au_store` n'a
+    pas d'entree (jamais un repli silencieux sur une valeur arbitraire)."""
     contract_kinds = contract_kinds or DEFAULT_CONTRACT_KINDS
+    power_mw_by_tension = (
+        DEFAULT_POWER_MW_BY_TENSION if power_mw_by_tension is None else power_mw_by_tension
+    )
     candidate_cod_years = valid_cod_years_for_calendar(au_store, operating_years)
     duration_years = min(floor_tolling_duration_years, operating_years)
 
@@ -96,6 +127,12 @@ def enumerate_configs(
     for au_config in au_store.configs:
         if not config_space.has_cost_data(au_config, copex_library):
             continue
+        if au_config.tension not in power_mw_by_tension:
+            raise ValueError(
+                f"No reference power configured for tension '{au_config.tension}' "
+                f"(power_mw_by_tension only has {sorted(power_mw_by_tension)})."
+            )
+        power_mw = power_mw_by_tension[au_config.tension]
         cod_years = config_space.valid_cod_years(au_config, candidate_cod_years)
         for cod_year in cod_years:
             for kind in contract_kinds:
