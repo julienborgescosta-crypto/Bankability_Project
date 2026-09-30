@@ -18,19 +18,32 @@ seul le TOTAL est vraiment comparable.
 
 Ici, ICP (`copex_icp.py`) ne partage pas non plus la taxonomie d'Aurora (ICP detaille Electrical
 works/Civil works/HV Transformer/HV substation/MV substation/Communication/Other BoP/Integration/
-Batteries and PCS/EPC Margin/Insurance construction ; Aurora a 5 lignes forfaitaires en €/kW), donc
-le meme type de garde-fou s'applique, mais la comparaison se limite aux 2 seuls niveaux ou les 2
-sources sont clairement du meme perimetre :
+Batteries and PCS/EPC Margin/Insurance construction ; Aurora a 5 lignes forfaitaires en €/kW).
+L'utilisateur a signale le 2026-09-30 un piege du meme type : le "Grid connection" d'Aurora
+couvrirait l'ensemble du cout de raccordement **y compris le poste de livraison/sous-station
+privee** (HV Transformer/HV substation/MV substation), la ou ICP les compte a part dans le total
+"construction" - comparer "Grid connection" seul ferait ressortir un ecart enorme et trompeur.
 
-- **Construction CAPEX** (Battery+PCS+BoS+EPC soft costs, hors Development et hors raccordement) :
-  ICP = poste direct x (1+marge EPC) x (1+assurance construction) ; Aurora = somme des 4 lignes
-  `CAPEX_LINE_ITEMS` correspondantes (hors Development).
-- **Grid connection** (raccordement) : ligne dediee des 2 cotes - comparable seulement si le
-  projet utilise `connection_capex_mode="library"` (sinon `comparable=False`, le projet n'utilise
-  pas cette valeur).
+**Attention, verifie le 2026-10-01 : l'hypothese "meme perimetre une fois la sous-station
+ajoutee" ne resout PAS l'ecart - elle l'aggrave** sur HTB1/HTB2 (voir "Verification faite"
+ci-dessous). Plutot que de choisir une seule lecture non confirmee, le module affiche **3 vues
+cote a cote** pour le raccordement, et laisse l'utilisateur juger :
+
+- **Core equipment** (Battery+PCS+Electrical/Civil works+Communication+Integration, hors
+  sous-stations et hors raccordement) : ICP = postes directs x (1+marge EPC) x (1+assurance
+  construction) ; Aurora = somme des 4 lignes `CAPEX_LINE_ITEMS` correspondantes (hors
+  Development).
+- **Grid connection (PTF only)** : raccordement seul - comparable seulement si le projet utilise
+  `connection_capex_mode="library"` (sinon `comparable=False`, le projet n'utilise pas cette
+  valeur).
+- **Private substation** : cout ICP des 3 postes HV/MV substation seuls, sans equivalent Aurora
+  isolable - affiche pour information (`comparable=False`), jamais comme un ecart a interpreter.
+- **Grid connection & substations (combined)** : somme des 2 lignes precedentes vs Aurora "Grid
+  connection" - la lecture qui SUPPOSE l'hypothese de perimetre elargi d'Aurora ; a confirmer
+  avant de la considerer comme la comparaison de reference (voir "Verification faite").
 - **OPEX Fixed O&M** (+ ICP Guarantees, poste sans equivalent Aurora) vs Aurora "Fixed O&M" seul.
 - **TOTAL CAPEX / TOTAL OPEX** : la ligne a regarder en priorite - les postes eclates expliquent
-  le POURQUOI, pas l'inverse.
+  le POURQUOI, pas l'inverse. Le total ne depend pas de la repartition core/grid/substation.
 
 Development (CAPEX) et Insurance/Grid charges/Land lease(bibliotheque)/Accise/Other (OPEX) restent
 **toujours** = Aurora (ICP ne les couvre pas) - affiches en `comparable=False` ("Info only"),
@@ -62,12 +75,21 @@ Execution manuelle sur HTA/HTB1/HTB2/HTB3 x 2h/4h, COD 2028, 40 MW :
 
 - **TOTAL CAPEX** : ecarts de -0.2% (HTA 2h, OK) a +23% (HTB1 2h, Large gap) selon la tension -
   coherent, pas un artefact (chaque poste sous-jacent bouge dans un sens defendable).
-- **Grid connection** : ecart tres marque en HTA (ours 2 081 k€ vs Aurora 410 k€, x5) - explique :
-  ICP price le raccordement DSO en **forfait k€ plat** (2 000 k€, independant de la puissance),
-  la ou Aurora COPEX_library le scale **lineairement au MW** (~10 k€/MW). A 40 MW ces 2 philosophies
-  divergent fortement - un vrai ecart de modelisation a signaler a l'utilisateur, pas un bug de ce
-  module (verifie en inspectant `IcpCostLibrary.line_items["Grid connection"]` directement : unite
+- **Grid connection (PTF only)** : ecart tres marque en HTA (ours 2 081 k€ vs Aurora 410 k€, x5) -
+  explique : ICP price le raccordement DSO en **forfait k€ plat** (2 000 k€, independant de la
+  puissance), la ou Aurora COPEX_library le scale **lineairement au MW** (~10 k€/MW). A 40 MW ces
+  2 philosophies divergent fortement - un vrai ecart de modelisation, pas un bug de ce module
+  (verifie en inspectant `IcpCostLibrary.line_items["Grid connection"]` directement : unite
   `keur_flat` pour DSO/TSO, `eur_per_mw` seulement pour Industrial).
+- **Grid connection & substations (combined)** : **l'ajout du cout de sous-station ICP AGGRAVE
+  l'ecart au lieu de le resorber**, sur HTB1/HTB2 - a 40 MW : HV Transformer (25-30 k€/MW = 1.0-1.2
+  M€), HV substation (3.9-4.5 M€ forfait), MV substation (18 k€/MW = 0.72 M€), soit ~5.6-6.4 M€ de
+  sous-station ICP a ajouter a un raccordement PTF ICP deja proche d'Aurora (~3.7-4.0 M€ vs Aurora
+  ~3.3-4.9 M€, deja OK/Watch) - contre un "Grid connection" Aurora qui reste sur le meme ordre de
+  grandeur generique (~3.3-4.9 M€ tout compris, cense inclure la sous-station). Conclusion : soit
+  Aurora sous-estime largement ce poste dans son propre referentiel `COPEX_library`, soit
+  l'hypothese "meme perimetre" ne tient pas non plus completement - **non tranche, presente a
+  l'utilisateur via les 3 vues plutot que via un seul chiffre reconcilie**.
 - **HTB3** : ours = Aurora = 0 sur ce fixture (ni ICP ni le `COPEX_library` du fixture n'ont de
   colonne HTB3) - `comparable` reste calcule correctement (0% ecart, "OK"), mais ce 0/0 vient de la
   limite du fixture de test, pas d'un vrai raccordement gratuit. Sur un classeur reel avec une
@@ -75,6 +97,11 @@ Execution manuelle sur HTA/HTB1/HTB2/HTB3 x 2h/4h, COD 2028, 40 MW :
 
 ## Questions ouvertes
 
+- **Perimetre exact du "Grid connection" d'Aurora non confirme** - l'hypothese qu'il inclut la
+  sous-station privee (avancee par l'utilisateur) ne se verifie pas numeriquement une fois testee
+  (l'ecart s'aggrave, ne se resorbe pas, voir "Verification faite"). A trancher avec l'utilisateur :
+  soit Aurora sous-estime reellement ce poste, soit son "Grid connection" ne couvre en fait que le
+  PTF (comme ICP) et la sous-station n'a simplement pas d'equivalent Aurora du tout.
 - **Repowering (2e tranche CAPEX) non couvert** - seul le CAPEX/OPEX initial (a la COD) l'est.
   `icp_repowering_capex_keur` existe deja (voir `copex_icp.py`) mais n'a pas d'equivalent Aurora
   "pur" facilement isolable dans cette premiere version - a ajouter si le besoin se confirme.

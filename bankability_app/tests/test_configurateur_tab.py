@@ -10,6 +10,7 @@ ui/configurateur_tab.py)."""
 
 from pathlib import Path
 
+import pandas as pd
 from streamlit.testing.v1 import AppTest
 
 from core import portfolio_import
@@ -219,7 +220,9 @@ def test_configurateur_copex_comparison_checkbox_shows_table():
     next(cb for cb in at.checkbox if cb.label == "Aurora COPEX Comparison").set_value(True)
     at.run(timeout=_TIMEOUT)
     assert not at.exception
-    df = next(d.value for d in at.dataframe if "Line item" in d.value.columns)
-    assert "TOTAL CAPEX" in df["Line item"].values
-    assert "TOTAL OPEX" in df["Line item"].values
+    line_item_values = pd.concat(
+        [d.value["Line item"] for d in at.dataframe if "Line item" in d.value.columns]
+    )
+    assert "TOTAL CAPEX" in line_item_values.values
+    assert "TOTAL OPEX" in line_item_values.values
     assert any(b.label.startswith("Download Aurora COPEX Comparison") for b in at.download_button)

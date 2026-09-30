@@ -674,21 +674,76 @@ def _render_build_and_flip(rows: list[portfolio.PortfolioRow]) -> None:
     )
 
 
+def _copex_rows_to_df(rows: list[copex_comparison.CopexComparisonRow]) -> pd.DataFrame:
+    return pd.DataFrame(
+        [
+            {
+                "Line item": row.label,
+                "Ours (k€)": _fmt_keur(row.ours_keur),
+                "Aurora (k€)": _fmt_keur(row.aurora_keur),
+                "Delta (k€)": _fmt_keur(row.delta_keur),
+                "Delta %": f"{row.delta_pct:+.1%}" if row.delta_pct is not None else "n/a",
+                "Status": row.status,
+            }
+            for row in rows
+        ]
+    )
+
+
+def _unique_sheet_name(name: str, used: set[str]) -> str:
+    # Limite Excel = 31 caracteres, noms uniques par classeur - un projet
+    # dont le nom depasse cette limite (ou en collision apres troncature)
+    # reste identifiable par un suffixe numerique plutot que d'ecraser une
+    # autre feuille silencieusement.
+    base = (name or "Project").strip()[:31] or "Project"
+    candidate = base
+    suffix = 2
+    while candidate in used:
+        candidate = f"{base[: 31 - len(str(suffix)) - 1]}_{suffix}"
+        suffix += 1
+    used.add(candidate)
+    return candidate
+
+
+def _dfs_to_excel_bytes(sheets: dict[str, pd.DataFrame]) -> bytes:
+    buffer = io.BytesIO()
+    with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
+        for sheet_name, df in sheets.items():
+            df.to_excel(writer, sheet_name=sheet_name, index=False)
+    return buffer.getvalue()
+
+
+def _download_multi_sheet_button(
+    sheets: dict[str, pd.DataFrame], *, label: str, filename: str, key: str
+) -> None:
+    st.download_button(
+        f"Download {label} (Excel, one sheet per project)",
+        data=_dfs_to_excel_bytes(sheets),
+        file_name=filename,
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        key=key,
+    )
+
+
 def _render_copex_comparison(projects: list[portfolio.ProjectConfig], copex_library) -> None:
     """Compare notre CAPEX/OPEX (ICP + repli Aurora, deja applique par le
     moteur) a ce que la bibliotheque Aurora COPEX_library aurait donne
     seule - demande de l'utilisateur, 2026-09-30, sur le modele d'une macro
     VBA equivalente (`ModAuroraComparison`) deja utilisee sur le vrai BP
-    Excel. Voir core/copex_comparison.py, docs/specs/copex_comparison.md."""
+    Excel. Un tableau CAPEX + un tableau OPEX par projet (pas un seul
+    tableau plat multi-projets, illisible - retour utilisateur 2026-10-01) ;
+    export Excel = un onglet par projet, meme raison. Voir
+    core/copex_comparison.py, docs/specs/copex_comparison.md."""
     if not st.checkbox("Aurora COPEX Comparison"):
         return
     st.caption(
         "Is our CAPEX/OPEX (ICP + Aurora fallback, as actually applied) below or above Aurora's "
-        "own COPEX_library assumption? One row group per project, split CAPEX/OPEX."
+        "own COPEX_library assumption? One CAPEX table and one OPEX table per project."
     )
     icp_library = copex_icp.load_icp_library_cached()
-    rows_out: list[dict] = []
     all_notes: list[str] = []
+    sheets: dict[str, pd.DataFrame] = {}
+    used_sheet_names: set[str] = set()
     for project in projects:
         comparison = copex_comparison.compare_capex_opex(
             tension=project.tension,
@@ -699,33 +754,37 @@ def _render_copex_comparison(projects: list[portfolio.ProjectConfig], copex_libr
             aurora_library=copex_library,
             connection_capex_mode=project.connection_capex_mode,
         )
-        for section, comp_rows in (
-            ("CAPEX", comparison.capex_rows),
-            ("OPEX", comparison.opex_rows),
-        ):
-            for row in comp_rows:
-                rows_out.append(
-                    {
-                        "Project": project.name,
-                        "Section": section,
-                        "Line item": row.label,
-                        "Ours (k€)": _fmt_keur(row.ours_keur),
-                        "Aurora (k€)": _fmt_keur(row.aurora_keur),
-                        "Delta (k€)": _fmt_keur(row.delta_keur),
-                        "Delta %": (
-                            f"{row.delta_pct:+.1%}" if row.delta_pct is not None else "n/a"
-                        ),
-                        "Status": row.status,
-                    }
-                )
+        capex_df = _copex_rows_to_df(comparison.capex_rows)
+        opex_df = _copex_rows_to_df(comparison.opex_rows)
+
+        st.markdown(
+            f"**{project.name}** — {project.tension} {project.duree_h}h, COD {project.cod_year}"
+        )
+        c1, c2 = st.columns(2)
+        with c1:
+            st.caption("CAPEX")
+            st.dataframe(capex_df, use_container_width=True, hide_index=True)
+        with c2:
+            st.caption("OPEX")
+            st.dataframe(opex_df, use_container_width=True, hide_index=True)
+
+        sheet_df = pd.concat(
+            [
+                pd.DataFrame([{"Line item": "CAPEX"}]),
+                capex_df,
+                pd.DataFrame([{"Line item": ""}, {"Line item": "OPEX"}]),
+                opex_df,
+            ],
+            ignore_index=True,
+        )
+        sheets[_unique_sheet_name(project.name, used_sheet_names)] = sheet_df
+
         for note in comparison.notes:
             if note not in all_notes:
                 all_notes.append(note)
 
-    df = pd.DataFrame(rows_out)
-    st.dataframe(df, use_container_width=True, hide_index=True)
-    _download_results_button(
-        df,
+    _download_multi_sheet_button(
+        sheets,
         label="Aurora COPEX Comparison",
         filename="aurora_copex_comparison.xlsx",
         key="dl_copex_comp",

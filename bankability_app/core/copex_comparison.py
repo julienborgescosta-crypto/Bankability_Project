@@ -12,22 +12,48 @@ bucket differentes (I-Project du BP vs `COPEX_library`), d'ou sa mise en
 garde sur l'allocation HT/MT EPC/Grid qui se compense entre les 2 sources.
 Ici, ICP (`copex_icp.py`) ne partage pas non plus la taxonomie d'Aurora (ICP
 detaille Electrical works/Civil works/HV Transformer/.../EPC Margin/
-Insurance construction ; Aurora a 5 lignes forfaitaires en €/kW) - la
-comparaison se limite donc aux 2 niveaux ou les 2 sources sont clairement du
-meme perimetre :
+Insurance construction ; Aurora a 5 lignes forfaitaires en €/kW) - **meme
+type de piege de perimetre que la macro VBA**, signale par l'utilisateur le
+2026-09-30 : le "Grid connection" d'Aurora couvrirait l'ensemble du cout de
+raccordement **y compris le poste de livraison/sous-station privee** (HV
+Transformer/HV substation/MV substation), la ou notre ICP les compte a part,
+dans le total "construction".
 
-- **Construction CAPEX** (Battery+PCS+BoS+EPC soft costs, hors Development et
-  hors raccordement) : ICP = poste direct x (1+marge EPC) x (1+assurance
-  construction) ; Aurora = somme des 4 lignes `CAPEX_LINE_ITEMS` correspondantes
-  (hors Development, qui est toujours = Aurora des 2 cotes, affiche a part).
-- **Grid connection (raccordement)** : ligne dediee, comparable directement
+**Attention, verifie le 2026-10-01 : ce n'est PAS un ajustement qui reduit
+l'ecart.** Une fois les couts de sous-station ICP (reels, souvent
+substantiels sur HTB1/HTB2 - HV Transformer 25-30 k€/MW, HV substation
+3.9-4.5 M€ forfait, MV substation 18 k€/MW) ajoutes au raccordement PTF,
+l'ecart avec le "Grid connection" d'Aurora (qui reste une ligne forfaitaire
+generique, ~3-5 M€ tout compris) **s'aggrave** au lieu de se resorber sur
+HTB1/HTB2 - preuve que soit Aurora sous-estime largement ce poste dans son
+propre referentiel, soit l'hypothese "meme perimetre" ne tient pas non plus
+completement. Plutot que de choisir une seule lecture, ce module affiche les
+**3 vues cote a cote** (raccordement PTF seul, sous-station privee seule,
+combine) pour que l'utilisateur juge lui-meme laquelle est pertinente pour
+son cas plutot que de faire confiance a une hypothese non confirmee :
+
+- **Core equipment** (Battery+PCS+Electrical/Civil works+Communication+
+  Integration, hors sous-stations et hors raccordement) : ICP = postes
+  directs x (1+marge EPC) x (1+assurance construction) ; Aurora = somme des
+  4 lignes `CAPEX_LINE_ITEMS` correspondantes (Battery system+Inverter+
+  Balance of system+EPC soft costs).
+- **Grid connection (PTF only)** : raccordement seul, comparable directement
   UNIQUEMENT si `connection_capex_mode="library"` (sinon le projet n'utilise
   pas cette valeur, `comparable=False`).
+- **Private substation** : cout ICP des 3 postes HV/MV substation seuls
+  (charges de la meme marge EPC + assurance construction que le reste de la
+  construction) - pas de ligne Aurora equivalente isolable, affiche pour
+  information (`comparable=False`), jamais comme un ecart a interpreter.
+- **Grid connection & substations (combined)** : somme des 2 lignes
+  precedentes vs Aurora "Grid connection" - la lecture qui SUPPOSE que
+  l'hypothese de perimetre elargi d'Aurora est correcte ; a confirmer avant
+  de la considerer comme la comparaison de reference.
 - **OPEX O&M** : ICP O&M + Guarantees/15 ans annualisees (poste ICP sans
   equivalent Aurora, note explicitement) vs Aurora "Fixed O&M" seul.
 - **TOTAL CAPEX/OPEX** : la vraie somme appliquee par le moteur (mode
   "library") vs la somme Aurora pure equivalente - la ligne a regarder en
-  priorite, les postes eclates servent a comprendre POURQUOI.
+  priorite. Le total ne depend pas de la repartition core/grid/substation -
+  seule la lecture poste par poste change.
 
 Les autres postes (CAPEX Development ; OPEX Insurance/Grid charges/Land
 lease bibliotheque/Accise/Other) restent **toujours** = Aurora (ICP ne les
@@ -52,11 +78,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from .copex_icp import (
+    _DIRECT_CAPEX_LABELS,
     _OM_LABEL,
     TENSION_TO_ICP_SEGMENT,
     IcpCostLibrary,
     _icp_line_item_keur,
-    icp_capex_total_keur,
+    icp_battery_pcs_keur,
     icp_connection_capex_keur,
     icp_opex_guarantees_annualized_keur,
 )
@@ -67,11 +94,17 @@ from .dev_case import (
     voltage_duration_key,
 )
 
-# Les 4 lignes Aurora du meme perimetre que le total ICP "construction"
-# (poste direct x marge EPC x assurance) - Development est toujours = Aurora
-# des 2 cotes, affiche a part (voir module docstring).
-_CAPEX_CONSTRUCTION_LABELS = ["Battery system", "Inverter", "Balance of system", "EPC soft costs"]
+# Les 4 lignes Aurora du meme perimetre que le bucket ICP "core equipment"
+# (poste direct x marge EPC x assurance, hors sous-stations) - Development
+# est toujours = Aurora des 2 cotes, affiche a part (voir module docstring).
+_CAPEX_CORE_LABELS = ["Battery system", "Inverter", "Balance of system", "EPC soft costs"]
 _CAPEX_DEVELOPMENT_LABEL = "Development"
+# Postes ICP a reallouer du bucket "construction" vers "Grid connection" -
+# Aurora compte le poste de livraison/sous-station privee dans son "Grid
+# connection", nous les comptions avec le reste de la construction (voir
+# module docstring).
+_ICP_SUBSTATION_LABELS = ["HV Transformer", "HV substation", "MV substation"]
+_ICP_CORE_LABELS = [label for label in _DIRECT_CAPEX_LABELS if label not in _ICP_SUBSTATION_LABELS]
 _OPEX_FIXED_OM_LABEL = "Fixed O&M"
 _OPEX_INFO_ONLY_LABELS = ["Insurance", "Grid charges", "Land lease", "Accise", "Other"]
 
@@ -145,6 +178,38 @@ def _aurora_opex_item_keur(
     )
 
 
+def _icp_core_and_substation_keur(
+    icp_library: IcpCostLibrary, *, segment: str, duree_h: int, cod_year: int, power_mw: float
+) -> tuple[float, float, list[str]]:
+    """Scinde le total ICP "construction" (voir `copex_icp.icp_capex_total_keur`)
+    en (core equipment, sous-stations HV/MV) - meme marge EPC + assurance
+    construction appliquee aux 2, seule la repartition des postes directs
+    change (voir module docstring)."""
+    missing: list[str] = []
+
+    def _sum(labels: list[str]) -> float:
+        total = 0.0
+        for label in labels:
+            item_cost = _icp_line_item_keur(
+                icp_library, label, segment, power_mw=power_mw, duree_h=duree_h, cod_year=cod_year
+            )
+            if item_cost is None:
+                missing.append(label)
+                continue
+            total += item_cost
+        return total
+
+    core_direct_keur = _sum(_ICP_CORE_LABELS) + icp_battery_pcs_keur(
+        icp_library, duree_h=duree_h, power_mw=power_mw, cod_year=cod_year
+    )
+    substation_direct_keur = _sum(_ICP_SUBSTATION_LABELS)
+
+    epc_margin = icp_library.epc_margin_pct.get(segment, 0.0)
+    insurance_pct = icp_library.insurance_construction_pct.get(segment, 0.0)
+    factor = (1 + epc_margin) * (1 + insurance_pct)
+    return core_direct_keur * factor, substation_direct_keur * factor, missing
+
+
 def compare_capex_opex(
     *,
     tension: str,
@@ -160,61 +225,89 @@ def compare_capex_opex(
     postes lus uniquement dans `COPEX_library`."""
     key = voltage_duration_key(tension, duree_h)
     notes: list[str] = []
+    segment = TENSION_TO_ICP_SEGMENT.get(tension)
 
-    ours_total_capex, _ = icp_capex_total_keur(
-        tension=tension,
-        duree_h=duree_h,
-        cod_year=cod_year,
-        power_mw=power_mw,
-        icp_library=icp_library,
-        aurora_library=aurora_library,
-    )
     development_keur = _aurora_capex_item_keur(
         aurora_library, key, _CAPEX_DEVELOPMENT_LABEL, cod_year, power_mw
     )
-    ours_construction_keur = ours_total_capex - development_keur
-    aurora_construction_keur = sum(
+    aurora_core_keur = sum(
         _aurora_capex_item_keur(aurora_library, key, label, cod_year, power_mw)
-        for label in _CAPEX_CONSTRUCTION_LABELS
-    )
-
-    ours_grid_keur, grid_source_notes = icp_connection_capex_keur(
-        tension=tension,
-        duree_h=duree_h,
-        cod_year=cod_year,
-        power_mw=power_mw,
-        icp_library=icp_library,
-        aurora_library=aurora_library,
+        for label in _CAPEX_CORE_LABELS
     )
     aurora_grid_keur = _aurora_capex_item_keur(
         aurora_library, key, CAPEX_GRID_CONNECTION_LABEL, cod_year, power_mw
     )
+
+    ours_grid_only_keur, grid_source_notes = icp_connection_capex_keur(
+        tension=tension,
+        duree_h=duree_h,
+        cod_year=cod_year,
+        power_mw=power_mw,
+        icp_library=icp_library,
+        aurora_library=aurora_library,
+    )
+    if segment is not None:
+        ours_core_keur, substation_keur, missing = _icp_core_and_substation_keur(
+            icp_library, segment=segment, duree_h=duree_h, cod_year=cod_year, power_mw=power_mw
+        )
+        if missing:
+            notes.append(
+                f"ICP items missing for {segment} (Aurora fallback folded into the totals only): "
+                f"{', '.join(missing)}."
+            )
+    else:
+        # HTB3 : aucune colonne ICP - tout retombe sur Aurora, comme avant
+        # (voir icp_capex_total_keur), donc pas de signal sur ce bucket non plus.
+        ours_core_keur = aurora_core_keur
+        substation_keur = 0.0
+    ours_grid_and_substation_keur = ours_grid_only_keur + substation_keur
+
     grid_comparable = connection_capex_mode == "library"
     if not grid_comparable:
         notes.append(
             f"Grid connection: project uses connection_capex_mode='{connection_capex_mode}', "
-            "not the library value - comparison shown for reference only, not applied to this project."
+            "not the library value - comparison shown for reference only, not applied to this "
+            "project."
         )
     notes.extend(grid_source_notes)
+    notes.append(
+        "Aurora's own 'Grid connection' line is assumed to cover the private substation too "
+        "(not just the grid operator's connection fee) - shown 3 ways below (PTF alone, "
+        "substation alone, combined) so you can judge which reading is the fair comparison for "
+        "your case rather than trusting one assumption blindly."
+    )
 
     capex_rows = [
         CopexComparisonRow(
-            "Construction (Battery+PCS+BoS+EPC soft costs)",
-            ours_construction_keur,
-            aurora_construction_keur,
+            "Core equipment (Battery+PCS+electrical/civil works+comms+integration)",
+            ours_core_keur,
+            aurora_core_keur,
             True,
         ),
         CopexComparisonRow("Development", development_keur, development_keur, False),
-        CopexComparisonRow("Grid connection", ours_grid_keur, aurora_grid_keur, grid_comparable),
+        CopexComparisonRow(
+            "Grid connection (PTF only)", ours_grid_only_keur, aurora_grid_keur, grid_comparable
+        ),
+        CopexComparisonRow(
+            "Private substation (ICP HV/MV Transformer+substation - no separate Aurora line)",
+            substation_keur,
+            0.0,
+            False,
+        ),
+        CopexComparisonRow(
+            "Grid connection & substations (combined - assumes Aurora's scope includes it)",
+            ours_grid_and_substation_keur,
+            aurora_grid_keur,
+            grid_comparable,
+        ),
         CopexComparisonRow(
             "TOTAL CAPEX",
-            ours_construction_keur + development_keur + ours_grid_keur,
-            aurora_construction_keur + development_keur + aurora_grid_keur,
+            ours_core_keur + development_keur + ours_grid_and_substation_keur,
+            aurora_core_keur + development_keur + aurora_grid_keur,
             True,
         ),
     ]
 
-    segment = TENSION_TO_ICP_SEGMENT.get(tension)
     om_icp = (
         _icp_line_item_keur(
             icp_library, _OM_LABEL, segment, power_mw=power_mw, duree_h=duree_h, cod_year=cod_year

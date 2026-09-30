@@ -18,15 +18,49 @@ def test_total_capex_row_sums_construction_development_and_grid(icp_library, cop
         aurora_library=copex_library,
     )
     total = next(r for r in comparison.capex_rows if r.label == "TOTAL CAPEX")
-    construction = next(r for r in comparison.capex_rows if r.label.startswith("Construction"))
+    core = next(r for r in comparison.capex_rows if r.label.startswith("Core equipment"))
     development = next(r for r in comparison.capex_rows if r.label == "Development")
-    grid = next(r for r in comparison.capex_rows if r.label == "Grid connection")
+    grid_combined = next(
+        r for r in comparison.capex_rows if r.label.startswith("Grid connection &")
+    )
     assert total.ours_keur == pytest.approx(
-        construction.ours_keur + development.ours_keur + grid.ours_keur
+        core.ours_keur + development.ours_keur + grid_combined.ours_keur
     )
     assert total.aurora_keur == pytest.approx(
-        construction.aurora_keur + development.aurora_keur + grid.aurora_keur
+        core.aurora_keur + development.aurora_keur + grid_combined.aurora_keur
     )
+
+
+def test_total_capex_unaffected_by_core_substation_reallocation(icp_library, copex_library):
+    """Reallouer les 3 postes HV/MV substation du bucket "core" vers "grid"
+    ne doit rien changer au TOTAL CAPEX - seule la ventilation poste par
+    poste change (voir docs/specs/copex_comparison.md)."""
+    comparison = copex_comparison.compare_capex_opex(
+        tension="HTA",
+        duree_h=2,
+        cod_year=2028,
+        power_mw=40.0,
+        icp_library=icp_library,
+        aurora_library=copex_library,
+    )
+    total = next(r for r in comparison.capex_rows if r.label == "TOTAL CAPEX")
+    expected_total, _ = copex_icp.icp_capex_total_keur(
+        tension="HTA",
+        duree_h=2,
+        cod_year=2028,
+        power_mw=40.0,
+        icp_library=icp_library,
+        aurora_library=copex_library,
+    )
+    ptf_only_keur, _ = copex_icp.icp_connection_capex_keur(
+        tension="HTA",
+        duree_h=2,
+        cod_year=2028,
+        power_mw=40.0,
+        icp_library=icp_library,
+        aurora_library=copex_library,
+    )
+    assert total.ours_keur == pytest.approx(expected_total + ptf_only_keur)
 
 
 def test_development_row_is_identical_both_sides_and_marked_info_only(icp_library, copex_library):
@@ -70,10 +104,39 @@ def test_grid_connection_not_comparable_when_mode_is_not_library(icp_library, co
         aurora_library=copex_library,
         connection_capex_mode="manual",
     )
-    grid = next(r for r in comparison.capex_rows if r.label == "Grid connection")
+    grid = next(r for r in comparison.capex_rows if r.label == "Grid connection (PTF only)")
+    grid_combined = next(
+        r for r in comparison.capex_rows if r.label.startswith("Grid connection &")
+    )
     assert grid.comparable is False
     assert grid.status == "Info only"
+    assert grid_combined.comparable is False
     assert any("connection_capex_mode='manual'" in note for note in comparison.notes)
+
+
+def test_grid_connection_bucket_includes_private_substation_cost(icp_library, copex_library):
+    """Aurora compterait le poste de livraison/sous-station privee dans son
+    "Grid connection" (a confirmer - voir docs/specs/copex_comparison.md,
+    l'ecart s'aggrave plutot que se resorber sur HTB1/HTB2). HTA (segment
+    DSO) a un cout de sous-station MV non nul dans le fichier ICP - la ligne
+    "Private substation" doit etre strictement positive et le bucket
+    combine strictement superieur au raccordement PTF seul."""
+    comparison = copex_comparison.compare_capex_opex(
+        tension="HTA",
+        duree_h=2,
+        cod_year=2028,
+        power_mw=40.0,
+        icp_library=icp_library,
+        aurora_library=copex_library,
+    )
+    ptf_only = next(r for r in comparison.capex_rows if r.label == "Grid connection (PTF only)")
+    substation = next(r for r in comparison.capex_rows if r.label.startswith("Private substation"))
+    grid_combined = next(
+        r for r in comparison.capex_rows if r.label.startswith("Grid connection &")
+    )
+    assert substation.ours_keur > 0
+    assert grid_combined.ours_keur == pytest.approx(ptf_only.ours_keur + substation.ours_keur)
+    assert grid_combined.ours_keur > ptf_only.ours_keur
 
 
 def test_status_thresholds_ok_watch_large_gap():
