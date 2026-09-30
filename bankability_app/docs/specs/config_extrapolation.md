@@ -28,9 +28,9 @@ retournées à côté.
 - **Modèle à facteurs indépendants, calibré sur HTB2** (seule tension où Aurora a modélisé
   Classique/Injection/Soutirage × gabarit 0/1 en intégralité) :
   - Effet type TURPE : `RAW_cible = RAW_cible(Classique) × [RAW_HTB2(type) / RAW_HTB2(Classique)]`
-    (multiplicatif, par année) ; `TURPE_cible = TURPE_cible(Classique) + [TURPE_HTB2(type) −
-    TURPE_HTB2(Classique)]` (additif, par année — un ratio n'a pas de sens sur du TURPE qui peut
-    changer de signe entre Classique et Injection).
+    (multiplicatif) ; `TURPE_cible = TURPE_cible(Classique) + [TURPE_HTB2(type) −
+    TURPE_HTB2(Classique)]` (additif — un ratio n'a pas de sens sur du TURPE qui peut changer de
+    signe entre Classique et Injection).
   - Effet gabarit : même principe, `RAW_HTB2(type, g1) / RAW_HTB2(type, g0)` et
     `TURPE_HTB2(type, g1) − TURPE_HTB2(type, g0)`.
   - Les deux se combinent (multiplication/addition successive) quand type ET gabarit manquent tous
@@ -38,9 +38,31 @@ retournées à côté.
   - Hypothèse non vérifiée au-delà de HTB2 : que l'effet d'un changement de type TURPE ou de
     gabarit est le même quelle que soit la tension. Chaque extrapolation porte une note explicite
     le rappelant.
-- **Effet ORO, même principe**, calibré sur les 4 cas HTB2 ORO réels (injection/soutirage × 2h/4h) :
-  `RAW_ORO_cible = RAW_standard_cible × [RAW_HTB2_ORO(type) / RAW_HTB2_standard(type)]`. Appliqué
-  par-dessus la courbe standard déjà résolue (réelle ou elle-même extrapolée à l'étape précédente).
+  - **Un seul ratio/delta MOYEN (pas un par année)** — corrigé le 2026-10-01, suite à un retour
+    utilisateur ("le TRI extrapolé doit rester du même ordre de grandeur que celui d'Aurora") : la
+    version précédente calculait un ratio par année, ce qui propageait fidèlement les années où la
+    référence HTB2 elle-même est verrouillée sur un seul COD (ex. "4h HTB2 gabarit (COD2030)") et
+    peut y présenter un artefact propre à ce cas précis (le ratio RAW mesuré y saute de 0.78 à 1.04
+    après 2044 — une rupture qui n'a de sens que pour ce projet COD2030 précis, probablement liée à
+    son propre repowering, jamais un "effet gabarit" générique). Vérifié : le ratio moyen 4h (0.91)
+    est quasi identique au ratio moyen 2h (0.92, lui calibré sur une référence non verrouillée) —
+    la moyenne absorbe l'artefact là où le détail année par année l'amplifiait. Effet observé sur le
+    TRI Projet extrapolé (HTA 4h gabarit injection, COD2030, avant/après) : passe d'un écart de
+    -19 à -20 points de TRI vs sans gabarit (incohérent, signe opposé au 2h réel) à un écart de
+    ~-9 points, du même signe et du même ordre de grandeur que l'effet gabarit réel mesuré sur HTB2
+    aux 2 durées (-1 à -3 points, voir section "Benchmark de référence" ci-dessous). Contrepartie
+    assumée : la courbe extrapolée n'a plus de variation annuelle *propre* à l'effet transféré
+    (type TURPE/gabarit/ORO), seulement celle déjà portée par la courbe Classique/g0 réelle de
+    départ — un compromis défendable faute d'assez de points réels pour calibrer un effet variable
+    dans le temps de façon fiable.
+- **Effet ORO, même principe (ratio/delta moyen)**, calibré sur les 4 cas HTB2 ORO réels
+  (injection/soutirage × 2h/4h) : `RAW_ORO_cible = RAW_standard_cible × [RAW_HTB2_ORO(type) /
+  RAW_HTB2_standard(type)]`. Appliqué par-dessus la courbe standard déjà résolue (réelle ou
+  elle-même extrapolée à l'étape précédente). Le passage à un ratio moyen a aussi supprimé, comme
+  effet de bord bienvenu, un bug de couverture calendaire distinct (une config verrouillée sur un
+  seul COD zéro-remplie hors de sa fenêtre perdait silencieusement des années — plafonné une 1ère
+  fois le 2026-09-24, puis rendu sans objet par la moyenne le 2026-10-01, un ratio moyen ne pouvant
+  plus "manquer" d'année).
 - **Combinaisons bloquées, pas extrapolées** : gabarit ou ORO avec le type TURPE Classique lèvent
   `AuroraConfigError`. Ce ne sont pas des données manquantes mais des combinaisons sans sens
   business — le gabarit et l'ORO limitent spécifiquement l'injection ou le soutirage, la
@@ -73,8 +95,40 @@ retournées à côté.
   `COPEX_library`) reste un filtre dur inchangé — aucune extrapolation proposée côté coûts, c'est
   une source de données totalement différente.
 
+## Benchmark de référence (2026-10-01, non stocké dans le repo)
+
+Le 2026-10-01, l'utilisateur a fourni un chemin local vers le databook source Aurora Q2 2026 FRA
+(`Aurora_Q2_26_FRA_Flexible_Data_Forecast_Investment_Cases_v1.1.xlsm`) : 40+ cas standalone
+(scénario Central) avec **TRI et NPV déjà calculés par Aurora avec leurs propres hypothèses de
+CAPEX/OPEX/financement**, pas juste les courbes RAW/TURPE (que l'app avait déjà validées à la
+décimale par ailleurs, voir `docs/specs/aur_cases.md`). Utilisé ponctuellement pour vérifier que
+le TRI Projet que l'app calcule (avec ICP + repli Aurora, pas les hypothèses financières d'Aurora)
+reste dans un ordre de grandeur plausible par rapport à ces cas réels, en particulier sur les
+combinaisons extrapolées où aucune vérification directe n'était possible auparavant - c'est ce qui
+a mis en évidence le besoin du fix ci-dessus (ratio moyen plutôt que par année).
+
+**Non extrait dans un fichier du repo** : l'onglet "Disclaimer" du classeur source indique que le
+contenu du databook (au-delà des seules données horaires explicitement visées par l'interdiction)
+est la propriété et l'information confidentielle d'Aurora Energy Research, sous réserve des termes
+du contrat de service de l'utilisateur avec Aurora - committer des valeurs extraites (même
+résumées au niveau "cas") dans ce repo git n'est pas une décision à prendre unilatéralement.
+Question ouverte, à trancher avec l'utilisateur (voir ci-dessous) avant de re-stocker quoi que ce
+soit de ce fichier ici.
+
+Ce fichier a aussi confirmé, par construction, une limite déjà connue : **Aurora n'a jamais
+modélisé "HTA Injection/Soutirage sans gabarit"** (seule la variante gabarit existe pour HTA
+Injection/Soutirage dans leurs cas d'investissement standalone) - contrairement à HTB2 qui a les
+2 variantes. Une extrapolation HTA Injection sans gabarit reste donc, par nature, moins bien
+ancrée qu'une extrapolation HTB2 équivalente (l'anchor "Classique" existe toujours, mais pas de
+point de comparaison direct type-TURPE-sans-gabarit pour HTA).
+
 ## Questions ouvertes
 
+- **Statut du databook Aurora source (TRI/NPV par cas) vis-à-vis de la confidentialité** - non
+  tranché avec l'utilisateur (voir "Benchmark de référence" ci-dessus). En attendant, le fichier
+  brut reste sur la machine de l'utilisateur, hors repo, et une extraction tentée le 2026-10-01
+  (`config/aurora_reference_irr_cases.yaml`) a été laissée non trackée par git (`.gitignore`) sans
+  être committée.
 - **Pas d'extrapolation vers une 3ᵉ durée BESS** (ex. 6h) : `resolve_config()` requiert
   `duree_h` réel (2h ou 4h, seules durées qu'Aurora a modélisées) — extrapoler sur cet axe
   demanderait une toute autre méthode (interpolation entre 2h et 4h), non demandée et non

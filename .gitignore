@@ -221,3 +221,8 @@ __marimo__/
 fichier_excel/
 *.xlsm
 
+# Donnees extraites du databook Aurora (confidentiel, voir Disclaimer du
+# classeur source) - statut de confidentialite non tranche avec l'utilisateur,
+# voir bankability_app/docs/specs/config_extrapolation.md "Questions ouvertes"
+bankability_app/config/aurora_reference_irr_cases.yaml
+

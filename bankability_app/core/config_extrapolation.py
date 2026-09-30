@@ -16,11 +16,29 @@ trou) :
   courbe Classique/g0 *reelle* de cette tension, qui existe toujours). Suppose
   que l'effet d'un changement de type TURPE ou de gabarit est independant de la
   tension - hypothese non verifiee au-dela de HTB2, documentee dans chaque note.
-- **Effet ORO (limitation non-firm 3000h/an)** : meme principe, calibre sur les
-  4 cas HTB2 ORO reels (injection/soutirage x 2h/4h) et transfere aux autres
-  combinaisons injection/soutirage. N'a pas de sens pour le type TURPE
-  Classique (l'ORO limite specifiquement l'injection ou le soutirage) - leve
-  une erreur explicite plutot que d'inventer un chiffre.
+
+  **Un seul ratio/delta MOYEN par combinaison (pas un par annee)** - corrige le
+  2026-10-01, suite a un retour utilisateur ("le TRI extrapole doit rester du
+  meme ordre de grandeur que celui d'Aurora") : un ratio calcule annee par
+  annee propageait fidelement les annees ou la reference HTB2 est elle-meme
+  verrouillee sur un seul COD (ex. "4h HTB2 gabarit (COD2030)") et peut y
+  presenter un artefact propre a ce cas precis (le ratio RAW mesure saute de
+  0.78 a 1.04 apres 2044, une rupture qui n'a de sens que pour CE projet
+  COD2030 - probablement liee a son propre repowering - jamais un "effet
+  gabarit" generique). Sur ce meme cas, le ratio moyen 4h (0.91) est en
+  revanche quasi identique au ratio moyen 2h (0.92, lui calibre sur une
+  reference non verrouillee) - preuve que la moyenne absorbe l'artefact la ou
+  le detail annee par annee l'amplifiait. La contrepartie assumee : la courbe
+  extrapolee n'a plus de variation annuelle *propre* a l'effet transfere (type
+  TURPE/gabarit), seulement celle deja portee par la courbe Classique/g0 reelle
+  de depart - un compromis defendable faute d'assez de points reels pour
+  calibrer un effet variable dans le temps de facon fiable.
+- **Effet ORO (limitation non-firm 3000h/an)** : meme principe (ratio/delta
+  moyen, pas par annee), calibre sur les 4 cas HTB2 ORO reels (injection/
+  soutirage x 2h/4h) et transfere aux autres combinaisons injection/soutirage.
+  N'a pas de sens pour le type TURPE Classique (l'ORO limite specifiquement
+  l'injection ou le soutirage) - leve une erreur explicite plutot que
+  d'inventer un chiffre.
 - **Heures de curtailment personnalisees (500-4000h)** : le cas ORO reel (ou
   deja extrapole) a 3000h sert d'ancre ; le profil de perte % par annee de
   `config/aur_oro_curtailment_losses.yaml` (issu de l'onglet "Curtailment
@@ -70,13 +88,12 @@ def _clamped(table: dict[int, float], year: int) -> float:
     proche si `year` est hors de sa couverture - meme convention que
     `aur_cases._shifted_degradation`/`copex_icp.escalated_unit_cost` (jamais
     de trou silencieux, jamais d'extrapolation au-dela de ce qui est connu -
-    on retient juste la derniere valeur observee). Necessaire ici car la
-    seule reference ORO reelle (HTB2, voir `_oro_raw_factor`) est elle-meme
-    verrouillee sur un seul COD et zero-remplie hors de sa propre fenetre -
-    sans ce plafonnement, `resolve_config` perdrait silencieusement les
-    annees hors de cette fenetre (bug signale par l'utilisateur, 2026-09-24 :
-    une config HTA extrapolee via ce ratio se retrouvait couverte 2030-2059
-    au lieu de la pleine plage Aurora, cassant tout COD < 2030)."""
+    on retient juste la derniere valeur observee). Ne sert plus qu'au
+    reechelonnement ORO par heures de curtailment (`curtailment_loss_pct`,
+    couverture calendaire complete et stable - voir module docstring) : les
+    3 autres extrapolations (type TURPE/gabarit/ORO) sont passees a un ratio
+    moyen le 2026-10-01, qui n'a plus besoin de ce plafonnement (un seul
+    chiffre ne peut pas "manquer" d'annee)."""
     if year in table:
         return table[year]
     years = table.keys()
@@ -94,118 +111,97 @@ def _real_config(
         return None
 
 
-def _turpe_type_raw_factor(
-    au_store: AuStoreLibrary, *, duree_h: int, turpe_type: str
-) -> dict[int, float]:
-    """RAW_HTB2(turpe_type, gabarit=False) / RAW_HTB2(Classique, gabarit=False), par annee."""
+def _mean_ratio(numerator: dict[int, float], denominator: dict[int, float]) -> float:
+    """Ratio moyen numerator/denominator sur les annees ou les 2 courbes ont
+    une vraie valeur (0.0 = annee hors de la fenetre reelle d'une config
+    verrouillee sur un seul COD, jamais un RAW/TURPE reel - a exclure).
+    Un seul chiffre moyen plutot qu'un ratio par annee (voir docstring du
+    module, "corrige le 2026-10-01") - absorbe les artefacts propres a une
+    reference verrouillee sur un COD plutot que de les propager tels quels."""
+    ratios = [
+        numerator[y] / denominator[y]
+        for y in denominator
+        if y in numerator and denominator[y] and numerator[y]
+    ]
+    return sum(ratios) / len(ratios)
+
+
+def _mean_delta(a: dict[int, float], b: dict[int, float]) -> float:
+    """Delta moyen a-b, meme logique que `_mean_ratio`."""
+    deltas = [a[y] - b[y] for y in b if y in a and b[y] and a[y]]
+    return sum(deltas) / len(deltas)
+
+
+def _turpe_type_raw_factor(au_store: AuStoreLibrary, *, duree_h: int, turpe_type: str) -> float:
+    """Ratio moyen RAW_HTB2(turpe_type, gabarit=False) / RAW_HTB2(Classique, gabarit=False)."""
     classique = au_store.config_by_attributes(
         duree_h=duree_h, tension=REFERENCE_TENSION, turpe_type="Classique", gabarit=False
     )
     target = au_store.config_by_attributes(
         duree_h=duree_h, tension=REFERENCE_TENSION, turpe_type=turpe_type, gabarit=False
     )
-    raw_classique = au_store.raw_by_key[classique.austore_key]
-    raw_target = au_store.raw_by_key[target.austore_key]
-    # 0.0 = annee hors de la fenetre reelle d'une config verrouillee sur un
-    # COD (voir _oro_raw_factor ci-dessous, meme convention) - jamais un
-    # RAW reel, a exclure plutot que produire un ratio ou un delta invalide.
-    return {
-        y: raw_target[y] / raw_classique[y]
-        for y in raw_classique
-        if y in raw_target and raw_classique[y] and raw_target[y]
-    }
+    return _mean_ratio(
+        au_store.raw_by_key[target.austore_key], au_store.raw_by_key[classique.austore_key]
+    )
 
 
-def _turpe_type_turpe_delta(
-    au_store: AuStoreLibrary, *, duree_h: int, turpe_type: str
-) -> dict[int, float]:
+def _turpe_type_turpe_delta(au_store: AuStoreLibrary, *, duree_h: int, turpe_type: str) -> float:
     classique = au_store.config_by_attributes(
         duree_h=duree_h, tension=REFERENCE_TENSION, turpe_type="Classique", gabarit=False
     )
     target = au_store.config_by_attributes(
         duree_h=duree_h, tension=REFERENCE_TENSION, turpe_type=turpe_type, gabarit=False
     )
-    turpe_classique = au_store.turpe_by_key[classique.austore_key]
-    turpe_target = au_store.turpe_by_key[target.austore_key]
-    return {
-        y: turpe_target[y] - turpe_classique[y]
-        for y in turpe_classique
-        if y in turpe_target and turpe_classique[y] and turpe_target[y]
-    }
+    return _mean_delta(
+        au_store.turpe_by_key[target.austore_key], au_store.turpe_by_key[classique.austore_key]
+    )
 
 
-def _gabarit_raw_factor(
-    au_store: AuStoreLibrary, *, duree_h: int, turpe_type: str
-) -> dict[int, float]:
-    """RAW_HTB2(turpe_type, gabarit=True) / RAW_HTB2(turpe_type, gabarit=False), par annee."""
+def _gabarit_raw_factor(au_store: AuStoreLibrary, *, duree_h: int, turpe_type: str) -> float:
+    """Ratio moyen RAW_HTB2(turpe_type, gabarit=True) / RAW_HTB2(turpe_type, gabarit=False)."""
     g0 = au_store.config_by_attributes(
         duree_h=duree_h, tension=REFERENCE_TENSION, turpe_type=turpe_type, gabarit=False
     )
     g1 = au_store.config_by_attributes(
         duree_h=duree_h, tension=REFERENCE_TENSION, turpe_type=turpe_type, gabarit=True
     )
-    raw_g0 = au_store.raw_by_key[g0.austore_key]
-    raw_g1 = au_store.raw_by_key[g1.austore_key]
-    # Certaines configs gabarit=True reelles sont elles-memes verrouillees sur
-    # un COD (ex. HTB2 4h Soutirage gabarit) et zero-remplies hors de leur
-    # fenetre - meme exclusion que _turpe_type_raw_factor ci-dessus (bug
-    # signale par l'utilisateur, 2026-09-24 : sans elle, un ratio 0.0 de
-    # cette annee ecrasait silencieusement le RAW de la config extrapolee).
-    return {y: raw_g1[y] / raw_g0[y] for y in raw_g0 if y in raw_g1 and raw_g0[y] and raw_g1[y]}
+    return _mean_ratio(au_store.raw_by_key[g1.austore_key], au_store.raw_by_key[g0.austore_key])
 
 
-def _gabarit_turpe_delta(
-    au_store: AuStoreLibrary, *, duree_h: int, turpe_type: str
-) -> dict[int, float]:
+def _gabarit_turpe_delta(au_store: AuStoreLibrary, *, duree_h: int, turpe_type: str) -> float:
     g0 = au_store.config_by_attributes(
         duree_h=duree_h, tension=REFERENCE_TENSION, turpe_type=turpe_type, gabarit=False
     )
     g1 = au_store.config_by_attributes(
         duree_h=duree_h, tension=REFERENCE_TENSION, turpe_type=turpe_type, gabarit=True
     )
-    turpe_g0 = au_store.turpe_by_key[g0.austore_key]
-    turpe_g1 = au_store.turpe_by_key[g1.austore_key]
-    return {
-        y: turpe_g1[y] - turpe_g0[y]
-        for y in turpe_g0
-        if y in turpe_g1 and turpe_g0[y] and turpe_g1[y]
-    }
+    return _mean_delta(au_store.turpe_by_key[g1.austore_key], au_store.turpe_by_key[g0.austore_key])
 
 
-def _oro_raw_factor(au_store: AuStoreLibrary, *, duree_h: int, turpe_type: str) -> dict[int, float]:
-    """RAW_HTB2_ORO(turpe_type) / RAW_HTB2_standard(turpe_type, gabarit=False), par annee -
-    calibre sur les 4 cas ORO reels (seuls disponibles)."""
+def _oro_raw_factor(au_store: AuStoreLibrary, *, duree_h: int, turpe_type: str) -> float:
+    """Ratio moyen RAW_HTB2_ORO(turpe_type) / RAW_HTB2_standard(turpe_type,
+    gabarit=False) - calibre sur les 4 cas ORO reels (seuls disponibles)."""
     standard = au_store.config_by_attributes(
         duree_h=duree_h, tension=REFERENCE_TENSION, turpe_type=turpe_type, gabarit=False, oro=False
     )
     oro = au_store.config_by_attributes(
         duree_h=duree_h, tension=REFERENCE_TENSION, turpe_type=turpe_type, gabarit=False, oro=True
     )
-    raw_standard = au_store.raw_by_key[standard.austore_key]
-    raw_oro = au_store.raw_by_key[oro.austore_key]
-    return {
-        y: raw_oro[y] / raw_standard[y]
-        for y in raw_standard
-        if y in raw_oro and raw_standard[y] and raw_oro[y]
-    }
+    return _mean_ratio(
+        au_store.raw_by_key[oro.austore_key], au_store.raw_by_key[standard.austore_key]
+    )
 
 
-def _oro_turpe_delta(
-    au_store: AuStoreLibrary, *, duree_h: int, turpe_type: str
-) -> dict[int, float]:
+def _oro_turpe_delta(au_store: AuStoreLibrary, *, duree_h: int, turpe_type: str) -> float:
     standard = au_store.config_by_attributes(
         duree_h=duree_h, tension=REFERENCE_TENSION, turpe_type=turpe_type, gabarit=False, oro=False
     )
     oro = au_store.config_by_attributes(
         duree_h=duree_h, tension=REFERENCE_TENSION, turpe_type=turpe_type, gabarit=False, oro=True
     )
-    turpe_standard = au_store.turpe_by_key[standard.austore_key]
-    turpe_oro = au_store.turpe_by_key[oro.austore_key]
-    return {
-        y: turpe_oro[y] - turpe_standard[y]
-        for y in turpe_standard
-        if y in turpe_oro and turpe_standard[y] and turpe_oro[y]
-    }
+    return _mean_delta(
+        au_store.turpe_by_key[oro.austore_key], au_store.turpe_by_key[standard.austore_key]
+    )
 
 
 def curtailment_loss_pct(hours: int, *, path: Path = CURTAILMENT_LOSSES_PATH) -> dict[int, float]:
@@ -288,23 +284,23 @@ def resolve_config(
         if turpe_type != "Classique":
             factor = _turpe_type_raw_factor(au_store, duree_h=duree_h, turpe_type=turpe_type)
             delta = _turpe_type_turpe_delta(au_store, duree_h=duree_h, turpe_type=turpe_type)
-            raw = {y: raw[y] * _clamped(factor, y) for y in raw}
-            turpe = {y: turpe[y] + _clamped(delta, y) for y in turpe}
+            raw = {y: raw[y] * factor for y in raw}
+            turpe = {y: turpe[y] + delta for y in turpe}
             notes.append(
                 f"TURPE type {turpe_type} not modeled by Aurora for {tension} {duree_h}h - "
-                f"estimated by transferring the RAW/TURPE ratio/delta observed between "
+                f"estimated by transferring the average RAW/TURPE ratio/delta observed between "
                 f"{turpe_type} and Classique on {REFERENCE_TENSION} (the only voltage with "
                 f"this real combination) to the real Classique curve for {tension}."
             )
         if gabarit:
             gfactor = _gabarit_raw_factor(au_store, duree_h=duree_h, turpe_type=turpe_type)
             gdelta = _gabarit_turpe_delta(au_store, duree_h=duree_h, turpe_type=turpe_type)
-            raw = {y: raw[y] * _clamped(gfactor, y) for y in raw}
-            turpe = {y: turpe[y] + _clamped(gdelta, y) for y in turpe}
+            raw = {y: raw[y] * gfactor for y in raw}
+            turpe = {y: turpe[y] + gdelta for y in turpe}
             notes.append(
                 f"Gabarit not modeled by Aurora for {tension} {turpe_type} {duree_h}h - "
-                f"estimated by transferring the gabarit effect observed on {REFERENCE_TENSION} "
-                f"{turpe_type} {duree_h}h."
+                f"estimated by transferring the average gabarit effect observed on "
+                f"{REFERENCE_TENSION} {turpe_type} {duree_h}h."
             )
 
     # --- Etape 2 : ORO (limitation 3000h/an) ---
@@ -333,27 +329,19 @@ def resolve_config(
             extrapolated = True
             oro_factor = _oro_raw_factor(au_store, duree_h=duree_h, turpe_type=turpe_type)
             oro_delta = _oro_turpe_delta(au_store, duree_h=duree_h, turpe_type=turpe_type)
-            # oro_factor/oro_delta ne couvrent que les annees ou la reference
-            # ORO reelle (HTB2) a une valeur non nulle - certaines references
-            # sont elles-memes verrouillees sur un seul COD et zero-remplies
-            # hors de cette fenetre (ex. "4h HTB2 Soutirage ORO" : 0 en dehors
-            # de 2030-2059). Sans _clamped, ces annees disparaitraient de la
-            # courbe extrapolee au lieu d'etre couvertes par le ratio le plus
-            # proche connu (bug signale par l'utilisateur, 2026-09-24).
-            raw = {y: raw[y] * _clamped(oro_factor, y) for y in raw}
-            turpe = {y: turpe[y] + _clamped(oro_delta, y) for y in turpe}
-            clamp_note = ""
-            if min(raw) < min(oro_factor) or max(raw) > max(oro_factor):
-                clamp_note = (
-                    f" Outside {min(oro_factor)}-{max(oro_factor)} (the reference's own "
-                    "coverage), the nearest known ratio is held constant."
-                )
+            # Ratio/delta moyens (pas par annee, voir docstring du module) -
+            # une config ORO reelle verrouillee sur un seul COD (ex. "4h
+            # HTB2 Soutirage ORO", 0 en dehors de 2030-2059) ne contamine
+            # donc plus la courbe extrapolee d'un artefact annee par annee
+            # (bug signale par l'utilisateur, 2026-09-24, corrige une 1ere
+            # fois par plafonnement puis par cette moyenne le 2026-10-01).
+            raw = {y: raw[y] * oro_factor for y in raw}
+            turpe = {y: turpe[y] + oro_delta for y in turpe}
             notes.append(
                 f"ORO not modeled by Aurora for {tension} {turpe_type} {duree_h}h"
-                f"{' gabarit' if gabarit else ''} - estimated by transferring the ORO vs "
-                f"standard RAW/TURPE ratio/delta observed on {REFERENCE_TENSION} {turpe_type} "
+                f"{' gabarit' if gabarit else ''} - estimated by transferring the average ORO "
+                f"vs standard RAW/TURPE ratio/delta observed on {REFERENCE_TENSION} {turpe_type} "
                 f"{duree_h}h (the only real ORO combination for this duration/type)."
-                f"{clamp_note}"
             )
 
         target_hours = (

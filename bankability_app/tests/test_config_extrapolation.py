@@ -137,13 +137,17 @@ def test_curtailment_loss_pct_raises_outside_analysed_range():
 
 def test_resolve_config_oro_extrapolation_keeps_full_calendar_year_coverage(au_store):
     """La seule reference ORO reelle pour 4h (HTB2 Soutirage, voir
-    `_oro_raw_factor`) est verrouillee sur COD2030 : son propre ratio annee
-    par annee ne couvre que 2030-2059. Avant le fix (2026-09-24, bug signale
-    par l'utilisateur), une config extrapolee via ce ratio (ex. HTA 4h
-    Soutirage gabarit ORO) perdait silencieusement 2027-2029 - `revenue_and_
-    turpe_series` levait ensuite "Year 2029 is outside the AU_Store range"
-    pour n'importe quel COD < 2030, alors que la config n'est pourtant pas
-    verrouillee sur un COD (`valide_cod` reste None, "toute")."""
+    `_oro_raw_factor`) est verrouillee sur COD2030 : ses valeurs sont a 0
+    hors de 2030-2059. Avant le fix (2026-09-24, bug signale par
+    l'utilisateur), une config extrapolee via un ratio par annee calcule sur
+    cette reference (ex. HTA 4h Soutirage gabarit ORO) perdait silencieusement
+    2027-2029 - `revenue_and_turpe_series` levait ensuite "Year 2029 is
+    outside the AU_Store range" pour n'importe quel COD < 2030, alors que la
+    config n'est pourtant pas verrouillee sur un COD (`valide_cod` reste
+    None, "toute"). Depuis le passage a un ratio moyen (2026-10-01, voir
+    docstring du module), ce probleme ne peut plus se produire : le ratio
+    moyen s'applique a toutes les annees de la courbe de depart, sans notion
+    de "couverture" a preserver."""
     resolved = config_extrapolation.resolve_config(
         au_store, duree_h=4, tension="HTA", turpe_type="Soutirage", gabarit=True, oro=True
     )
@@ -152,7 +156,6 @@ def test_resolve_config_oro_extrapolation_keeps_full_calendar_year_coverage(au_s
     raw = resolved.library.raw_by_key[resolved.config.austore_key]
     assert min(raw) == 2027
     assert max(raw) == 2060
-    assert any("held constant" in note for note in resolved.notes)
 
 
 def test_resolve_config_oro_extrapolation_usable_for_cod_before_2030(au_store, copex_library):
@@ -204,3 +207,21 @@ def test_resolve_config_custom_curtailment_hours_rescales_relative_to_3000h(au_s
     raw_3000 = resolved_3000.library.raw_by_key[resolved_3000.config.austore_key]
     raw_1000 = resolved_1000.library.raw_by_key[resolved_1000.config.austore_key]
     assert raw_1000[2027] > raw_3000[2027]
+
+
+def test_gabarit_raw_factor_same_order_of_magnitude_regardless_of_duration(au_store):
+    """Retour utilisateur, 2026-10-01 : le TRI extrapole doit rester du meme
+    ordre de grandeur que le TRI reel Aurora, quelle que soit la duree -
+    avant le passage a un ratio moyen (plutot qu'un ratio par annee), le
+    ratio gabarit 4h (calibre sur une reference HTB2 verrouillee sur
+    COD2030) pouvait s'ecarter fortement du ratio 2h (calibre sur une
+    reference non verrouillee) a cause d'un artefact propre au cas 4h,
+    alors que les 2 durees devraient donner un effet gabarit du meme ordre
+    (voir docs/specs/config_extrapolation.md, "Benchmark de reference")."""
+    factor_2h = config_extrapolation._gabarit_raw_factor(
+        au_store, duree_h=2, turpe_type="Injection"
+    )
+    factor_4h = config_extrapolation._gabarit_raw_factor(
+        au_store, duree_h=4, turpe_type="Injection"
+    )
+    assert factor_2h == pytest.approx(factor_4h, abs=0.05)
