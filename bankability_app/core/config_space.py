@@ -13,9 +13,22 @@ from .dev_case import CopexLibrary, voltage_duration_key
 
 def has_cost_data(config: AuStoreConfig, copex_library: CopexLibrary) -> bool:
     """`AU_Store` modelise des configs (ex. HTB3) que `COPEX_library` ne couvre
-    pas (verifie : seules HTA/HTB1/HTB2 y sont, voir docs/specs/aur_cases.md) -
-    a filtrer en amont plutot que de laisser l'utilisateur choisir une config
-    qui echouera au calcul (`aur_cases.capex_and_opex_keur` leve sinon)."""
+    pas (verifie a l'origine : seules HTA/HTB1/HTB2 y etaient, voir
+    docs/specs/aur_cases.md) - a filtrer en amont plutot que de laisser
+    l'utilisateur choisir une config qui echouera au calcul
+    (`aur_cases.capex_and_opex_keur` leve sinon).
+
+    HTB3 exclu explicitement, independamment des donnees disponibles -
+    demande de l'utilisateur, 2026-09-18 : "ne plus proposer HTB3 du tout"
+    (a l'epoque faute de donnees CAPEX/OPEX). Depuis le passage de
+    `copex_library` au databook Aurora Q2 2026 (2026-10-01), HTB3 a en
+    realite des donnees - cette fonction redevenait donc purement pilotee
+    par les donnees aurait silencieusement reactive HTB3 partout (dropdown
+    Configurateur, Aurora Global Analysis), un changement de comportement
+    visible qui n'a pas ete demande. Garde-fou explicite en attendant une
+    decision de l'utilisateur (voir docs/specs/config_space.md)."""
+    if config.tension == "HTB3":
+        return False
     key = voltage_duration_key(config.tension, config.duree_h)
     return key in copex_library.capex_unit_costs and key in copex_library.opex_unit_costs
 

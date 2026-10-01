@@ -51,11 +51,14 @@ projets saisis par l'utilisateur dans le Configurateur — voir `docs/adr/0003` 
   `config_space.has_cost_data` exclut la tension en amont, dans le Configurateur (`tensions()`)
   comme dans l'analyse globale (`enumerate_configs`), voir `docs/specs/config_space.md`.
 - **`run_global_sensitivity` ne mentionne plus HTB3 du tout, même dans `skipped`** (demande de
-  l'utilisateur, 2026-09-24) : HTB3 est une limite **permanente** (aucune tension n'aura jamais de
-  données CAPEX/OPEX pour elle, ni Aurora ni ICP), pas une donnée manquante ponctuelle qui
-  mériterait d'être signalée à chaque utilisation — filtré explicitement hors du résumé
-  `excluded_configs` par `c.tension != "HTB3"`. Le mécanisme `skipped` générique reste actif pour
-  toute *autre* tension qui manquerait de données à l'avenir.
+  l'utilisateur, 2026-09-24) : HTB3 était jusqu'ici une limite **permanente** (aucune tension
+  n'avait de données CAPEX/OPEX pour elle, ni Aurora ni ICP) — filtré explicitement hors du résumé
+  `excluded_configs` par `c.tension != "HTB3"`. **"Permanente" ne tient plus depuis le 2026-10-01**
+  (le databook Aurora Q2 2026, nouvelle source par défaut de `copex_library`, couvre HTB3) —
+  `config_space.has_cost_data` exclut maintenant HTB3 explicitement (en dur) plutôt que par absence
+  de donnée, pour ne pas la réactiver silencieusement ; décision de la réactiver ou non en
+  attente de l'utilisateur, voir `docs/specs/config_space.md` "Questions ouvertes". Le mécanisme
+  `skipped` générique reste actif pour toute *autre* tension qui manquerait de données à l'avenir.
 - **Une puissance de référence PAR TENSION, pas une seule pour tout l'espace**
   (`power_mw_by_tension`, corrigé 2026-10-01 suite à un retour utilisateur) : appliquer une seule
   puissance (ex. 50 MW, réaliste pour HTB2) à toutes les tensions produit des cas incohérents — une

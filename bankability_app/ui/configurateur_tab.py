@@ -19,7 +19,6 @@ travail du projet, pas une donnee UI)."""
 from __future__ import annotations
 
 import io
-from pathlib import Path
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -37,10 +36,6 @@ from core import (
 )
 from ui import chart_theme
 
-SAMPLE_AURORA_BP_PATH = (
-    Path(__file__).resolve().parent.parent / "sample_data" / "160926_BP_Stockage_Standalone__.xlsx"
-)
-
 _CONTRACT_LABELS = {
     contract_overlay.FULL_MERCHANT: "Full merchant",
     contract_overlay.FLOOR: "Floor",
@@ -49,16 +44,21 @@ _CONTRACT_LABELS = {
 
 
 @st.cache_resource
-def load_library() -> tuple[aur_cases.AuStoreLibrary, object, object, dict]:
+def load_library() -> tuple[aur_cases.AuStoreLibrary, object, dict]:
+    """`copex_library` (CAPEX/OPEX Aurora) vient du databook Aurora Q2 2026
+    (`core.dev_case.load_copex_library_q2_2026`) - demande de l'utilisateur,
+    2026-10-01 : les references CAPEX Aurora du fixture
+    `sample_data/160926_BP_Stockage_Standalone__.xlsx` (COPEX_library) sont
+    confirmees caduques, remplacees partout (repli ICP par defaut, export
+    "Aurora COPEX Comparison", comparaison "Use Aurora's own CAPEX/OPEX
+    assumptions") - un seul jeu d'hypotheses Aurora dans toute l'app, pas 2
+    en parallele (voir docs/specs/copex_comparison.md)."""
     from core.dev_case import load_copex_library_q2_2026
-    from core.dev_case_parser import load_dev_case_grids, parse_copex_library
 
     au_store = aur_cases.load_aurora_curves()
-    _, copex_grid, _ = load_dev_case_grids(SAMPLE_AURORA_BP_PATH)
-    copex_library = parse_copex_library(copex_grid)
-    copex_library_q2_2026 = load_copex_library_q2_2026()
+    copex_library = load_copex_library_q2_2026()
     financing_terms = aur_cases.load_financing_terms()
-    return au_store, copex_library, copex_library_q2_2026, financing_terms
+    return au_store, copex_library, financing_terms
 
 
 def _fmt_keur(value: float | None) -> str:
@@ -539,7 +539,7 @@ def _render_hold_and_operate(
     *,
     projects: list[portfolio.ProjectConfig],
     au_store: aur_cases.AuStoreLibrary,
-    copex_library_q2_2026,
+    copex_library,
     financing_terms: dict,
 ) -> None:
     st.caption(
@@ -593,15 +593,15 @@ def _render_hold_and_operate(
         "Also show results with Aurora's own CAPEX/OPEX assumptions",
         help="Recomputes the table above using Aurora's own CAPEX/OPEX instead of ours "
         "(ICP + Aurora fallback) - same revenue, same financing terms, only the cost source "
-        "changes. Uses the Aurora Q2 2026 databook ('Costs assumptions' sheet) - the older "
-        "COPEX_library fixture reference was dropped (2026-10-01, confirmed outdated by the "
-        "user). See core/copex_comparison.py for how our costs compare to Aurora's.",
+        "changes (Aurora Q2 2026 databook, 'Costs assumptions' sheet - same copex_library used "
+        "everywhere else in the app). See core/copex_comparison.py for how our costs compare "
+        "to Aurora's.",
     ):
         try:
             rows_aurora = portfolio.run_portfolio(
                 projects,
                 au_store,
-                copex_library_q2_2026,
+                copex_library,
                 financing_terms,
                 capex_opex_source="aurora",
             )
@@ -880,7 +880,6 @@ def _render_best_configs(rows: list[portfolio.PortfolioRow]) -> None:
 def _render_results(
     au_store: aur_cases.AuStoreLibrary,
     copex_library,
-    copex_library_q2_2026,
     financing_terms: dict,
 ) -> None:
     projects: list[portfolio.ProjectConfig] = st.session_state["portfolio_projects"]
@@ -918,7 +917,7 @@ def _render_results(
             rows,
             projects=projects,
             au_store=au_store,
-            copex_library_q2_2026=copex_library_q2_2026,
+            copex_library=copex_library,
             financing_terms=financing_terms,
         )
     with tab2:
@@ -934,11 +933,11 @@ def render() -> None:
         "Aurora for line items it doesn't cover. See docs/specs/aur_v2_methodology.md."
     )
     st.session_state.setdefault("portfolio_projects", [])
-    au_store, copex_library, copex_library_q2_2026, financing_terms = load_library()
+    au_store, copex_library, financing_terms = load_library()
 
     _render_bulk_import()
     st.divider()
     _render_add_project_form(au_store, copex_library, financing_terms)
     st.divider()
     _render_project_list()
-    _render_results(au_store, copex_library, copex_library_q2_2026, financing_terms)
+    _render_results(au_store, copex_library, financing_terms)

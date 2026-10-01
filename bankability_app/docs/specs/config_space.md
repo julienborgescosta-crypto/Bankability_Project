@@ -23,7 +23,17 @@ sans dupliquer la logique de chargement/validation déjà dans `aur_cases.py`.
   dur `"HTB3"` évite que le filtre devienne obsolète si `COPEX_library` est un jour complété.
   `tensions()` accepte `copex_library` en optionnel : fourni, il filtre ; absent, comportement
   inchangé (tests existants non affectés).
+- **Exclusion HTB3 repassée en dur le 2026-10-01** — ce que la décision ci-dessus anticipait
+  ("si `COPEX_library` est un jour complété") s'est produit, mais par un autre chemin que prévu :
+  le remplacement du `copex_library` par défaut (fixture → databook Aurora Q2 2026, voir
+  `docs/specs/copex_comparison.md`) a fait apparaître des données HTB3 là où il n'y en avait
+  jamais eu — ce qui aurait réactivé HTB3 silencieusement partout (dropdown Configurateur, Aurora
+  Global Analysis), un changement de comportement visible non demandé. Garde-fou explicite remis
+  en place en attendant une décision de l'utilisateur (voir "Questions ouvertes").
 
 ## Questions ouvertes
 
-Aucune à ce stade.
+- **HTB3 a maintenant des données CAPEX/OPEX réelles (Aurora Q2 2026)** — l'exclusion reste pour
+  l'instant forcée en dur dans `has_cost_data`, contrairement à l'intention de conception
+  originale (exclusion purement pilotée par la donnée). À trancher avec l'utilisateur : réactiver
+  HTB3 partout maintenant que la donnée existe, ou garder l'exclusion explicite.
