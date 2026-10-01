@@ -133,10 +133,26 @@ def _render_bulk_import() -> None:
             st.rerun()
 
 
+def _safe_index(options: list, value) -> int:
+    """Index de `value` dans `options`, ou 0 si absent - jamais une exception
+    (ex. en mode edition, si l'utilisateur change une dimension en amont -
+    duree/tension/TURPE type - et que la valeur sauvegardee du projet edite
+    ne fait plus partie des options recalculees pour la nouvelle combo)."""
+    return options.index(value) if value in options else 0
+
+
 def _render_add_project_form(
     au_store: aur_cases.AuStoreLibrary, copex_library, financing_terms: dict
 ) -> None:
-    st.subheader("Add a project")
+    projects: list[portfolio.ProjectConfig] = st.session_state["portfolio_projects"]
+    editing_index = st.session_state.get("editing_project_index")
+    editing_project = (
+        projects[editing_index]
+        if editing_index is not None and editing_index < len(projects)
+        else None
+    )
+
+    st.subheader("Edit project" if editing_project is not None else "Add a project")
     st.caption(
         "TURPE, HTA/HTB1/HTB2/HTB3, Gabarit and ORO are French grid regulatory terms with no "
         "direct English equivalent, kept as-is — TURPE is the French grid usage tariff; "
@@ -145,32 +161,73 @@ def _render_add_project_form(
         "option; ORO (Offre de Raccordement Optimisé) is a non-firm connection offer capped at "
         "~3000h/year of curtailment."
     )
+    # Suffixe de `key` stable pour TOUS les widgets de ce formulaire (ci-dessous) - PAS
+    # `name` (bug corrige le 2026-10-01, signale par l'utilisateur : `name` est un
+    # `st.text_input` retape a chaque caractere, donc `key=f"..._{name}"` change de cle a
+    # CHAQUE frappe - Streamlit traite alors le widget comme neuf et perd sa valeur deja
+    # saisie, ex. mode "Manual value" + 250 k€ de raccordement, remis a "library"/0 des
+    # que l'utilisateur finit de taper/modifie le nom du projet).
+    #
+    # En mode edition (2026-10-01, demande utilisateur : "je veux pouvoir editer"),
+    # `form_id` est propre a CE projet (`edit{index}`) plutot que base sur le compteur de
+    # projets ajoutes - sans ca, les widgets de ce formulaire partageraient leur cle avec
+    # le formulaire "Add a project" (ou avec l'edition d'un AUTRE projet), et Streamlit ne
+    # les reinitialiserait jamais aux valeurs du projet qu'on vient d'ouvrir en edition
+    # (un widget garde son etat tant que sa cle ne change pas, le parametre `value=` n'est
+    # qu'un defaut initial, ignore silencieusement une fois l'etat deja present).
+    form_id = f"edit{editing_index}" if editing_project is not None else len(projects)
+
+    def _default(attr: str, fallback):
+        return getattr(editing_project, attr) if editing_project is not None else fallback
+
     c1, c2, c3 = st.columns(3)
     with c1:
         name = st.text_input(
-            "Project name", value=f"Project {len(st.session_state['portfolio_projects']) + 1}"
+            "Project name",
+            value=_default("name", f"Project {len(projects) + 1}"),
+            key=f"name_{form_id}",
         )
-        duree_h = st.selectbox("BESS duration (h)", config_space.durations(au_store))
+        duree_options = config_space.durations(au_store)
+        duree_h = st.selectbox(
+            "BESS duration (h)",
+            duree_options,
+            index=_safe_index(duree_options, _default("duree_h", duree_options[0])),
+            key=f"duree_{form_id}",
+        )
+        tension_options = config_space.tensions(
+            au_store, duree_h=duree_h, copex_library=copex_library
+        )
         tension = st.selectbox(
             "Voltage (Tension)",
-            config_space.tensions(au_store, duree_h=duree_h, copex_library=copex_library),
+            tension_options,
+            index=_safe_index(tension_options, _default("tension", tension_options[0])),
+            key=f"tension_{form_id}",
         )
     with c2:
+        turpe_type_options = config_space.turpe_types(au_store, duree_h=duree_h, tension=tension)
         turpe_type = st.selectbox(
-            "TURPE type", config_space.turpe_types(au_store, duree_h=duree_h, tension=tension)
+            "TURPE type",
+            turpe_type_options,
+            index=_safe_index(turpe_type_options, _default("turpe_type", turpe_type_options[0])),
+            key=f"turpe_type_{form_id}",
         )
         gabarit_options = config_space.gabarit_options(
             au_store, duree_h=duree_h, tension=tension, turpe_type=turpe_type
         )
         gabarit = st.selectbox(
-            "Gabarit", gabarit_options, format_func=lambda g: "Yes" if g else "No"
+            "Gabarit",
+            gabarit_options,
+            index=_safe_index(gabarit_options, _default("gabarit", gabarit_options[0])),
+            format_func=lambda g: "Yes" if g else "No",
+            key=f"gabarit_{form_id}",
         )
         if gabarit_options == [False]:
             st.caption('Gabarit "Yes" unavailable for TURPE Classique (never combined).')
         oro_options = config_space.oro_options(turpe_type=turpe_type)
         oro_requested = st.checkbox(
             "ORO (injection/consumption capped at 3000h/year)",
-            key=f"oro_{name}",
+            value=_default("oro_requested", False),
+            key=f"oro_{form_id}",
             disabled=oro_options == [False],
         )
         if oro_options == [False]:
@@ -181,16 +238,31 @@ def _render_add_project_form(
         if oro_requested:
             curtailment_hours = st.number_input(
                 "ORO curtailment hours (default 3000h)",
-                value=3000,
+                value=_default("curtailment_hours", None) or 3000,
                 min_value=500,
                 max_value=4000,
                 step=500,
-                key=f"oro_hours_{name}",
+                key=f"oro_hours_{form_id}",
             )
-        power_mw = st.number_input("Power (MW)", value=10.0, min_value=0.1)
+        power_mw = st.number_input(
+            "Power (MW)", value=_default("power_mw", 10.0), min_value=0.1, key=f"power_{form_id}"
+        )
     with c3:
-        cod_year = st.number_input("COD year", value=2027, min_value=2027, max_value=2060, step=1)
-        operating_years = st.number_input("Operating life (years)", value=20, min_value=1, step=1)
+        cod_year = st.number_input(
+            "COD year",
+            value=_default("cod_year", 2027),
+            min_value=2027,
+            max_value=2060,
+            step=1,
+            key=f"cod_{form_id}",
+        )
+        operating_years = st.number_input(
+            "Operating life (years)",
+            value=_default("operating_years", 20),
+            min_value=1,
+            step=1,
+            key=f"opyears_{form_id}",
+        )
 
     cod_invalid = False
     try:
@@ -233,41 +305,63 @@ def _render_add_project_form(
         return
 
     st.markdown("**Contract structure**")
+    existing_structure = _default("contract_structure", None)
+    contract_kind_options = [
+        contract_overlay.FULL_MERCHANT,
+        contract_overlay.FLOOR,
+        contract_overlay.TOLLING,
+    ]
     c1, c2, c3 = st.columns(3)
     with c1:
         contract_kind = st.selectbox(
             "Structure",
-            [contract_overlay.FULL_MERCHANT, contract_overlay.FLOOR, contract_overlay.TOLLING],
+            contract_kind_options,
+            index=_safe_index(
+                contract_kind_options,
+                existing_structure.kind if existing_structure else contract_overlay.FULL_MERCHANT,
+            ),
             format_func=lambda k: _CONTRACT_LABELS[k],
+            key=f"contract_kind_{form_id}",
         )
     price = 0.0
     duration_years = 0
     sharing_pct = 0.0
     if contract_kind != contract_overlay.FULL_MERCHANT:
         with c2:
-            price = st.number_input("Price (k€/MW/yr)", value=80.0, min_value=0.0)
+            price = st.number_input(
+                "Price (k€/MW/yr)",
+                value=existing_structure.price_keur_per_mw_per_year if existing_structure else 80.0,
+                min_value=0.0,
+                key=f"price_{form_id}",
+            )
             duration_years = st.number_input(
                 "Contract duration (years)",
-                value=10,
+                value=existing_structure.duration_years if existing_structure else 10,
                 min_value=1,
                 max_value=int(operating_years),
                 step=1,
+                key=f"contract_duration_{form_id}",
             )
         if contract_kind == contract_overlay.FLOOR:
             with c3:
                 sharing_pct = (
                     st.number_input(
                         "Aggregator sharing above the floor (%)",
-                        value=0.0,
+                        value=(
+                            existing_structure.revenue_sharing_above_floor_pct * 100
+                            if existing_structure
+                            else 0.0
+                        ),
                         min_value=0.0,
                         max_value=100.0,
+                        key=f"sharing_{form_id}",
                     )
                     / 100
                 )
 
     st.markdown("**Repowering** (Battery+PCS replacement, degradation reset)")
     min_years_for_repowering = portfolio.MIN_OPERATING_YEARS_FOR_REPOWERING
-    repowering_candidates = portfolio.repowering_candidate_years(int(operating_years))
+    repowering_candidates = portfolio.repowering_candidate_years(int(operating_years), duree_h)
     if not repowering_candidates:
         st.caption(
             f"Unavailable for an operating life < {min_years_for_repowering} years "
@@ -275,33 +369,56 @@ def _render_add_project_form(
             "battery replacement to make economic sense."
         )
         repowering_enabled = False
-        repowering_year_mode = "auto"
+        repowering_year_mode = "manual"
         repowering_op_year_manual = 15
     else:
         repowering_enabled = st.checkbox(
-            "Enable repowering", value=True, key=f"repo_enabled_{name}"
+            "Enable repowering",
+            value=_default("repowering_enabled", True),
+            key=f"repo_enabled_{form_id}",
         )
-        repowering_year_mode = "auto"
-        repowering_op_year_manual = repowering_candidates[len(repowering_candidates) // 2]
+        # Defaut "manual" a mi-vie (operating_years // 2), pas "auto" (retour
+        # utilisateur, 2026-10-01) : l'optimisation Equity IRR reste
+        # disponible en option, mais plus pre-selectionnee par defaut - elle
+        # tend a pousser le repowering le plus tard possible (un artefact
+        # IRR, voir core/portfolio.py `MAX_REPOWERING_OP_YEAR`), la ou la
+        # moitie de la duree de vie du projet est un repere plus neutre par
+        # defaut. Clampee dans la plage valide (le SoH peut la rendre plus
+        # etroite que `[10, operating_years//2]` sur un 2h long - voir
+        # `core/soh_degradation.py`). En mode edition, part de l'annee deja
+        # choisie sur le projet plutot que de la mi-vie (clampee pareil).
+        repowering_year_mode = "manual"
+        default_manual_year = min(
+            max(
+                _default("repowering_op_year_manual", int(operating_years) // 2),
+                repowering_candidates[0],
+            ),
+            repowering_candidates[-1],
+        )
+        repowering_op_year_manual = default_manual_year
         if repowering_enabled:
+            repowering_year_mode_options = ["manual", "auto"]
             repowering_year_mode = st.radio(
                 "Repowering year",
-                ["auto", "manual"],
+                repowering_year_mode_options,
+                index=_safe_index(
+                    repowering_year_mode_options, _default("repowering_year_mode", "manual")
+                ),
                 format_func=lambda m: {
                     "auto": "Automatically optimized (best Equity IRR)",
                     "manual": "Manual",
                 }[m],
-                key=f"repo_mode_{name}",
+                key=f"repo_mode_{form_id}",
                 horizontal=True,
             )
             if repowering_year_mode == "manual":
                 repowering_op_year_manual = st.number_input(
                     "Repowering year (op-year since COD)",
-                    value=repowering_op_year_manual,
+                    value=default_manual_year,
                     min_value=repowering_candidates[0],
                     max_value=repowering_candidates[-1],
                     step=1,
-                    key=f"repo_year_{name}",
+                    key=f"repo_year_{form_id}",
                 )
             else:
                 st.caption(
@@ -311,31 +428,61 @@ def _render_add_project_form(
                 )
 
     with st.expander("Advanced overrides"):
+        existing_gearing = _default("gearing_pct_override", None)
+        existing_rate = _default("interest_rate_override", None)
+        existing_devex = _default("devex_keur_override", None)
+        existing_dsa = _default("dsa_keur_override", None)
         o1, o2, o3, o4 = st.columns(4)
         with o1:
-            override_gearing = st.checkbox("Override gearing", key=f"ov_gear_{name}")
+            override_gearing = st.checkbox(
+                "Override gearing", value=existing_gearing is not None, key=f"ov_gear_{form_id}"
+            )
             gearing_pct_override = (
-                st.number_input("Gearing (%)", value=70.0, min_value=0.0, max_value=100.0) / 100
+                st.number_input(
+                    "Gearing (%)",
+                    value=(existing_gearing * 100) if existing_gearing is not None else 70.0,
+                    min_value=0.0,
+                    max_value=100.0,
+                    key=f"gear_val_{form_id}",
+                )
+                / 100
                 if override_gearing
                 else None
             )
         with o2:
-            override_rate = st.checkbox("Override interest rate", key=f"ov_rate_{name}")
+            override_rate = st.checkbox(
+                "Override interest rate", value=existing_rate is not None, key=f"ov_rate_{form_id}"
+            )
             interest_rate_override = (
-                st.number_input("Interest rate (%)", value=5.0, min_value=0.0) / 100
+                st.number_input(
+                    "Interest rate (%)",
+                    value=(existing_rate * 100) if existing_rate is not None else 5.0,
+                    min_value=0.0,
+                    key=f"rate_val_{form_id}",
+                )
+                / 100
                 if override_rate
                 else None
             )
         with o4:
-            override_devex = st.checkbox("Override DEVEX", key=f"ov_devex_{name}")
+            override_devex = st.checkbox(
+                "Override DEVEX", value=existing_devex is not None, key=f"ov_devex_{form_id}"
+            )
             default_devex_keur = aur_cases.devex_keur_for_tension(tension, financing_terms)
             devex_keur_override = (
-                st.number_input("DEVEX (k€)", value=default_devex_keur, min_value=0.0)
+                st.number_input(
+                    "DEVEX (k€)",
+                    value=existing_devex if existing_devex is not None else default_devex_keur,
+                    min_value=0.0,
+                    key=f"devex_val_{form_id}",
+                )
                 if override_devex
                 else None
             )
         with o3:
-            override_dsa = st.checkbox("Override DSA", key=f"ov_dsa_{name}")
+            override_dsa = st.checkbox(
+                "Override DSA", value=existing_dsa is not None, key=f"ov_dsa_{form_id}"
+            )
             # Le DSA par defaut tient compte du DEVEX deja resolu ci-dessus (override ou
             # defaut), pour que marge nette = TSP - DEVEX retombe exactement sur la marge
             # cible quand SPA = 0 (voir aur_cases.dsa_default_keur).
@@ -349,7 +496,12 @@ def _render_add_project_form(
                 terms=financing_terms,
             )
             dsa_keur_override = (
-                st.number_input("DSA (k€)", value=default_dsa_keur, min_value=0.0)
+                st.number_input(
+                    "DSA (k€)",
+                    value=existing_dsa if existing_dsa is not None else default_dsa_keur,
+                    min_value=0.0,
+                    key=f"dsa_val_{form_id}",
+                )
                 if override_dsa
                 else None
             )
@@ -366,27 +518,37 @@ def _render_add_project_form(
         with st.expander("Where do the other CAPEX/OPEX line items come from?"):
             for note in copex_icp.capex_opex_source_notes(tension):
                 st.caption(note)
+        connection_mode_options = ["library", "manual", "distance_rte"]
         a1, a2 = st.columns(2)
         with a1:
             connection_capex_mode = st.selectbox(
                 "Grid connection CAPEX mode",
-                ["library", "manual", "distance_rte"],
+                connection_mode_options,
+                index=_safe_index(
+                    connection_mode_options, _default("connection_capex_mode", "library")
+                ),
                 format_func=lambda m: {
                     "library": "Library (segment/duration)",
                     "manual": "Manual value",
                     "distance_rte": "Distance to RTE substation",
                 }[m],
-                key=f"conn_mode_{name}",
+                key=f"conn_mode_{form_id}",
             )
             manual_connection_capex_keur = 0.0
             distance_rte_km = 0.0
             if connection_capex_mode == "manual":
                 manual_connection_capex_keur = st.number_input(
-                    "Manual grid connection CAPEX (k€)", value=0.0, min_value=0.0
+                    "Manual grid connection CAPEX (k€)",
+                    value=_default("manual_connection_capex_keur", 0.0),
+                    min_value=0.0,
+                    key=f"manual_conn_val_{form_id}",
                 )
             elif connection_capex_mode == "distance_rte":
                 distance_rte_km = st.number_input(
-                    "Distance to RTE substation (km)", value=1.0, min_value=0.0
+                    "Distance to RTE substation (km)",
+                    value=_default("distance_rte_km", 1.0) or 1.0,
+                    min_value=0.0,
+                    key=f"distance_val_{form_id}",
                 )
                 st.caption(
                     f"= 4650.7 × distance^0.239 = {_fmt_keur(4650.7 * distance_rte_km**0.239)}"
@@ -394,8 +556,9 @@ def _render_add_project_form(
         with a2:
             land_lease_opex_keur = st.number_input(
                 "Land lease OPEX (k€/yr)",
-                value=0.0,
+                value=_default("land_lease_opex_keur", 0.0),
                 min_value=0.0,
+                key=f"land_lease_{form_id}",
                 help="Replaces (not added to) Aurora's generic COPEX_library 'Land lease' "
                 "estimate when set - leave at 0 to keep using that generic estimate.",
             )
@@ -404,19 +567,30 @@ def _render_add_project_form(
         if tension in ("HTB1", "HTB2", "HTB3"):
             turpe_50pct_reduction = st.checkbox(
                 "TURPE 50% reduction",
+                value=_default("turpe_50pct_reduction", False),
+                key=f"turpe50_{form_id}",
                 help="Code de l'énergie, annexe art. D.341-9: storage sites connected "
                 "directly to RTE or to a ≥50kV infrastructure can get a 50% TURPE "
                 "reduction, conditional on >10 GWh/yr of withdrawal and an off-peak "
                 "withdrawal share ≥44% - a real BESS dispatch strategy, confirmed "
                 "achievable by Aurora in a 2025 internal study they shared with QEF. "
                 "This app does NOT verify eligibility (dispatch pattern, volume) - it's "
-                "a scenario toggle, applied to the variable TURPE on the revenue side "
-                "only (halves core.aur_cases' TURPE series) - the OPEX-side 'Grid "
-                "charges' fixed component is NOT reduced (see "
-                "docs/specs/turpe_50pct_reduction.md).",
+                "a scenario toggle, applied to BOTH TURPE components: the variable TURPE "
+                "on the revenue side (halves core.aur_cases' TURPE series) AND the fixed "
+                "part (halves the OPEX-side 'Grid charges' line, which bundles the TURPE "
+                "fixed component + CTA) - see docs/specs/turpe_50pct_reduction.md.",
             )
 
-    if st.button("Add the project", type="primary", disabled=cod_invalid):
+    submit_label = "Save changes" if editing_project is not None else "Add the project"
+    button_col, cancel_col = st.columns([3, 1])
+    with button_col:
+        submitted = st.button(submit_label, type="primary", disabled=cod_invalid)
+    with cancel_col:
+        if editing_project is not None and st.button("Cancel edit"):
+            st.session_state["editing_project_index"] = None
+            st.rerun()
+
+    if submitted:
         project = portfolio.ProjectConfig(
             name=name,
             duree_h=int(duree_h),
@@ -446,8 +620,17 @@ def _render_add_project_form(
             turpe_50pct_reduction=bool(turpe_50pct_reduction),
             oro_requested=bool(oro_requested),
             curtailment_hours=int(curtailment_hours) if curtailment_hours is not None else None,
+            # Pas exposes dans ce formulaire (seulement via import en masse,
+            # voir core/portfolio_import.py) - preserves du projet edite plutot
+            # que silencieusement remis a None en sauvegardant un autre champ.
+            carry_months_override=_default("carry_months_override", None),
+            carry_rate_override=_default("carry_rate_override", None),
         )
-        st.session_state["portfolio_projects"].append(project)
+        if editing_project is not None:
+            projects[editing_index] = project
+            st.session_state["editing_project_index"] = None
+        else:
+            projects.append(project)
         st.rerun()
 
 
@@ -457,8 +640,14 @@ def _render_project_list() -> None:
         st.caption("No project added yet.")
         return
     st.subheader(f"Portfolio projects ({len(projects)})")
+    editing_index = st.session_state.get("editing_project_index")
+    if editing_index is not None and editing_index < len(projects):
+        st.info(
+            f"Editing **{projects[editing_index].name}** — scroll up to the "
+            "'Edit project' form, make your changes, then click 'Save changes'."
+        )
     for i, project in enumerate(projects):
-        c1, c2 = st.columns([5, 1])
+        c1, c2, c3 = st.columns([5, 1, 1])
         with c1:
             adjustments = []
             if project.connection_capex_mode == "manual":
@@ -478,16 +667,29 @@ def _render_project_list() -> None:
             else:
                 adjustments.append("repowering auto-optimized")
             adjustment_suffix = f" ({', '.join(adjustments)})" if adjustments else ""
+            editing_suffix = " 🖊️ *(editing)*" if i == editing_index else ""
             st.write(
                 f"**{project.name}** — {project.duree_h}h {project.tension} {project.turpe_type}"
                 f"{' gabarit' if project.gabarit else ''}{' ORO' if project.oro_requested else ''}"
                 f", COD {project.cod_year}, "
                 f"{project.power_mw:.1f} MW, {_CONTRACT_LABELS[project.contract_structure.kind]}"
-                f"{adjustment_suffix}"
+                f"{adjustment_suffix}{editing_suffix}"
             )
         with c2:
+            if st.button("Edit", key=f"edit_{i}"):
+                st.session_state["editing_project_index"] = i
+                st.rerun()
+        with c3:
             if st.button("Remove", key=f"remove_{i}"):
                 projects.pop(i)
+                # Garde l'index d'edition coherent avec le decalage de la liste -
+                # jamais pointer sur le mauvais projet (ou un index hors limites)
+                # apres une suppression.
+                if editing_index is not None:
+                    if editing_index == i:
+                        st.session_state["editing_project_index"] = None
+                    elif editing_index > i:
+                        st.session_state["editing_project_index"] = editing_index - 1
                 st.rerun()
 
 
@@ -532,7 +734,7 @@ def _hold_and_operate_df(rows: list[portfolio.PortfolioRow]) -> pd.DataFrame:
                 "Gearing used": _fmt_pct(r.gearing_used_pct),
                 "Tenor (years)": r.debt_tenor_years,
                 "Repowering": (
-                    "disabled"
+                    ("not worth it (optimized)" if r.repowering_auto_optimized else "disabled")
                     if r.repowering_op_year_used is None
                     else f"year {r.repowering_op_year_used}"
                     + (" (optimized)" if r.repowering_auto_optimized else "")
@@ -942,6 +1144,7 @@ def render() -> None:
         "Aurora for line items it doesn't cover. See docs/specs/aur_v2_methodology.md."
     )
     st.session_state.setdefault("portfolio_projects", [])
+    st.session_state.setdefault("editing_project_index", None)
     au_store, copex_library, financing_terms = load_library()
 
     _render_bulk_import()

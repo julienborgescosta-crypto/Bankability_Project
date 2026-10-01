@@ -306,6 +306,7 @@ Modules (`core/`) :
 | `copex_icp.py` | CAPEX/OPEX BESS depuis `config/copex_icp.xlsx` (couts unitaires QEF reels, "ICP", mis a jour mensuellement) - source primaire pour le moteur Aurora v2, Aurora `COPEX_library` en repli pour les postes non couverts (Development, Insurance/Grid charges/Land lease/Accise/Other, HTB3) | 5bis (CAPEX/OPEX du moteur Aurora v2) |
 | `portfolio_import.py` | Import/export en masse du portefeuille Configurateur via Excel (`ProjectConfig` par ligne, template telechargeable) - l'app n'ayant pas de memoire entre sessions, voir `docs/specs/portfolio_import.md` | extension hors 6 couches (Configurateur Aurora v2) |
 | `copex_comparison.py` | Compare notre CAPEX/OPEX (ICP + repli Aurora, applique par le moteur) a la bibliotheque Aurora `COPEX_library` seule, poste par poste et au total (option "Aurora COPEX Comparison" du Configurateur) - voir `docs/specs/copex_comparison.md` | extension hors 6 couches (Configurateur Aurora v2) |
+| `soh_degradation.py` | Vraie courbe SoH (State of Health) depuis `config/soh_degradation.xlsx`, par duree (2h/4h), extrapolee lineairement au-dela de l'annee 15 - force un repowering quand le SoH passerait sous le seuil Aurora (66%/68.67%), independamment de ce que l'optimisation Equity IRR seule choisirait (voir `docs/specs/soh_degradation.md`) | extension hors 6 couches (Configurateur Aurora v2) |
 
 Configuration (`config/`) :
 
@@ -317,6 +318,8 @@ Configuration (`config/`) :
 - `copex_icp.xlsx` — couts unitaires CAPEX/OPEX BESS reels ("ICP"), source primaire du moteur
   Aurora v2 depuis le 2026-09-24 — a remplacer (meme nom de fichier) a chaque mise a jour mensuelle,
   voir `docs/specs/copex_icp.md`
+- `soh_degradation.xlsx` — courbe SoH (State of Health) reelle par duree BESS (2h/4h), annee 0 a 15,
+  fournie par l'utilisateur le 2026-10-01 — voir `docs/specs/soh_degradation.md`
 
 Chaque module ci-dessus a sa spec retrospective dans `docs/specs/` (objectif, decisions,
 bugs corriges, questions ouvertes) — a lire avant de le modifier.

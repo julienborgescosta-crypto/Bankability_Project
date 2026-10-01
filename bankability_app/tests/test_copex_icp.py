@@ -146,6 +146,72 @@ def test_icp_capex_total_keur_includes_epc_margin_and_insurance(icp_library, aur
     assert any("Development" in note for note in notes)
 
 
+def test_icp_eol_eligible_capex_keur_matches_direct_keur_before_margin_and_insurance(
+    icp_library, aurora_library
+):
+    """Valeur de fin de vie (Aurora PDF : "5% of the battery system, inverter
+    and balance of system costs") appliquee au direct_keur AVANT marge EPC et
+    assurance construction - ce ne sont pas des couts d'equipement physique
+    revendable (voir core/aur_cases.py end_of_life_value_keur)."""
+    direct_only = 0.0
+    for label in copex_icp._DIRECT_CAPEX_LABELS:
+        cost = copex_icp._icp_line_item_keur(
+            icp_library, label, "DSO", power_mw=10.0, duree_h=2, cod_year=2027
+        )
+        direct_only += cost or 0.0
+    direct_only += copex_icp.icp_battery_pcs_keur(
+        icp_library, duree_h=2, power_mw=10.0, cod_year=2027
+    )
+
+    result = copex_icp.icp_eol_eligible_capex_keur(
+        tension="HTA",
+        duree_h=2,
+        cod_year=2027,
+        power_mw=10.0,
+        icp_library=icp_library,
+        aurora_library=aurora_library,
+    )
+    assert result == pytest.approx(direct_only)
+
+
+def test_icp_eol_eligible_capex_keur_excludes_development(icp_library, aurora_library):
+    with_dev, _ = copex_icp.icp_capex_total_keur(
+        tension="HTA",
+        duree_h=2,
+        cod_year=2027,
+        power_mw=10.0,
+        icp_library=icp_library,
+        aurora_library=aurora_library,
+    )
+    eol_base = copex_icp.icp_eol_eligible_capex_keur(
+        tension="HTA",
+        duree_h=2,
+        cod_year=2027,
+        power_mw=10.0,
+        icp_library=icp_library,
+        aurora_library=aurora_library,
+    )
+    # direct_keur x (1+EPC)x(1+assurance) + Development > direct_keur seul.
+    assert with_dev > eol_base
+
+
+def test_icp_eol_eligible_capex_keur_falls_back_to_aurora_for_htb3(icp_library, aurora_library):
+    result = copex_icp.icp_eol_eligible_capex_keur(
+        tension="HTB3",
+        duree_h=2,
+        cod_year=2027,
+        power_mw=10.0,
+        icp_library=icp_library,
+        aurora_library=aurora_library,
+    )
+    key = copex_icp.voltage_duration_key("HTB3", 2)
+    unit_costs = aurora_library.capex_unit_costs.get(key, {})
+    expected = 10.0 * sum(
+        unit_costs.get(label, 0.0) for label in ("Battery system", "Inverter", "Balance of system")
+    )
+    assert result == pytest.approx(expected)
+
+
 def test_icp_capex_total_keur_falls_back_to_aurora_for_htb3(icp_library, aurora_library):
     capex, notes = copex_icp.icp_capex_total_keur(
         tension="HTB3",

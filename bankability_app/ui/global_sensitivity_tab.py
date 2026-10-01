@@ -52,6 +52,7 @@ def _run_cached(
     floor_tolling_price: float,
     floor_tolling_duration: int,
     floor_sharing_pct: float,
+    optimize_repowering: bool,
 ):
     return global_sensitivity.run_global_sensitivity(
         _au_store,
@@ -63,6 +64,7 @@ def _run_cached(
         floor_tolling_price_keur_per_mw_per_year=floor_tolling_price,
         floor_tolling_duration_years=floor_tolling_duration,
         floor_revenue_sharing_pct=floor_sharing_pct,
+        optimize_repowering=optimize_repowering,
     )
 
 
@@ -82,6 +84,8 @@ def _rows_to_dataframe(rows: list[global_sensitivity.GlobalSensitivityRow]) -> p
                 "npv_keur": r.row.npv_keur,
                 "net_margin_keur": r.row.net_margin_keur,
                 "build_and_flip_net_return_keur": r.row.build_and_flip_net_return_keur,
+                "repowering_op_year": r.row.repowering_op_year_used,
+                "repowering_auto_optimized": r.row.repowering_auto_optimized,
             }
             for r in rows
         ]
@@ -112,6 +116,20 @@ def _render_controls(au_store: aur_cases.AuStoreLibrary) -> dict:
                 f"{tension} (MW)", value=default, min_value=0.1, key=f"power_mw_{tension}"
             )
     with c2:
+        optimize_repowering = st.checkbox(
+            "Optimize repowering year (like Configurator)",
+            value=False,
+            key="optimize_repowering",
+            help=(
+                "Off (default): repowering forced at op-year 15 for every case, like the "
+                "ProjectConfig default. On: sweeps the candidate repowering years and keeps "
+                "whichever maximizes the Equity IRR for each case, same 'auto' mode the "
+                "Configurator pre-selects by default — needed to get comparable IRRs between "
+                "the two screens. Much slower (multiplies compute time by ~9 at 20 years of "
+                "operating life, ~19 at 30 years — one extra full financial run per candidate "
+                "year, per case)."
+            ),
+        )
         contract_kinds = st.multiselect(
             "Contract structures to sweep",
             [contract_overlay.FULL_MERCHANT, contract_overlay.FLOOR, contract_overlay.TOLLING],
@@ -148,6 +166,7 @@ def _render_controls(au_store: aur_cases.AuStoreLibrary) -> dict:
         "floor_tolling_price": float(floor_tolling_price),
         "floor_tolling_duration": int(floor_tolling_duration),
         "floor_sharing_pct": float(floor_sharing_pct),
+        "optimize_repowering": bool(optimize_repowering),
     }
 
 
@@ -216,6 +235,8 @@ def _render_table_and_filters(df: pd.DataFrame) -> pd.DataFrame:
             "npv_keur": "NPV (k€)",
             "net_margin_keur": "Net margin RtB (k€)",
             "build_and_flip_net_return_keur": "Build-and-flip return (k€)",
+            "repowering_op_year": "Repowering op-year",
+            "repowering_auto_optimized": "Repowering optimized",
         }
     )
     st.dataframe(
@@ -367,17 +388,24 @@ def render() -> None:
     au_store, copex_library, financing_terms = load_library()
     controls = _render_controls(au_store)
 
-    rows, skipped = _run_cached(
-        au_store,
-        copex_library,
-        financing_terms,
-        controls["operating_years"],
-        controls["power_mw_by_tension"],
-        controls["contract_kinds"],
-        controls["floor_tolling_price"],
-        controls["floor_tolling_duration"],
-        controls["floor_sharing_pct"],
+    spinner_message = (
+        "Running the full sweep with repowering optimization (much slower) — please wait..."
+        if controls["optimize_repowering"]
+        else "Running the full sweep..."
     )
+    with st.spinner(spinner_message):
+        rows, skipped = _run_cached(
+            au_store,
+            copex_library,
+            financing_terms,
+            controls["operating_years"],
+            controls["power_mw_by_tension"],
+            controls["contract_kinds"],
+            controls["floor_tolling_price"],
+            controls["floor_tolling_duration"],
+            controls["floor_sharing_pct"],
+            controls["optimize_repowering"],
+        )
     if skipped:
         with st.expander(f"{len(skipped)} case(s) skipped (missing data)"):
             for reason in skipped:

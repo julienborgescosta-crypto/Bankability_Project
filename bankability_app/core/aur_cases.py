@@ -772,6 +772,114 @@ def capex_and_opex_keur(
     return capex_generic_keur + connection_keur, opex_keur
 
 
+# Taux de la valeur de fin de vie (Aurora PDF Q2 2026, "Technology assumptions"
+# CAPEX : "the end-of-life value is made up of 5% of the battery system,
+# inverter and balance of system costs, as well as 100% of the grid
+# connection, while development and soft costs are considered sunk costs").
+EOL_EQUIPMENT_PCT = 0.05
+EOL_GRID_CONNECTION_PCT = 1.00
+
+
+def end_of_life_value_keur(
+    *,
+    tension: str,
+    duree_h: int,
+    cod_year: int,
+    power_mw: float,
+    copex_library: CopexLibrary,
+    connection_capex_mode: str = "library",
+    manual_connection_capex_keur: float = 0.0,
+    distance_rte_km: float = 0.0,
+    capex_opex_source: str = "icp",
+) -> float:
+    """Valeur de fin de vie (credit de cash au dernier op-year du projet,
+    `aur_cases.build_project_inputs` -> `ProjectInputs.end_of_life_keur`) :
+    `EOL_EQUIPMENT_PCT` x (base equipement physique : Battery system+Inverter+
+    Balance of system - `copex_icp.icp_eol_eligible_capex_keur`, ou
+    l'equivalent Aurora pur) + `EOL_GRID_CONNECTION_PCT` x cout de raccordement
+    REELLEMENT applique au projet (meme logique de mode que `capex_and_opex_keur`
+    - library/manual/distance_rte). Development/EPC soft costs TOUJOURS exclus
+    ("sunk costs" per le PDF) - jamais dans la base ICP ni Aurora.
+
+    Demande de l'utilisateur, 2026-10-01 : corrige la limite documentee dans le
+    README ("valeur residuelle de fin de vie non modelisee ... end_of_life_keur
+    reste une serie de zeros") - `AuStoreLibrary.eol_per_kw` (118.44 EUR/kW,
+    une seule valeur toutes tensions confondues) ne peut pas servir tel quel :
+    verifie le 2026-10-01 que la formule du PDF appliquee aux couts Aurora par
+    tension donne des valeurs tres differentes (25 EUR/kW en HTA, 97 en HTB1,
+    138 en HTB2) - une seule valeur plate aurait ete fausse d'un facteur ~5x
+    sur HTA. Calcule donc ici directement depuis les couts CAPEX reellement
+    appliques au projet (ICP ou Aurora selon `capex_opex_source`), pas depuis
+    `eol_per_kw`.
+
+    Portee actuelle : seulement a la decommission FINALE du projet (dernier
+    op-year), pas a chaque remplacement par repowering (l'ancien equipement
+    remplace aurait lui aussi une valeur de revente/ferraille - non modelise,
+    limite connue, voir docs/specs/aur_cases.md)."""
+    if capex_opex_source not in ("icp", "aurora"):
+        raise AuroraConfigError(
+            f"Unknown capex_opex_source: '{capex_opex_source}' (expected 'icp' or 'aurora')."
+        )
+
+    if capex_opex_source == "icp":
+        icp_library = copex_icp.load_icp_library_cached()
+        equipment_base_keur = copex_icp.icp_eol_eligible_capex_keur(
+            tension=tension,
+            duree_h=duree_h,
+            cod_year=cod_year,
+            power_mw=power_mw,
+            icp_library=icp_library,
+            aurora_library=copex_library,
+        )
+    else:
+        key = voltage_duration_key(tension, duree_h)
+        unit_costs = copex_library.capex_unit_costs.get(key, {})
+        equipment_base_keur = sum(
+            escalated_unit_cost(
+                unit_costs.get(label, 0.0), copex_library.capex_escalation.get(label, {}), cod_year
+            )
+            * power_mw
+            for label in ("Battery system", "Inverter", "Balance of system")
+        )
+
+    if connection_capex_mode == "library":
+        if capex_opex_source == "icp":
+            connection_keur, _ = copex_icp.icp_connection_capex_keur(
+                tension=tension,
+                duree_h=duree_h,
+                cod_year=cod_year,
+                power_mw=power_mw,
+                icp_library=copex_icp.load_icp_library_cached(),
+                aurora_library=copex_library,
+            )
+        else:
+            key = voltage_duration_key(tension, duree_h)
+            connection_keur = (
+                escalated_unit_cost(
+                    copex_library.capex_unit_costs.get(key, {}).get(
+                        CAPEX_GRID_CONNECTION_LABEL, 0.0
+                    ),
+                    copex_library.capex_escalation.get(CAPEX_GRID_CONNECTION_LABEL, {}),
+                    cod_year,
+                )
+                * power_mw
+            )
+    else:
+        params = DevCaseParams(
+            cod_year=cod_year,
+            power_mw=power_mw,
+            duration_h=duree_h,
+            connection_type="",
+            voltage_class_override=tension,
+            connection_capex_mode=connection_capex_mode,
+            manual_connection_capex_keur=manual_connection_capex_keur,
+            distance_rte_km=distance_rte_km,
+        )
+        connection_keur = connection_capex_keur(params, copex_library)
+
+    return EOL_EQUIPMENT_PCT * equipment_base_keur + EOL_GRID_CONNECTION_PCT * connection_keur
+
+
 def capex_and_opex_keur_aurora_only(
     *,
     tension: str,
@@ -1018,6 +1126,22 @@ def build_project_inputs(
     revenues_keur = [0.0] + revenue_series
     turpe_keur = [0.0] + turpe_series
     end_of_life_keur = [0.0] * length
+    # Credit au DERNIER op-year (decommission finale) - meme base CAPEX qu'a
+    # la COD, repowering ou non (voir `end_of_life_value_keur` - le PDF Aurora
+    # source formule la valeur de fin de vie comme un % du cout de construction
+    # d'origine, pas un calcul reevalue sur l'equipement effectivement en place
+    # a la fin, donc jamais recalculee sur le cout de repowering ici).
+    end_of_life_keur[-1] = end_of_life_value_keur(
+        tension=config.tension,
+        duree_h=config.duree_h,
+        cod_year=cod_year,
+        power_mw=power_mw,
+        copex_library=copex_library,
+        connection_capex_mode=connection_capex_mode,
+        manual_connection_capex_keur=manual_connection_capex_keur,
+        distance_rte_km=distance_rte_km,
+        capex_opex_source=capex_opex_source,
+    )
 
     capex_repowering = 0.0
     repowering_op_year_used = None

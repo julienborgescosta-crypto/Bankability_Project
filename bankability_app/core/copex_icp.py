@@ -377,6 +377,56 @@ def icp_capex_total_keur(
     return construction_keur + development_keur, notes
 
 
+def icp_eol_eligible_capex_keur(
+    *,
+    tension: str,
+    duree_h: int,
+    cod_year: int,
+    power_mw: float,
+    icp_library: IcpCostLibrary,
+    aurora_library: CopexLibrary,
+) -> float:
+    """Base CAPEX eligible a la valeur de fin de vie (Aurora PDF Q2 2026,
+    "Technology assumptions" CAPEX : "the end-of-life value is made up of 5%
+    of the battery system, inverter and balance of system costs... while
+    development and soft costs are considered sunk costs") - demande de
+    l'utilisateur, 2026-10-01 (voir `core/aur_cases.py` `end_of_life_value_keur`
+    pour l'application du taux 5%/100% et `docs/specs/aur_cases.md`).
+
+    Le MEME `direct_keur` que `icp_capex_total_keur` calcule en interne
+    (Batteries+PCS + les 8 postes directs ICP), mais AVANT marge EPC et
+    assurance construction - ce ne sont pas des couts d'equipement physique
+    (donc pas revendables), mais du financement/overhead de mise en oeuvre.
+    Exclut toujours Development (source Aurora, jamais dans ICP) - "sunk" par
+    construction, jamais eligible, meme cote Aurora pur (voir `_eol_...`
+    ci-dessous pour HTB3/repli Aurora)."""
+    segment = TENSION_TO_ICP_SEGMENT.get(tension)
+    if segment is None:
+        key = voltage_duration_key(tension, duree_h)
+        unit_costs = aurora_library.capex_unit_costs.get(key, {})
+        return sum(
+            escalated_unit_cost(
+                unit_costs.get(label, 0.0), aurora_library.capex_escalation.get(label, {}), cod_year
+            )
+            * power_mw
+            for label in ("Battery system", "Inverter", "Balance of system")
+        )
+    direct_keur = sum(
+        cost
+        for label in _DIRECT_CAPEX_LABELS
+        if (
+            cost := _icp_line_item_keur(
+                icp_library, label, segment, power_mw=power_mw, duree_h=duree_h, cod_year=cod_year
+            )
+        )
+        is not None
+    )
+    direct_keur += icp_battery_pcs_keur(
+        icp_library, duree_h=duree_h, power_mw=power_mw, cod_year=cod_year
+    )
+    return direct_keur
+
+
 def _aurora_capex_total_keur_for_key(
     aurora_library: CopexLibrary, key: str, cod_year: int, power_mw: float
 ) -> float:

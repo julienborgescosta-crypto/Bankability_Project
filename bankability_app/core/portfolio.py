@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
 
-from . import aur_cases, config_extrapolation, contract_overlay, strategy
+from . import aur_cases, config_extrapolation, contract_overlay, soh_degradation, strategy
 from .aur_cases import AuStoreLibrary
 from .config_extrapolation import ResolvedConfig
 from .contract_overlay import ContractStructure
@@ -127,22 +127,60 @@ class PortfolioRow:
 # assez de vie pour que remplacer la batterie ait un sens). Les annees
 # candidates balayees pour le mode "auto" vont de MIN_REPOWERING_OP_YEAR (pas
 # de repowering avant 10 ans - la batterie n'a pas encore assez degrade pour
-# le justifier) a `operating_years - MIN_REPOWERING_BENEFIT_YEARS` (garder au
-# moins 2 ans pour profiter du reset apres repowering, sinon on paie le CAPEX
-# juste avant d'arreter le projet - exactement le cas signale par
-# l'utilisateur : repowering a l'annee 15 d'un projet de 15 ans).
+# le justifier) a `min(operating_years - MIN_REPOWERING_BENEFIT_YEARS, MAX_REPOWERING_OP_YEAR)`.
+#
+# MAX_REPOWERING_OP_YEAR (2026-10-01, retour utilisateur) : plafond dur a 20,
+# independant de `operating_years`. Sans lui, sur un projet long (ex. 30 ans),
+# le mode "auto" tend a buter contre `operating_years - MIN_REPOWERING_BENEFIT_YEARS`
+# (ex. annee 28 sur 30) - pas un vrai optimum economique mais un artefact du
+# critere Equity IRR, qui favorise mecaniquement le report de la depense CAPEX
+# le plus tard possible (un flux lointain, meme marginal, ameliore toujours un
+# IRR qui pondere fortement les flux proches) independamment du fait que le
+# reset de degradation "paie" reellement ou non en valeur absolue - verifie
+# empiriquement le 2026-10-01 (HTA 2h Injection gabarit, Equity IRR qui
+# augmente presque monotonement avec l'annee de repowering a mesure que la
+# puissance du projet augmente, l'optimum se rapprochant de plus en plus de la
+# borne). 20 ans correspond a peu pres au double de la duree de vie technique
+# d'une premiere pose (15 ans pour un BESS 2h, cf. hypothese Aurora) - un
+# repowering plus tardif n'a plus vraiment de justification technique, cap
+# choisi par analogie plutot que derive d'un calcul (meme statut que les
+# autres hypotheses "indicatives, pas confirmees" de ce module - revisable).
+#
+# **Supplante en pratique par la contrainte SoH ci-dessous** (2026-10-01) :
+# `max_op_year_without_forced_repowering` (17 ans pour 2h, 22 pour 4h, voir
+# `core/soh_degradation.py`) est plus stricte que ce plafond pour le 2h, moins
+# stricte pour le 4h - les deux s'appliquent (`min(...)`), ce plafond reste la
+# limite active pour le 4h.
 MIN_OPERATING_YEARS_FOR_REPOWERING = 15
 MIN_REPOWERING_OP_YEAR = 10
 MIN_REPOWERING_BENEFIT_YEARS = 2
+MAX_REPOWERING_OP_YEAR = 20
 
 
-def repowering_candidate_years(operating_years: int) -> list[int]:
+def max_op_year_without_forced_repowering(duree_h: int) -> int:
+    """Dernier op-year ou le SoH reel (pas le `DegFactor` de revenu d'`AU_Store`
+    - les deux sont des grandeurs Aurora distinctes, voir
+    `core/soh_degradation.py`) reste au-dessus du seuil Aurora de
+    declenchement du repowering (66 %/68.67 % pour 2h/4h, PDF Aurora Q2 2026).
+    Au-dela, repowerer n'est plus une option economique a soupeser - c'est une
+    necessite technique (demande de l'utilisateur, 2026-10-01, suite au
+    constat que `DegFactor_noRepo` seul ne force jamais de repowering, meme
+    sur un projet de 30 ans, alors que la vraie courbe SoH, elle, l'exigerait
+    bien avant)."""
+    return soh_degradation.max_op_year_before_forced_repowering(duree_h)
+
+
+def repowering_candidate_years(operating_years: int, duree_h: int) -> list[int]:
     """Annees op-year candidates pour le mode 'auto' - liste vide si le
     projet est trop court pour que le repowering ait un sens (voir les
-    constantes ci-dessus)."""
+    constantes ci-dessus). Plafonnee aussi par `max_op_year_without_forced_repowering`
+    (+1, puisqu'un repowering a l'annee X ne laisse le SoH non-repowere courir
+    que jusqu'a X-1) : un candidat qui laisserait le SoH passer sous le seuil
+    Aurora AVANT son propre repowering n'a pas de sens, jamais propose."""
     if operating_years < MIN_OPERATING_YEARS_FOR_REPOWERING:
         return []
-    upper = operating_years - MIN_REPOWERING_BENEFIT_YEARS
+    soh_cap = max_op_year_without_forced_repowering(duree_h) + 1
+    upper = min(operating_years - MIN_REPOWERING_BENEFIT_YEARS, MAX_REPOWERING_OP_YEAR, soh_cap)
     if upper < MIN_REPOWERING_OP_YEAR:
         return []
     return list(range(MIN_REPOWERING_OP_YEAR, upper + 1))
@@ -154,24 +192,60 @@ def find_best_repowering_op_year(
     copex_library: CopexLibrary,
     financing_terms: dict,
     capex_opex_source: str = "icp",
-) -> tuple[int | None, float | None, list[tuple[int, float | None]]]:
-    """Balaie `repowering_candidate_years(config.operating_years)` et retourne
-    celle qui maximise l'Equity IRR de la strategie Garder & exploiter
-    (confirme par l'utilisateur, 2026-09-24 - c'est la strategie ou le choix
-    de l'annee de repowering a le plus d'impact direct). Retourne
-    `(meilleure_annee, son_equity_irr, detail_par_annee)` -
-    `(None, None, [])` si le projet est trop court pour offrir le repowering.
+) -> tuple[int | None, float | None, list[tuple[int | None, float | None]]]:
+    """Balaie `repowering_candidate_years(config.operating_years, config.duree_h)` **plus
+    l'option "pas de repowering du tout"** (representee par l'annee `None`
+    dans `details`) et retourne celle qui maximise l'Equity IRR de la
+    strategie Garder & exploiter (confirme par l'utilisateur, 2026-09-24 -
+    c'est la strategie ou le choix de l'annee de repowering a le plus
+    d'impact direct). Retourne `(meilleure_annee_ou_None, son_equity_irr,
+    detail_par_annee)`.
 
-    Chaque candidat force `repowering_year_mode='manual'` pour eviter toute
+    "Pas de repowering" dans la comparaison (2026-10-01, retour utilisateur) :
+    avant ce changement, le mode "auto" devait forcement choisir une annee
+    parmi `repowering_candidate_years`, meme quand ne JAMAIS repowerer aurait
+    donne un meilleur Equity IRR que n'importe laquelle d'entre elles (cas
+    reel observe : HTA 2h Injection gabarit, repowering desactive = -2.9%
+    Equity IRR, bat les -13.7% a -78.3% de toutes les annees candidates) -
+    l'ancien "auto" ne pouvait donc jamais detecter ce cas et imposait un
+    repowering perdant. Desormais compare sur un pied d'egalite : si `None`
+    gagne, retourne `(None, son_equity_irr, details)` - MEME SIGNAL que
+    "projet trop court pour repowerer" (`with_repowering=False` en aval, voir
+    `_effective_repowering_op_year`), sens different ("pas rentable" vs "pas
+    assez long") mais consequence identique, le detail reste dans `details`
+    pour qui veut la distinction.
+
+    "Pas de repowering" n'est propose QUE si `config.operating_years` reste
+    dans la fenetre SoH sure (`max_op_year_without_forced_repowering`,
+    2026-10-01) - sinon l'optimisation economique ne peut de toute facon pas
+    choisir cette option (le SoH serait tombe sous le seuil Aurora avant la
+    fin du projet) : jamais evaluee ni proposee, pas juste ecartee apres coup
+    par son Equity IRR.
+
+    Chaque candidat force `repowering_year_mode='manual'` (annee) ou
+    `repowering_enabled=False` (option "pas de repowering") pour eviter toute
     recursion avec ce meme balayage. `capex_opex_source` : voir
     `aur_cases.build_project_inputs` - la meme source doit etre utilisee ici
     et dans le calcul final, sous peine d'optimiser l'annee de repowering sur
     un cout different de celui affiche."""
-    candidates = repowering_candidate_years(config.operating_years)
-    if not candidates:
-        return None, None, []
+    candidates = repowering_candidate_years(config.operating_years, config.duree_h)
 
-    details: list[tuple[int, float | None]] = []
+    details: list[tuple[int | None, float | None]] = []
+
+    if config.operating_years <= max_op_year_without_forced_repowering(config.duree_h):
+        no_repowering_config = replace(config, repowering_enabled=False)
+        inputs, secured_revenue, _ = build_project_inputs(
+            no_repowering_config, au_store, copex_library, financing_terms, capex_opex_source
+        )
+        operating_revenue = inputs.revenues_keur[1:]
+        financing_kwargs = _financing_kwargs(
+            no_repowering_config, secured_revenue, operating_revenue, financing_terms
+        )
+        no_repowering_result = strategy.compute_hold_and_operate(
+            inputs, financing_kwargs=financing_kwargs
+        )
+        details.append((None, no_repowering_result.equity_irr))
+
     for candidate_year in candidates:
         candidate_config = replace(
             config,
@@ -205,10 +279,39 @@ def _effective_repowering_op_year(
 ) -> tuple[int | None, bool]:
     """Resout l'annee de repowering a utiliser pour CE projet - retourne
     `(annee_ou_None, auto_optimisee)`. `None` = repowering desactive (case
-    decochee, ou mode auto sans candidat valide car projet trop court)."""
+    decochee ; mode auto sans candidat valide car projet trop court ; ou,
+    depuis le 2026-10-01, mode auto ou "pas de repowering" bat toutes les
+    annees candidates sur l'Equity IRR - voir `find_best_repowering_op_year`).
+
+    Garde-fou SoH (2026-10-01, retour utilisateur) : leve `AuroraConfigError`
+    plutot que de calculer silencieusement un resultat ou le SoH serait tombe
+    sous le seuil Aurora de declenchement (66 %/68.67 % pour 2h/4h) avant que
+    le repowering choisi (ou l'absence de repowering) n'ait lieu - que ce
+    choix vienne d'une case decochee ou d'une annee manuelle trop tardive. Le
+    mode "auto" n'a pas besoin de ce garde-fou : `find_best_repowering_op_year`/
+    `repowering_candidate_years` excluent deja les options invalides EN AMONT,
+    elles ne sont jamais generees pour etre rejetees ensuite."""
+    max_safe_op_year = max_op_year_without_forced_repowering(config.duree_h)
     if not config.repowering_enabled:
+        if config.operating_years > max_safe_op_year:
+            raise aur_cases.AuroraConfigError(
+                f"Repowering cannot stay disabled for a {config.operating_years}-year, "
+                f"{config.duree_h}h project - the battery's SoH would drop below Aurora's "
+                f"repowering trigger threshold around op-year {max_safe_op_year + 1} (real SoH "
+                "curve, config/soh_degradation.xlsx, linearly extrapolated beyond its op-year 15 "
+                "coverage - see core/soh_degradation.py). Enable repowering, or shorten the "
+                f"project to {max_safe_op_year} years or less."
+            )
         return None, False
     if config.repowering_year_mode == "manual":
+        if config.repowering_op_year_manual > max_safe_op_year + 1:
+            raise aur_cases.AuroraConfigError(
+                f"Manual repowering at op-year {config.repowering_op_year_manual} is too late for "
+                f"a {config.duree_h}h project - the battery's SoH would drop below Aurora's "
+                f"repowering trigger threshold around op-year {max_safe_op_year + 1}, before this "
+                "manual year is reached. Pick an earlier year (at most "
+                f"{max_safe_op_year + 1}), or use automatic optimization."
+            )
         return config.repowering_op_year_manual, False
     best_year, _, _ = find_best_repowering_op_year(
         config, au_store, copex_library, financing_terms, capex_opex_source
@@ -444,10 +547,15 @@ def run_portfolio(
                 extrapolated=resolved.config.extrapolated,
                 extrapolation_notes=tuple(resolved.notes),
                 repowering_op_year_used=inputs.repowering_op_year,
+                # Vrai des que l'auto-optimisation a ete appliquee, meme si sa
+                # conclusion est "pas de repowering" (`inputs.repowering_op_year
+                # is None` dans ce cas - voir `find_best_repowering_op_year`,
+                # 2026-10-01) : ce champ signifie "optimisation effectuee", pas
+                # "une annee a ete retenue" - sinon ce resultat, pourtant
+                # informatif (repowering deliberement ecarte apres comparaison,
+                # pas juste decoche), se confondrait avec un simple "disabled".
                 repowering_auto_optimized=(
-                    config.repowering_enabled
-                    and config.repowering_year_mode == "auto"
-                    and inputs.repowering_op_year is not None
+                    config.repowering_enabled and config.repowering_year_mode == "auto"
                 ),
             )
         )

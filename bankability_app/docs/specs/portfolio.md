@@ -72,6 +72,76 @@ section 4.
   "auto" explicitement dans son widget — seul ce chemin paie le coût du balayage, là où
   l'utilisateur en profite réellement. `PortfolioRow.repowering_op_year_used`/
   `repowering_auto_optimized` exposent le résultat dans le tableau de résultats.
+- **Le mode "auto" compare désormais aussi "pas de repowering du tout" (2026-10-01, retour
+  utilisateur)** : avant ce changement, `find_best_repowering_op_year` devait forcément retenir une
+  année parmi `repowering_candidate_years`, même quand ne jamais repowerer aurait donné un meilleur
+  Equity IRR que n'importe laquelle d'entre elles — cas réel et **systématique** sur tous les
+  configs testés (HTA/HTB1/HTB2, Classique/Injection/Soutirage, 10 à 100 MW, 20 à 30 ans
+  d'exploitation) : repowerer ne bat JAMAIS "ne pas repowerer" sur l'Equity IRR avec le
+  dimensionnement de dette actuel. Désormais comparé sur un pied d'égalité — représenté par
+  `(None, equity_irr_sans_repowering)` dans `details` — et peut gagner, auquel cas
+  `find_best_repowering_op_year` retourne `(None, ...)`, exactement le même signal que "projet trop
+  court pour repowerer" (`with_repowering=False` en aval), sens différent mais conséquence
+  identique. `PortfolioRow.repowering_auto_optimized` a été redéfini en conséquence : signifie
+  désormais "l'auto-optimisation a été appliquée", pas "une année a été retenue" — sinon ce résultat
+  (repowering délibérément écarté après comparaison) se confondrait avec un simple `repowering_enabled=False`
+  dans l'UI. `ui/configurateur_tab.py` distingue les deux : "not worth it (optimized)" vs "disabled".
+- **Plafond `MAX_REPOWERING_OP_YEAR = 20` sur les années candidates du mode "auto" (2026-10-01,
+  retour utilisateur)**, indépendant de `operating_years` au-delà de ce point
+  (`upper = min(operating_years - MIN_REPOWERING_BENEFIT_YEARS, MAX_REPOWERING_OP_YEAR)`). Sans ce
+  plafond, sur un projet long (ex. 30 ans), le balayage butait contre
+  `operating_years - MIN_REPOWERING_BENEFIT_YEARS` (ex. année 28 sur 30) — signalé par l'utilisateur
+  comme suspect, et vérifié empiriquement : l'Equity IRR croît presque monotonement avec l'année de
+  repowering à mesure que la puissance du projet augmente (ex. HTA 2h Injection gabarit, 100 MW,
+  30 ans : -2.6 % à l'année 10, +4.7 % à l'année 20, toujours croissant). Pas un vrai optimum
+  économique — un artefact du critère Equity IRR, qui favorise mécaniquement le report de la
+  dépense CAPEX le plus tard possible (IRR pondère fortement les flux proches dans le temps,
+  indépendamment du fait que le reset de dégradation "paie" réellement en valeur absolue), ET qui,
+  sur tous les cas testés, reste de toute façon battu par "pas de repowering du tout" (point
+  précédent) — ex. HTA 2h Injection gabarit, 100 MW, 30 ans : Equity IRR croissant de +1.9 % à
+  l'année 10 jusqu'à +4.7 % à l'année 20 (dernier candidat autorisé par ce plafond), mais "pas de
+  repowering" fait encore mieux à +7.5 %. 20 ans =
+  environ le double de la durée de vie technique d'une première pose (15 ans pour un BESS 2h,
+  hypothèse Aurora) — cap choisi par analogie, pas dérivé d'un calcul (même statut que les autres
+  hypothèses "indicatives, pas confirmées" du module, éditable si besoin).
+- **"Pas de repowering" plafonné par le vrai SoH, pas juste comparé par Equity IRR (2026-10-01,
+  retour utilisateur — correction du point précédent)** : l'utilisateur a demandé une vérification
+  cruciale — "la batterie doit finir HS sans repowering sur 30 ans, tu es sûr que la dégradation
+  est correcte ?" La réponse était non. `DegFactor_noRepo` (`AU_Store`, consommé par
+  `aur_cases.revenue_and_turpe_series`) et le **SoH** (State of Health, la grandeur qu'Aurora cite
+  comme déclencheur du repowering — "SoH triggering repowering: 66.00 %/68.67 % pour 2h/4h", PDF
+  Aurora Q2 2026) sont **deux grandeurs Aurora distinctes** : à l'année 15 (= `RepowOpYear`,
+  l'année où Aurora repowere dans son scénario central), `DegFactor_noRepo` vaut encore 83.9 % —
+  très loin de 66 %. `DegFactor` dégrade le *revenu*, pas la santé physique de la batterie, et ne
+  force donc jamais de repowering, même à 30 ans (confirmé empiriquement — c'est précisément ce qui
+  rendait "pas de repowering" systématiquement gagnant au point précédent : un artefact de donnée,
+  pas un insight économique réel).
+  Corrigé via `core/soh_degradation.py`, qui lit la vraie courbe SoH (fournie par l'utilisateur,
+  `config/soh_degradation.xlsx`, feuille "Hypothèses BESS" — identique entre HTA et HTB2, donc une
+  seule courbe par durée) et l'extrapole linéairement au-delà de l'année 15 (pente de la queue de
+  courbe déjà linéaire, années 11-15 : -1.5 pt/an pour 2h, -1.0 pt/an pour 4h) pour trouver le
+  dernier op-year où le SoH reste au-dessus du seuil Aurora
+  (`max_op_year_before_forced_repowering` : **17 ans pour 2h, 22 ans pour 4h**). Trois points
+  d'application dans `core/portfolio.py` :
+  - `repowering_candidate_years` : plafonne aussi les années candidates du mode "auto" à
+    `max_op_year_without_forced_repowering(duree_h) + 1` (un candidat dont le SoH décrocherait
+    avant son propre repowering n'a pas de sens).
+  - `find_best_repowering_op_year` : ne propose "pas de repowering" (`None`) que si
+    `operating_years` reste entièrement dans la fenêtre SoH sûre — jamais évalué au-delà, pas
+    juste écarté après coup par son Equity IRR.
+  - `_effective_repowering_op_year` : lève `AuroraConfigError` si un choix **manuel** (repowering
+    désactivé, ou année manuelle trop tardive) laisserait le SoH décrocher avant que le repowering
+    (ou l'absence de repowering) ne soit effectif — jamais un calcul silencieux sur une batterie
+    HS une partie du temps (brief section 7, "zéro zéro silencieux").
+  Résultat concret, conforme à l'intuition de l'utilisateur : un projet 2h de 20 ans **doit**
+  désormais être repowered (droit a 17 ans max sans) ; un projet 4h de 20 ans peut encore ne pas
+  l'être (fenêtre sûre jusqu'à 22 ans).
+- **Défauts UI changés en conséquence (2026-10-01, même retour utilisateur)** : le formulaire du
+  Configurateur pré-sélectionnait "auto" par défaut — retiré, car l'optimisation Equity IRR pousse
+  structurellement le repowering le plus tard possible (voir point `MAX_REPOWERING_OP_YEAR`
+  ci-dessus), pas un comportement neutre à imposer par défaut. Nouveau défaut :
+  `repowering_year_mode="manual"` à l'année `operating_years // 2` (mi-vie du projet, clampée dans
+  la plage valide) — "auto" reste disponible en option explicite via le radio bouton.
 
 ## Questions ouvertes
 

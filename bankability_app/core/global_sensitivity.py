@@ -103,6 +103,7 @@ def enumerate_configs(
     floor_tolling_price_keur_per_mw_per_year: float = DEFAULT_FLOOR_TOLLING_PRICE_KEUR_PER_MW_PER_YEAR,
     floor_tolling_duration_years: int = DEFAULT_FLOOR_TOLLING_DURATION_YEARS,
     floor_revenue_sharing_pct: float = DEFAULT_FLOOR_REVENUE_SHARING_PCT,
+    optimize_repowering: bool = False,
 ) -> list[tuple[AuStoreConfig, str, portfolio.ProjectConfig]]:
     """Enumere tous les `(config_aurora, structure_contractuelle, ProjectConfig)`
     valides - garde-fou COD2030 applique automatiquement (`config_space`).
@@ -115,7 +116,20 @@ def enumerate_configs(
     puissance appliquee a HTA et HTB2 produit des cas dont l'un des deux n'a
     aucun sens de raccordement reel). `None` = `DEFAULT_POWER_MW_BY_TENSION`.
     Leve une erreur explicite si une tension rencontree dans `au_store` n'a
-    pas d'entree (jamais un repli silencieux sur une valeur arbitraire)."""
+    pas d'entree (jamais un repli silencieux sur une valeur arbitraire).
+
+    `optimize_repowering` : `False` (defaut) = `ProjectConfig` par defaut
+    (`repowering_year_mode="manual"`, annee 15 fixe) - `True` = meme mode
+    "auto" que le formulaire interactif du Configurateur (`ui/configurateur_tab.py`),
+    qui balaie les annees candidates et retient celle maximisant l'Equity IRR
+    (`portfolio.find_best_repowering_op_year`). Retour utilisateur, 2026-10-01 :
+    sans ca, les 2 ecrans donnent des TRI tres differents sur la meme config
+    (repowering force a l'annee 15 ici vs optimise dans le Configurateur) -
+    voir docs/specs/global_sensitivity.md. Couteux : multiplie le temps de
+    calcul par le nombre de candidats de `portfolio.repowering_candidate_years`
+    (~9 a 20 ans d'exploitation, ~19 a 30 ans) - desactive par defaut pour ne
+    pas ralentir silencieusement le balayage complet (meme raison que le
+    defaut dataclass "manual", voir `core/portfolio.py`)."""
     contract_kinds = contract_kinds or DEFAULT_CONTRACT_KINDS
     power_mw_by_tension = (
         DEFAULT_POWER_MW_BY_TENSION if power_mw_by_tension is None else power_mw_by_tension
@@ -158,6 +172,7 @@ def enumerate_configs(
                     # meme courbe standard pour les 2 - 2 lignes identiques au
                     # lieu d'une ligne ORO distincte (voir docs/specs/aur_cases.md).
                     oro_requested=au_config.oro,
+                    repowering_year_mode="auto" if optimize_repowering else "manual",
                 )
                 entries.append((au_config, kind, project_config))
     return entries

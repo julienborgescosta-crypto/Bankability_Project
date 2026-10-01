@@ -58,3 +58,20 @@ def test_global_sensitivity_has_one_power_input_per_tension():
     for tension in ["HTA", "HTB1", "HTB2"]:
         field = at.number_input(key=f"power_mw_{tension}")
         assert field.value == global_sensitivity.DEFAULT_POWER_MW_BY_TENSION[tension]
+
+
+def test_global_sensitivity_has_optimize_repowering_checkbox_off_by_default():
+    """Retour utilisateur, 2026-10-01 : le balayage global forcait le
+    repowering a l'annee 15 pour tous les cas, contrairement au Configurateur
+    (mode "auto" pre-selectionne) - meme config donnant des TRI tres
+    differents entre les 2 ecrans. Case a cocher pour aligner les 2 - decochee
+    par defaut (le balayage complet avec optimisation est tres couteux, voir
+    core/global_sensitivity.py `enumerate_configs` docstring)."""
+    at = AppTest.from_file(APP_PATH)
+    at.run(timeout=_TIMEOUT)
+    at.sidebar.radio[0].set_value("Aurora Global Analysis")
+    at.run(timeout=_TIMEOUT)
+    assert not at.exception
+
+    checkbox = at.checkbox(key="optimize_repowering")
+    assert checkbox.value is False

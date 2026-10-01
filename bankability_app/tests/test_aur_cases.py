@@ -321,6 +321,107 @@ def test_capex_and_opex_keur_raises_for_tension_missing_from_copex_library(au_st
         )
 
 
+def test_end_of_life_value_keur_aurora_only_matches_pdf_formula(au_store, copex_library):
+    """PDF Aurora Q2 2026 : "the end-of-life value is made up of 5% of the
+    battery system, inverter and balance of system costs, as well as 100% of
+    the grid connection, while development and soft costs are considered
+    sunk costs" - verifie directement contre les couts unitaires Aurora pour
+    une tension/duree donnee (mode 'aurora', pas de dependance ICP)."""
+    power_mw = 10.0
+    key = aur_cases.voltage_duration_key("HTA", 2)
+    unit_costs = copex_library.capex_unit_costs[key]
+    expected = power_mw * (
+        0.05
+        * (unit_costs["Battery system"] + unit_costs["Inverter"] + unit_costs["Balance of system"])
+        + 1.00 * unit_costs["Grid connection"]
+    )
+    result = aur_cases.end_of_life_value_keur(
+        tension="HTA",
+        duree_h=2,
+        cod_year=2026,  # annee de reference COPEX_library, pas d'escalade a appliquer
+        power_mw=power_mw,
+        copex_library=copex_library,
+        capex_opex_source="aurora",
+    )
+    assert result == pytest.approx(expected, rel=1e-3)
+
+
+def test_end_of_life_value_keur_excludes_development(au_store, copex_library):
+    """ "development and soft costs are considered sunk costs" - un Development
+    tres eleve ne doit avoir aucun effet sur la valeur de fin de vie."""
+    baseline = aur_cases.end_of_life_value_keur(
+        tension="HTA",
+        duree_h=2,
+        cod_year=2027,
+        power_mw=10.0,
+        copex_library=copex_library,
+        capex_opex_source="aurora",
+    )
+    import copy
+
+    inflated = copy.deepcopy(copex_library)
+    key = aur_cases.voltage_duration_key("HTA", 2)
+    inflated.capex_unit_costs[key]["Development"] *= 100
+    inflated_result = aur_cases.end_of_life_value_keur(
+        tension="HTA",
+        duree_h=2,
+        cod_year=2027,
+        power_mw=10.0,
+        copex_library=inflated,
+        capex_opex_source="aurora",
+    )
+    assert inflated_result == pytest.approx(baseline)
+
+
+def test_end_of_life_value_keur_manual_connection_uses_actual_value(au_store, copex_library):
+    """100% du raccordement REELLEMENT applique au projet (manuel ici), pas
+    l'estimation bibliotheque Aurora - meme convention que `capex_and_opex_keur`."""
+    library_mode = aur_cases.end_of_life_value_keur(
+        tension="HTA",
+        duree_h=2,
+        cod_year=2027,
+        power_mw=10.0,
+        copex_library=copex_library,
+        connection_capex_mode="library",
+    )
+    manual_mode = aur_cases.end_of_life_value_keur(
+        tension="HTA",
+        duree_h=2,
+        cod_year=2027,
+        power_mw=10.0,
+        copex_library=copex_library,
+        connection_capex_mode="manual",
+        manual_connection_capex_keur=999.0,
+    )
+    library_connection_keur, _ = aur_cases.copex_icp.icp_connection_capex_keur(
+        tension="HTA",
+        duree_h=2,
+        cod_year=2027,
+        power_mw=10.0,
+        icp_library=aur_cases.copex_icp.load_icp_library_cached(),
+        aurora_library=copex_library,
+    )
+    # Le delta entre les 2 modes doit etre exactement la difference de raccordement
+    # (100% credite, EOL_GRID_CONNECTION_PCT=1.00) - la base equipement (5%) est identique.
+    assert manual_mode - library_mode == pytest.approx(999.0 - library_connection_keur)
+
+
+def test_build_project_inputs_credits_end_of_life_value_at_final_year_only(au_store, copex_library):
+    """Retour utilisateur, 2026-10-01 : la valeur de fin de vie (non modelisee
+    jusqu'ici, `end_of_life_keur` toujours a 0 - voir README "Limites
+    connues") doit creditee au DERNIER op-year seulement, jamais ailleurs."""
+    config = au_store.config_by_drop_key("2h HTA Classique g0")
+    inputs = aur_cases.build_project_inputs(
+        au_store, config, copex_library, cod_year=2027, power_mw=10.0, operating_years=15
+    )
+    assert inputs.end_of_life_keur[-1] > 0
+    assert all(v == 0.0 for v in inputs.end_of_life_keur[:-1])
+    expected = aur_cases.end_of_life_value_keur(
+        tension="HTA", duree_h=2, cod_year=2027, power_mw=10.0, copex_library=copex_library
+    )
+    assert inputs.end_of_life_keur[-1] == pytest.approx(expected)
+
+
 def test_repowering_capex_keur_uses_icp_battery_pcs_formula(copex_library):
     """Depuis 2026-09-24, le repowering suit ICP (Batteries and PCS,
     power-law) par coherence avec le CAPEX initial, plutot que le figer sur

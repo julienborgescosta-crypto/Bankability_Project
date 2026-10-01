@@ -75,6 +75,26 @@ projets saisis par l'utilisateur dans le Configurateur — voir `docs/adr/0003` 
   ci-dessus), éditables librement dans l'UI (un champ par tension). Lève une erreur explicite si
   une tension d'`AU_Store` n'a pas d'entrée dans le mapping (jamais un repli silencieux sur une
   valeur arbitraire).
+- **`optimize_repowering` (2026-10-01, retour utilisateur)** : `enumerate_configs`/
+  `run_global_sensitivity` construisaient chaque `ProjectConfig` sans jamais passer
+  `repowering_year_mode`/`repowering_op_year_manual` — retombant donc sur le défaut dataclass
+  (`"manual"`, année 15 fixe, voir `core/portfolio.py`), alors que le formulaire interactif du
+  Configurateur (`ui/configurateur_tab.py`) pré-sélectionne le mode `"auto"`
+  (`find_best_repowering_op_year`, balaie les années candidates et garde celle qui maximise
+  l'Equity IRR). Même config, 2 écrans, 2 résultats très différents : signalé par l'utilisateur sur
+  un cas HTA 2h gabarit Injection COD2028 — +5.5 % TRI Projet dans le Configurateur contre -0.9 %
+  dans Global Analysis, le repowering forcé à l'année 15 tombant mal sur un projet où le revenu
+  Aurora décline fortement avec le temps (voir README, limite connue "Moteur Aurora v2 ... valeur
+  résiduelle de fin de vie non modélisée"). Paramètre booléen ajouté (défaut `False`, comportement
+  inchangé) : `True` force `repowering_year_mode="auto"` sur chaque `ProjectConfig` généré, pour
+  rendre les 2 écrans comparables. **Volontairement pas le défaut** : balaie
+  `portfolio.repowering_candidate_years(operating_years)` (~9 candidats à 20 ans, ~19 à 30 ans) PAR
+  CAS, donc multiplie le coût de calcul du balayage complet d'autant — case à cocher dédiée dans
+  l'UI (`st.checkbox key="optimize_repowering"`, décochée par défaut), avec `st.spinner` explicite
+  quand activée. `GlobalSensitivityRow`/le dataframe UI exposent désormais aussi
+  `repowering_op_year`/`repowering_auto_optimized` (déjà présents sur `PortfolioRow`, juste pas
+  remontés jusque-là) pour que l'année retenue soit visible dans la table, pas seulement son effet
+  sur le TRI.
 
 ## UI (`ui/global_sensitivity_tab.py`)
 

@@ -1,6 +1,6 @@
 import pytest
 
-from core import contract_overlay, portfolio
+from core import aur_cases, contract_overlay, portfolio
 
 
 def _config(**overrides) -> portfolio.ProjectConfig:
@@ -483,48 +483,109 @@ def test_run_portfolio_custom_curtailment_hours(au_store, copex_library, default
 
 
 def test_repowering_candidate_years_empty_below_minimum_operating_years():
-    assert portfolio.repowering_candidate_years(14) == []
-    assert portfolio.repowering_candidate_years(10) == []
+    assert portfolio.repowering_candidate_years(14, duree_h=2) == []
+    assert portfolio.repowering_candidate_years(10, duree_h=2) == []
 
 
 def test_repowering_candidate_years_at_minimum_project_length():
-    # 15 ans : candidats 10 a 15-2=13 inclus.
-    assert portfolio.repowering_candidate_years(15) == [10, 11, 12, 13]
+    # 15 ans : candidats 10 a 15-2=13 inclus (le plafond SoH, 18 pour le 2h,
+    # ne mord pas encore ici).
+    assert portfolio.repowering_candidate_years(15, duree_h=2) == [10, 11, 12, 13]
 
 
 def test_repowering_candidate_years_for_20_year_project():
-    assert portfolio.repowering_candidate_years(20) == list(range(10, 19))
+    assert portfolio.repowering_candidate_years(20, duree_h=2) == list(range(10, 19))
+
+
+def test_repowering_candidate_years_capped_by_soh_for_2h():
+    """Retour utilisateur, 2026-10-01 : le vrai plafond pour un 2h, c'est le
+    SoH (`core/soh_degradation.py`, seuil Aurora atteint a l'annee 18) - plus
+    strict que `MAX_REPOWERING_OP_YEAR` (20), donc c'est lui qui s'applique
+    ici, identique pour 25/30/40 ans (le SoH ne depend pas de la duree
+    d'exploitation du projet, seulement de celle de la batterie)."""
+    assert portfolio.repowering_candidate_years(25, duree_h=2) == list(range(10, 19))
+    assert portfolio.repowering_candidate_years(30, duree_h=2) == list(range(10, 19))
+    assert portfolio.repowering_candidate_years(40, duree_h=2) == list(range(10, 19))
+
+
+def test_repowering_candidate_years_capped_at_20_for_4h():
+    """Pour un 4h, le SoH se degrade plus lentement (1 cycle/jour contre 1.5
+    pour le 2h) - son plafond SoH (22+1=23) est moins strict que
+    `MAX_REPOWERING_OP_YEAR` (20), donc c'est ce dernier qui s'applique."""
+    assert portfolio.repowering_candidate_years(25, duree_h=4) == list(range(10, 21))
+    assert portfolio.repowering_candidate_years(30, duree_h=4) == list(range(10, 21))
+    assert portfolio.repowering_candidate_years(40, duree_h=4) == list(range(10, 21))
 
 
 def test_find_best_repowering_op_year_returns_none_for_short_project(
     au_store, copex_library, default_financing_terms
 ):
+    """Projet trop court pour offrir des annees candidates
+    (`repowering_candidate_years` vide) - seule l'option "pas de repowering"
+    est evaluee, et gagne necessairement puisque c'est la seule."""
     config = _config(operating_years=10)
     best_year, best_irr, details = portfolio.find_best_repowering_op_year(
         config, au_store, copex_library, default_financing_terms
     )
     assert best_year is None
-    assert best_irr is None
-    assert details == []
+    assert best_irr is not None
+    assert details == [(None, best_irr)]
 
 
-def test_find_best_repowering_op_year_picks_a_candidate_with_matching_detail(
+def test_find_best_repowering_op_year_includes_no_repowering_option_within_soh_window(
     au_store, copex_library, default_financing_terms
 ):
+    """Retour utilisateur, 2026-10-01 : le mode "auto" doit pouvoir conclure
+    "pas de repowering" si c'est ce qui maximise l'Equity IRR ET que le SoH
+    reste dans la fenetre sure Aurora sur toute la duree du projet. A 15 ans
+    (2h, SoH sans repowering sur a au moins jusqu'a l'annee 17 - voir
+    `core/soh_degradation.py`), "pas de repowering" reste une option valide et
+    gagne sur ce cas (HTA par defaut)."""
+    config = _config(operating_years=15)
+    best_year, best_irr, details = portfolio.find_best_repowering_op_year(
+        config, au_store, copex_library, default_financing_terms
+    )
+    assert best_year is None
+    assert best_irr is not None
+    years_seen = {year for year, _ in details}
+    assert years_seen == set(portfolio.repowering_candidate_years(15, config.duree_h)) | {None}
+    assert dict(details)[best_year] == pytest.approx(best_irr)
+    other_irrs = [irr for year, irr in details if year is not None and irr is not None]
+    assert all(best_irr > irr for irr in other_irrs)
+
+
+def test_find_best_repowering_op_year_excludes_no_repowering_beyond_soh_window(
+    au_store, copex_library, default_financing_terms
+):
+    """A 20 ans (2h), le SoH sans repowering passerait sous le seuil Aurora
+    vers l'annee 18 (avant la fin du projet) - "pas de repowering" ne doit
+    meme pas etre propose comme option, meme s'il aurait ete economiquement
+    le plus avantageux (voir le cas a 15 ans ci-dessus)."""
     config = _config(operating_years=20)
     best_year, best_irr, details = portfolio.find_best_repowering_op_year(
         config, au_store, copex_library, default_financing_terms
     )
-    assert best_year in portfolio.repowering_candidate_years(20)
-    assert best_irr is not None
-    assert {year for year, _ in details} == set(portfolio.repowering_candidate_years(20))
-    assert dict(details)[best_year] == pytest.approx(best_irr)
+    assert best_year is not None
+    assert all(year is not None for year, _ in details)
+    assert best_year in portfolio.repowering_candidate_years(20, config.duree_h)
 
 
-def test_build_project_inputs_repowering_disabled_has_no_op_year(
+def test_build_project_inputs_repowering_disabled_raises_beyond_soh_window(
     au_store, copex_library, default_financing_terms
 ):
+    """Retour utilisateur, 2026-10-01 : desactiver le repowering sur un projet
+    assez long pour que le SoH passe sous le seuil Aurora doit lever une
+    erreur explicite, pas calculer silencieusement un resultat ou la batterie
+    serait HS une partie du temps (brief section 7, "zero zero silencieux")."""
     config = _config(operating_years=20, repowering_enabled=False)
+    with pytest.raises(aur_cases.AuroraConfigError, match="SoH"):
+        portfolio.build_project_inputs(config, au_store, copex_library, default_financing_terms)
+
+
+def test_build_project_inputs_repowering_disabled_ok_within_soh_window(
+    au_store, copex_library, default_financing_terms
+):
+    config = _config(operating_years=15, repowering_enabled=False)
     inputs, _, _ = portfolio.build_project_inputs(
         config, au_store, copex_library, default_financing_terms
     )
@@ -545,27 +606,45 @@ def test_build_project_inputs_repowering_manual_uses_chosen_year(
     assert inputs.capex_keur[12] < 0
 
 
-def test_build_project_inputs_repowering_auto_picks_a_candidate_year(
+def test_build_project_inputs_repowering_auto_matches_find_best_repowering_op_year(
     au_store, copex_library, default_financing_terms
 ):
+    """Le mode "auto" de `build_project_inputs` doit appliquer EXACTEMENT ce
+    que retourne un appel independant de `find_best_repowering_op_year` sur la
+    meme config - qu'il s'agisse d'une annee candidate ou de "pas de
+    repowering" (`None`, qui gagne systematiquement sur les configs testees
+    dans ce fichier depuis l'ajout de cette option le 2026-10-01 - pas
+    suppose ici, verifie par coherence plutot que code en dur)."""
     config = _config(operating_years=20, repowering_year_mode="auto")
     inputs, _, _ = portfolio.build_project_inputs(
         config, au_store, copex_library, default_financing_terms
     )
-    assert inputs.repowering_op_year in portfolio.repowering_candidate_years(20)
+    expected_best_year, _, _ = portfolio.find_best_repowering_op_year(
+        config, au_store, copex_library, default_financing_terms
+    )
+    assert inputs.repowering_op_year == expected_best_year
 
 
 def test_run_portfolio_row_reports_repowering_year_and_auto_flag(
     au_store, copex_library, default_financing_terms
 ):
+    """`repowering_auto_optimized` signifie "l'auto-optimisation a ete
+    appliquee", pas "une annee a ete retenue" (2026-10-01) : sur ce projet HTA
+    par defaut a 15 ans (dans la fenetre SoH sure, voir
+    test_find_best_repowering_op_year_includes_no_repowering_option_within_soh_window),
+    "pas de repowering" bat toutes les annees candidates - `auto_row` et
+    `disabled_row` partagent donc le meme `repowering_op_year_used=None`, mais
+    seul `auto_row.repowering_auto_optimized` reste `True` - c'est cette
+    distinction qui permet a l'UI d'afficher "not worth it (optimized)" plutot
+    que "disabled" (voir ui/configurateur_tab.py)."""
     manual_config = _config(
         name="Manual",
-        operating_years=20,
+        operating_years=15,
         repowering_year_mode="manual",
         repowering_op_year_manual=11,
     )
-    auto_config = _config(name="Auto", operating_years=20, repowering_year_mode="auto")
-    disabled_config = _config(name="Off", operating_years=20, repowering_enabled=False)
+    auto_config = _config(name="Auto", operating_years=15, repowering_year_mode="auto")
+    disabled_config = _config(name="Off", operating_years=15, repowering_enabled=False)
     rows = portfolio.run_portfolio(
         [manual_config, auto_config, disabled_config],
         au_store,
@@ -575,7 +654,7 @@ def test_run_portfolio_row_reports_repowering_year_and_auto_flag(
     manual_row, auto_row, disabled_row = rows
     assert manual_row.repowering_op_year_used == 11
     assert manual_row.repowering_auto_optimized is False
-    assert auto_row.repowering_op_year_used in portfolio.repowering_candidate_years(20)
+    assert auto_row.repowering_op_year_used is None
     assert auto_row.repowering_auto_optimized is True
     assert disabled_row.repowering_op_year_used is None
     assert disabled_row.repowering_auto_optimized is False
