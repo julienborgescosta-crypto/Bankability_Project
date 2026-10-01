@@ -74,6 +74,27 @@ Seuils choisis par analogie avec ceux observes sur la capture d'ecran fournie pa
 - **Large gap** : |ecart| >= 20%
 - **Info only** : poste non comparable (toujours = Aurora, ou mode de raccordement non-library)
 
+## Bug corrige (2026-10-01) : la ligne "Grid connection" ignorait le mode de raccordement reel
+
+Signale par l'utilisateur : un projet du Configurateur avec `connection_capex_mode="manual"` et un
+raccordement reel de 17 k€ affichait quand meme, dans la colonne "Ours" de l'export, l'estimation
+ICP bibliotheque (plusieurs millions d'euros) - un nombre totalement decorrele de ce que le moteur
+applique reellement a ce projet (`aur_cases.capex_and_opex_keur` respecte deja le mode manuel/
+distance, seul ce module de comparaison l'ignorait). La ligne restait certes marquee
+`comparable=False` ("Info only"), mais la VALEUR affichee induisait en erreur, et surtout **la
+ligne "TOTAL CAPEX" en heritait aussi** (elle somme `ours_grid_and_substation_keur`, qui incluait
+la meme estimation bibliotheque fantome) - pas juste un probleme d'affichage sur une ligne
+secondaire, un vrai gonflement du total "Ours" pour tout projet en mode manuel/distance.
+
+Corrige : `compare_capex_opex` prend desormais `manual_connection_capex_keur`/`distance_rte_km` en
+parametres (miroir de `portfolio.ProjectConfig`) et calcule `ours_grid_only_keur` selon le mode
+reel du projet (valeur manuelle, formule distance, ou estimation bibliotheque uniquement en mode
+"library") - la ligne "Grid connection (PTF only)" et donc "TOTAL CAPEX" refletent desormais le
+cout reellement applique. La note explicative a ete mise a jour pour dire clairement que la valeur
+affichee EST la valeur appliquee (plus "shown for reference only, not applied to this project"),
+tout en rappelant qu'elle n'est pas directement comparable au chiffre generique Aurora (statut
+"Info only" inchange).
+
 ## Verification faite (donnees reelles, `sample_data/160926_BP_Stockage_Standalone__.xlsx`)
 
 Execution manuelle sur HTA/HTB1/HTB2/HTB3 x 2h/4h, COD 2028, 40 MW :

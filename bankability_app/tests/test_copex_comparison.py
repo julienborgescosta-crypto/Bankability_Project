@@ -114,6 +114,69 @@ def test_grid_connection_not_comparable_when_mode_is_not_library(icp_library, co
     assert any("connection_capex_mode='manual'" in note for note in comparison.notes)
 
 
+def test_grid_connection_manual_mode_shows_actual_applied_value_not_library_estimate(
+    icp_library, copex_library
+):
+    """Bug signale par l'utilisateur, 2026-10-01 : un projet en mode "manual"
+    avec un raccordement reel de 17 k€ affichait quand meme l'estimation ICP
+    bibliotheque (plusieurs millions d'euros) dans la colonne "Ours" - le
+    nombre ne correspondait pas a ce que le moteur applique reellement a ce
+    projet (`aur_cases.capex_and_opex_keur` respecte deja le mode, seul ce
+    module de comparaison l'ignorait)."""
+    comparison_manual = copex_comparison.compare_capex_opex(
+        tension="HTA",
+        duree_h=2,
+        cod_year=2028,
+        power_mw=40.0,
+        icp_library=icp_library,
+        aurora_library=copex_library,
+        connection_capex_mode="manual",
+        manual_connection_capex_keur=17.0,
+    )
+    comparison_library = copex_comparison.compare_capex_opex(
+        tension="HTA",
+        duree_h=2,
+        cod_year=2028,
+        power_mw=40.0,
+        icp_library=icp_library,
+        aurora_library=copex_library,
+        connection_capex_mode="library",
+    )
+    grid_manual = next(
+        r for r in comparison_manual.capex_rows if r.label == "Grid connection (PTF only)"
+    )
+    grid_library = next(
+        r for r in comparison_library.capex_rows if r.label == "Grid connection (PTF only)"
+    )
+    assert grid_manual.ours_keur == pytest.approx(17.0)
+    assert grid_manual.ours_keur != pytest.approx(grid_library.ours_keur)
+    assert grid_library.ours_keur > 100  # l'estimation bibliotheque reste bien plus elevee ici
+
+    # TOTAL CAPEX doit refleter le vrai raccordement manuel, pas l'estimation
+    # bibliotheque - meme bug, plus grave, sur la ligne agregee.
+    total_manual = next(r for r in comparison_manual.capex_rows if r.label == "TOTAL CAPEX")
+    total_library = next(r for r in comparison_library.capex_rows if r.label == "TOTAL CAPEX")
+    assert total_manual.ours_keur < total_library.ours_keur
+    assert total_manual.ours_keur == pytest.approx(
+        total_library.ours_keur - grid_library.ours_keur + 17.0
+    )
+
+
+def test_grid_connection_distance_rte_mode_shows_actual_applied_value(icp_library, copex_library):
+    comparison = copex_comparison.compare_capex_opex(
+        tension="HTA",
+        duree_h=2,
+        cod_year=2028,
+        power_mw=40.0,
+        icp_library=icp_library,
+        aurora_library=copex_library,
+        connection_capex_mode="distance_rte",
+        distance_rte_km=10.0,
+    )
+    grid = next(r for r in comparison.capex_rows if r.label == "Grid connection (PTF only)")
+    assert grid.ours_keur == pytest.approx(4650.7 * 10.0**0.239)
+
+
 def test_grid_connection_bucket_includes_private_substation_cost(icp_library, copex_library):
     """Aurora compterait le poste de livraison/sous-station privee dans son
     "Grid connection" (a confirmer - voir docs/specs/copex_comparison.md,

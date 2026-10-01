@@ -808,6 +808,8 @@ def _render_copex_comparison(projects: list[portfolio.ProjectConfig], copex_libr
             icp_library=icp_library,
             aurora_library=copex_library,
             connection_capex_mode=project.connection_capex_mode,
+            manual_connection_capex_keur=project.manual_connection_capex_keur,
+            distance_rte_km=project.distance_rte_km,
         )
         capex_df = _copex_rows_to_df(comparison.capex_rows)
         opex_df = _copex_rows_to_df(comparison.opex_rows)

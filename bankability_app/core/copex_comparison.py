@@ -90,6 +90,7 @@ from .copex_icp import (
 from .dev_case import (
     CAPEX_GRID_CONNECTION_LABEL,
     CopexLibrary,
+    _connection_cost_from_distance,
     escalated_unit_cost,
     voltage_duration_key,
 )
@@ -219,10 +220,22 @@ def compare_capex_opex(
     icp_library: IcpCostLibrary,
     aurora_library: CopexLibrary,
     connection_capex_mode: str = "library",
+    manual_connection_capex_keur: float = 0.0,
+    distance_rte_km: float = 0.0,
 ) -> CopexComparison:
     """CAPEX/OPEX initial (hors repowering, voir module docstring) : nos
     valeurs (ICP + repli Aurora, mode raccordement "library") vs les memes
-    postes lus uniquement dans `COPEX_library`."""
+    postes lus uniquement dans `COPEX_library`.
+
+    `manual_connection_capex_keur`/`distance_rte_km` : valeur reellement
+    appliquee au projet quand `connection_capex_mode` n'est pas "library"
+    (mirroring `portfolio.ProjectConfig`) - corrige un bug signale par
+    l'utilisateur le 2026-10-01 : la ligne "Grid connection (PTF only)"
+    affichait TOUJOURS l'estimation ICP bibliotheque (ex. 4 162 k€), meme
+    pour un projet en mode "manual" avec un raccordement reel de 17 k€ - le
+    nombre affiche dans la colonne "Ours" ne correspondait donc pas a ce que
+    le moteur appliquait reellement a ce projet (uniquement marque
+    `comparable=False`, pas corrige dans la valeur elle-meme)."""
     key = voltage_duration_key(tension, duree_h)
     notes: list[str] = []
     segment = TENSION_TO_ICP_SEGMENT.get(tension)
@@ -238,7 +251,7 @@ def compare_capex_opex(
         aurora_library, key, CAPEX_GRID_CONNECTION_LABEL, cod_year, power_mw
     )
 
-    ours_grid_only_keur, grid_source_notes = icp_connection_capex_keur(
+    ours_grid_library_keur, grid_source_notes = icp_connection_capex_keur(
         tension=tension,
         duree_h=duree_h,
         cod_year=cod_year,
@@ -246,6 +259,17 @@ def compare_capex_opex(
         icp_library=icp_library,
         aurora_library=aurora_library,
     )
+    if connection_capex_mode == "manual":
+        ours_grid_only_keur = manual_connection_capex_keur
+    elif connection_capex_mode == "distance_rte":
+        ours_grid_only_keur = _connection_cost_from_distance(distance_rte_km)
+    elif connection_capex_mode == "library":
+        ours_grid_only_keur = ours_grid_library_keur
+    else:
+        raise ValueError(
+            f"Unknown connection_capex_mode '{connection_capex_mode}' "
+            "(expected 'library', 'manual' or 'distance_rte')."
+        )
     if segment is not None:
         ours_core_keur, substation_keur, missing = _icp_core_and_substation_keur(
             icp_library, segment=segment, duree_h=duree_h, cod_year=cod_year, power_mw=power_mw
@@ -265,11 +289,15 @@ def compare_capex_opex(
     grid_comparable = connection_capex_mode == "library"
     if not grid_comparable:
         notes.append(
-            f"Grid connection: project uses connection_capex_mode='{connection_capex_mode}', "
-            "not the library value - comparison shown for reference only, not applied to this "
-            "project."
+            f"Grid connection: project uses connection_capex_mode='{connection_capex_mode}' - "
+            f"the value shown ({ours_grid_only_keur:,.0f} k€) is this project's actual applied "
+            f"connection cost, not Aurora's library estimate (which would be "
+            f"{ours_grid_library_keur:,.0f} k€ at this tension/duration/power if the project "
+            "used library mode) - still marked 'Info only' since it isn't sourced the same way "
+            "as Aurora's generic €/kW assumption."
         )
-    notes.extend(grid_source_notes)
+    else:
+        notes.extend(grid_source_notes)
     notes.append(
         "Aurora's own 'Grid connection' line is assumed to cover the private substation too "
         "(not just the grid operator's connection fee) - shown 3 ways below (PTF alone, "
