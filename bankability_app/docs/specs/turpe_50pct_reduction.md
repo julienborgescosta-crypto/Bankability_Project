@@ -27,12 +27,14 @@ au reseau) :
   certification ISO 50001.
 
 Taux de reduction : **50% exactement**, applique a la "part acheminement" de la facture
-(c'est-a-dire le TURPE lui-meme, par opposition au cout de l'energie ou aux taxes) - les sources
-consultees ne precisent pas explicitement si la part fixe (capacite) et la part variable
-(energie) du TURPE sont toutes deux concernees, ou seulement la part variable. Vu que le critere
-d'eligibilite porte specifiquement sur le PROFIL de soutirage (heures creuses), et que c'est la
-partie variable qui depend de ce profil, cette spec applique l'abattement uniquement au TURPE
-variable cote revenu - voir "Limite connue" ci-dessous.
+(c'est-a-dire le TURPE lui-meme, par opposition au cout de l'energie ou aux taxes). **Extension du
+2026-10-01 (meme jour, retour utilisateur)** : la 1ere implementation ne reduisait que le TURPE
+variable cote revenu (le critere d'eligibilite - profil de soutirage en heures creuses - porte sur
+cette composante) ; l'utilisateur a demande d'inclure aussi la part fixe, "quitte a la retirer
+d'Aurora" si besoin, en pointant l'onglet `I-Fixed` (ligne 72, "TURPE (Power)") du BP Stockage
+Standalone comme reference du calcul reel. "Part acheminement" dans les textes consultes designe
+le TURPE dans son ensemble (fixe + variable), sans distinction - rien ne justifie de n'en reduire
+qu'une partie. Voir "Implementation" pour comment la part fixe est isolee et reduite.
 
 Sources (recherche web, non exhaustives) :
 - [Abattement du TURPE : PPE, ISO 50001, éligibilité et procédure](https://nepsen.fr/abattement-turpe-2026/)
@@ -62,6 +64,19 @@ deja construit, le parametre est pousse jusqu'a la construction elle-meme) :
    reproduit la description d'Aurora ("coûts liés au TURPE à peu près divisés par 2"), une
    simplification deliberee faute d'acces au detail soutirage/injection separe par poste tarifaire
    (seul le net annuel est disponible dans `AU_Store`).
+4. **Part fixe (OPEX)** : `aur_cases._opex_with_turpe_50pct_reduction` isole la ligne "Grid
+   charges" (part fixe du TURPE + CTA, voir docs/specs/copex_comparison.md "Mise en garde TURPE")
+   au sein de l'OPEX generique (toujours sommee via `OPEX_LINE_ITEMS`, meme source Aurora que le
+   mode ICP comme le mode "aurora only" - ICP n'a jamais de donnee TURPE propre) et la divise par
+   2, sans toucher aux 4 autres postes (O&M/Insurance/Land lease/Accise/Other). Meme mecanisme que
+   `_opex_with_land_lease_override` (meme fichier) - applique dans `capex_and_opex_keur` ET
+   `capex_and_opex_keur_aurora_only`, donc identique que l'app tourne avec les couts ICP ou les
+   couts Aurora seuls.
+5. **Pas de double-compte** : le TURPE variable (revenu, courbe AU_Store) et "Grid charges" (OPEX,
+   `COPEX_library`) sont 2 composantes **distinctes et deja non chevauchantes** dans l'app (voir
+   docs/specs/copex_comparison.md, "Mise en garde TURPE" - une separation deja en place avant cette
+   fonctionnalite, pas introduite pour l'occasion) - les reduire toutes les 2 par 50% reduit donc le
+   TURPE total une seule fois, pas deux.
 
 UI (`ui/configurateur_tab.py::_render_add_project_form`) : case a cocher "TURPE 50% reduction",
 visible **uniquement** si la tension choisie est HTB1/HTB2/HTB3 (jamais proposee en HTA - evite de
@@ -70,22 +85,34 @@ laisser l'utilisateur cocher une combinaison qui leverait une erreur a l'ajout).
 tension applique au moment du calcul, pas du parsing (coherent avec les autres validations
 croisees du fichier, ex. gabarit+Classique).
 
-## Limite connue
+## Verification faite : onglet `I-Fixed` du BP Standalone, et API Aurora
 
-**Seul le TURPE variable cote revenu est reduit, pas la composante fixe "Grid charges" cote
-OPEX.** Le TURPE apparait a 2 endroits dans l'app (voir docs/specs/copex_comparison.md, "Mise en
-garde TURPE") :
-- Cote revenu, `ProjectInputs.turpe_keur` (serie annuelle AU_Store, "Storage volume-related
-  network charges") - **reduit par cette fonctionnalite**.
-- Cote OPEX, le poste "Grid charges" (part fixe du TURPE + CTA, agrege dans `copex_icp.
-  icp_opex_year1_keur` avec Insurance/Land lease/Accise/Other, pas de valeur isolable sans
-  refactoring) - **pas reduit**.
+L'utilisateur a demande de verifier "comment fait Aurora" via l'API Aurora (outil cite :
+`flexplorer_build_battery_investment_case`). **Cet outil n'existe pas** dans les outils MCP Aurora
+disponibles cote session (produit "Flexplorer" : `flexplorer_list_datasets`/`get_scenario`/
+`get_investment_case_options`/`get_download_url`/`get_leaderboard_options`, tous pour des donnees
+de **revenu** batterie - previsions, backcasts, performance observee - aucun ne porte sur la
+structure CAPEX/OPEX/TURPE d'un cas). Pas de decomposition TURPE accessible par ce biais.
 
-Refactorer `icp_opex_year1_keur` pour isoler "Grid charges" et lui appliquer le meme abattement
-est possible mais plus invasif (touche une fonction partagee par tout le moteur, pas seulement ce
-levier) - pas fait dans cette 1ere implementation, le poste etant de toute facon petit comparativement
-au TURPE variable (ex. HTB2 2h : ~3.8 k€/MW/an de Grid charges fixe contre ~10 k€/MW/an de TURPE
-variable). A faire si l'utilisateur confirme que la precision supplementaire est necessaire.
+A la place, verifie l'onglet `I-Fixed` du fixture `sample_data/160926_BP_Stockage_Standalone__.xlsx`
+(ligne 72, "TURPE (Power)", comme demande) - confirme la structure reelle du TURPE "part fixe" :
+
+- **Charges - Variable (par MW)** : -14.51 (HTA) / -11.76 (HTB1) / -3.48 (HTB2) / 0 (HTB3) k€/MW -
+  la composante liee a la puissance souscrite (proportionnelle au MW, mais fixe dans l'annee, pas a
+  l'energie dispatchee - a ne pas confondre avec le TURPE "variable" cote revenu d'AU_Store, qui
+  lui depend de l'energie/du dispatch).
+- **Charges - Fixed (forfait, independant du MW)** : -0.88 (HTA) / -12.35 (HTB1/HTB2/HTB3) k€ -
+  frais de gestion/comptage (CAG/CAC).
+- **CTA** : 10.11% du TURPE Fixe en raccordement GRT (RTE - le cas des projets HTB1/2/3 eligibles
+  a cet abattement), 21.93% en raccordement GRD.
+
+**Cette structure confirme que "Grid charges" (COPEX_library, deja utilise par l'app) EST bien la
+bonne ligne a reduire** - memes composantes (part fixe TURPE + CTA), memes tensions, meme defaut
+"pas de TURPE variable energie melange dedans". Les valeurs numeriques elles-memes du fixture
+`I-Fixed` ne sont **pas utilisees** ici : le fixture est explicitement "donnees fictives" (voir
+README, "Donnees confidentielles") - seule sa structure/formule a servi a confirmer que `COPEX_library!
+Grid charges` est deja isole correctement, sans qu'il faille batir une bibliotheque tarifaire
+parallele a partir de chiffres non officiels.
 
 ## Questions ouvertes
 
@@ -93,7 +120,15 @@ variable). A faire si l'utilisateur confirme que la precision supplementaire est
   etait eligible ?"), pas une verification automatique des 3 criteres reels (consommation annuelle
   soutiree > 10 GWh, taux heures creuses >= 0.44, dispatch reel simule) - l'app n'a pas de modele
   de dispatch horaire, seulement des revenus annuels agreges par `AU_Store`.
-- **Part fixe TURPE (OPEX) non reduite** - voir "Limite connue" ci-dessus.
-- **Hypothese "part variable uniquement"** non confirmee aupres de l'utilisateur ni d'une source
-  juridique primaire (texte CRE/Legifrance lu uniquement via resume web, pas le texte integral de
-  l'annexe D.341-9) - a verifier si une precision plus fine est necessaire.
+- **Taux de reduction de "Grid charges" suppose identique (50%) a celui du TURPE variable** - les
+  sources consultees parlent de la "part acheminement" globalement, pas d'un taux distinct par
+  composante ; si la CTA (incluse dans "Grid charges") n'est en realite PAS concernee par
+  l'abattement TURPE (c'est une contribution distincte, pas strictement le TURPE lui-meme), la
+  reduction serait legerement surestimee sur ce sous-poste - non tranche, pas isolable sans
+  recalculer "Grid charges" depuis une vraie grille tarifaire CTA/TURPE separee (voir ci-dessus,
+  non fait faute de donnees officielles chargees dans l'app).
+- **Grille tarifaire TURPE officielle non chargee dans l'app** : `COPEX_library!Grid charges` reste
+  une estimation generique Aurora (€/kW/an, pas la grille CRE reelle par tension/puissance
+  souscrite) - suffisant pour ce scenario (l'app ne pretend jamais reproduire le TURPE exact d'un
+  projet, voir couche 1 du README), mais a garder en tete si une precision reglementaire plus fine
+  est un jour necessaire.

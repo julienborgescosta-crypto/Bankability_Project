@@ -625,6 +625,44 @@ def _opex_with_land_lease_override(
     return opex_keur - aurora_land_lease_keur + land_lease_opex_keur
 
 
+def _opex_with_turpe_50pct_reduction(
+    opex_keur: float,
+    *,
+    tension: str,
+    duree_h: int,
+    cod_year: int,
+    power_mw: float,
+    copex_library: CopexLibrary,
+    turpe_50pct_reduction: bool,
+) -> float:
+    """`opex_keur` inclut deja la ligne 'Grid charges' generique d'Aurora
+    (part FIXE du TURPE + CTA - voir docs/specs/copex_comparison.md, "Mise
+    en garde TURPE" - toujours sommee dans `OPEX_LINE_ITEMS`, meme source
+    qu'ICP n'a jamais). Demande de l'utilisateur, 2026-10-01 : l'abattement
+    TURPE 50% (voir docs/specs/turpe_50pct_reduction.md) doit s'appliquer
+    aussi a cette part fixe, pas seulement au TURPE variable cote revenu
+    (`aur_cases.build_project_inputs`, 1ere version du 2026-10-01) - la
+    reglementation (code de l'energie, annexe art. D.341-9) reduit la "part
+    acheminement" dans son ensemble. Isole cette seule ligne (plutot
+    qu'escompter betement tout `opex_keur`, qui contient aussi O&M/
+    Insurance/Land lease/Accise/Other, jamais concernes) pour eviter tout
+    double-compte avec le TURPE variable (deja reduit separement, courbe
+    AU_Store distincte - voir meme doc, "Mise en garde TURPE") - meme
+    mecanisme que `_opex_with_land_lease_override`."""
+    if not turpe_50pct_reduction:
+        return opex_keur
+    key = voltage_duration_key(tension, duree_h)
+    aurora_grid_charges_keur = (
+        escalated_unit_cost(
+            copex_library.opex_unit_costs.get(key, {}).get("Grid charges", 0.0),
+            copex_library.opex_escalation.get("Grid charges", {}),
+            cod_year,
+        )
+        * power_mw
+    )
+    return opex_keur - aurora_grid_charges_keur * 0.5
+
+
 def capex_and_opex_keur(
     *,
     tension: str,
@@ -636,6 +674,7 @@ def capex_and_opex_keur(
     manual_connection_capex_keur: float = 0.0,
     distance_rte_km: float = 0.0,
     land_lease_opex_keur: float = 0.0,
+    turpe_50pct_reduction: bool = False,
 ) -> tuple[float, float]:
     """CAPEX/OPEX total - source primaire `config/copex_icp.xlsx` (couts
     unitaires QEF reels, "ICP", mis a jour mensuellement par l'utilisateur en
@@ -720,6 +759,15 @@ def capex_and_opex_keur(
         copex_library=copex_library,
         land_lease_opex_keur=land_lease_opex_keur,
     )
+    opex_keur = _opex_with_turpe_50pct_reduction(
+        opex_keur,
+        tension=tension,
+        duree_h=duree_h,
+        cod_year=cod_year,
+        power_mw=power_mw,
+        copex_library=copex_library,
+        turpe_50pct_reduction=turpe_50pct_reduction,
+    )
 
     return capex_generic_keur + connection_keur, opex_keur
 
@@ -735,6 +783,7 @@ def capex_and_opex_keur_aurora_only(
     manual_connection_capex_keur: float = 0.0,
     distance_rte_km: float = 0.0,
     land_lease_opex_keur: float = 0.0,
+    turpe_50pct_reduction: bool = False,
 ) -> tuple[float, float]:
     """CAPEX/OPEX total avec les hypotheses Aurora `COPEX_library` SEULES
     (jamais ICP) - option "Use Aurora's own CAPEX/OPEX assumptions" du
@@ -803,6 +852,15 @@ def capex_and_opex_keur_aurora_only(
         power_mw=power_mw,
         copex_library=copex_library,
         land_lease_opex_keur=land_lease_opex_keur,
+    )
+    opex_keur = _opex_with_turpe_50pct_reduction(
+        opex_keur,
+        tension=tension,
+        duree_h=duree_h,
+        cod_year=cod_year,
+        power_mw=power_mw,
+        copex_library=copex_library,
+        turpe_50pct_reduction=turpe_50pct_reduction,
     )
 
     return capex_keur + connection_keur, opex_keur
@@ -900,9 +958,12 @@ def build_project_inputs(
     les notres). `turpe_50pct_reduction` : abattement TURPE 50% pour sites de
     stockage raccordes RTE/>=50kV (code de l'energie, annexe art. D.341-9) -
     voir docs/specs/turpe_50pct_reduction.md. Reserve a HTB1/HTB2/HTB3 - leve
-    `AuroraConfigError` sinon. Applique au TURPE variable (`turpe_series`,
-    cote revenu) AVANT tout usage downstream (frais d'agregateur inclus),
-    jamais un scaling post-hoc de `ProjectInputs` deja construit."""
+    `AuroraConfigError` sinon. Applique aux 2 composantes TURPE (depuis le
+    2026-10-01, extension du scope initial) : le TURPE variable (`turpe_series`,
+    cote revenu) ici-meme AVANT tout usage downstream (frais d'agregateur
+    inclus), et la part fixe (poste OPEX 'Grid charges', cote `capex_opex_fn`
+    - voir `_opex_with_turpe_50pct_reduction`) - jamais un scaling post-hoc de
+    `ProjectInputs` deja construit."""
     if turpe_50pct_reduction and config.tension not in ("HTB1", "HTB2", "HTB3"):
         raise AuroraConfigError(
             f"turpe_50pct_reduction requires a connection >=50kV (HTB1/HTB2/HTB3), "
@@ -947,6 +1008,7 @@ def build_project_inputs(
         manual_connection_capex_keur=manual_connection_capex_keur,
         distance_rte_km=distance_rte_km,
         land_lease_opex_keur=land_lease_opex_keur,
+        turpe_50pct_reduction=turpe_50pct_reduction,
     )
 
     length = len(calendar_years) + 1  # +1 pour l'annee de construction (COD - 1)

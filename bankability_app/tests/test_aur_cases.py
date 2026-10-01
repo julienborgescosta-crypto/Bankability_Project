@@ -452,6 +452,73 @@ def test_build_project_inputs_turpe_50pct_reduction_halves_turpe_series(au_store
     assert reduced.revenues_keur == pytest.approx(baseline.revenues_keur)
 
 
+def test_build_project_inputs_turpe_50pct_reduction_also_halves_grid_charges_opex(
+    au_store, copex_library
+):
+    """Extension du 2026-10-01 (meme jour, retour utilisateur) : l'abattement
+    doit aussi reduire la part FIXE du TURPE (poste OPEX 'Grid charges', +
+    CTA), pas seulement le TURPE variable cote revenu - la reglementation
+    (annexe art. D.341-9) reduit la "part acheminement" dans son ensemble.
+    Pas de double-compte : 'Grid charges' (fixe) et le TURPE AU_Store
+    (variable, cote revenu) sont 2 composantes distinctes et non chevauchantes
+    (voir docs/specs/copex_comparison.md, "Mise en garde TURPE")."""
+    config = au_store.config_by_drop_key("2h HTB2 Classique g0")
+    baseline = aur_cases.build_project_inputs(
+        au_store, config, copex_library, cod_year=2027, power_mw=10.0, operating_years=10
+    )
+    reduced = aur_cases.build_project_inputs(
+        au_store,
+        config,
+        copex_library,
+        cod_year=2027,
+        power_mw=10.0,
+        operating_years=10,
+        turpe_50pct_reduction=True,
+    )
+    key = aur_cases.voltage_duration_key("HTB2", 2)
+    aurora_grid_charges = (
+        aur_cases.escalated_unit_cost(
+            copex_library.opex_unit_costs[key]["Grid charges"],
+            copex_library.opex_escalation.get("Grid charges", {}),
+            2027,
+        )
+        * 10.0
+    )
+    assert baseline.opex_year1_keur - reduced.opex_year1_keur == pytest.approx(
+        aurora_grid_charges * 0.5
+    )
+    # Le reste de l'OPEX (O&M, Insurance, Land lease, Accise, Other) est inchange.
+    assert reduced.opex_year1_keur > 0.0
+
+
+def test_capex_and_opex_keur_aurora_only_turpe_50pct_reduction_also_halves_grid_charges(
+    au_store, copex_library
+):
+    """Meme garantie que ci-dessus, mais sur capex_and_opex_keur_aurora_only
+    (capex_opex_source='aurora') - les 2 chemins doivent se comporter pareil."""
+    _, opex_without = aur_cases.capex_and_opex_keur_aurora_only(
+        tension="HTB2", duree_h=2, cod_year=2027, power_mw=10.0, copex_library=copex_library
+    )
+    _, opex_with = aur_cases.capex_and_opex_keur_aurora_only(
+        tension="HTB2",
+        duree_h=2,
+        cod_year=2027,
+        power_mw=10.0,
+        copex_library=copex_library,
+        turpe_50pct_reduction=True,
+    )
+    key = aur_cases.voltage_duration_key("HTB2", 2)
+    aurora_grid_charges = (
+        aur_cases.escalated_unit_cost(
+            copex_library.opex_unit_costs[key]["Grid charges"],
+            copex_library.opex_escalation.get("Grid charges", {}),
+            2027,
+        )
+        * 10.0
+    )
+    assert opex_without - opex_with == pytest.approx(aurora_grid_charges * 0.5)
+
+
 def test_build_project_inputs_turpe_50pct_reduction_rejects_tension_below_50kv(
     au_store, copex_library
 ):
