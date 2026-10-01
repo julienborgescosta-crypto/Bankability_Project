@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from . import aur_cases, config_space, contract_overlay, portfolio
+from . import aur_cases, config_extrapolation, config_space, contract_overlay, portfolio
 from .aur_cases import AuStoreConfig, AuStoreLibrary
 from .contract_overlay import ContractStructure
 from .dev_case import CopexLibrary
@@ -104,6 +104,7 @@ def enumerate_configs(
     floor_tolling_duration_years: int = DEFAULT_FLOOR_TOLLING_DURATION_YEARS,
     floor_revenue_sharing_pct: float = DEFAULT_FLOOR_REVENUE_SHARING_PCT,
     optimize_repowering: bool = False,
+    include_extrapolated: bool = False,
 ) -> list[tuple[AuStoreConfig, str, portfolio.ProjectConfig]]:
     """Enumere tous les `(config_aurora, structure_contractuelle, ProjectConfig)`
     valides - garde-fou COD2030 applique automatiquement (`config_space`).
@@ -129,7 +130,21 @@ def enumerate_configs(
     calcul par le nombre de candidats de `portfolio.repowering_candidate_years`
     (~9 a 20 ans d'exploitation, ~19 a 30 ans) - desactive par defaut pour ne
     pas ralentir silencieusement le balayage complet (meme raison que le
-    defaut dataclass "manual", voir `core/portfolio.py`)."""
+    defaut dataclass "manual", voir `core/portfolio.py`).
+
+    `include_extrapolated` : `False` (defaut) = seules les 22 configs reelles
+    d'`AU_Store` (comportement inchange). `True` = balaie EN PLUS tout
+    l'espace theorique (duree x tension x type TURPE x gabarit x ORO, hors
+    HTB3) que le Configurateur sait deja extrapoler projet par projet
+    (`core.config_extrapolation.resolve_config`) mais que ce module
+    n'enumerait pas jusqu'ici (limite documentee, voir
+    docs/specs/global_sensitivity.md) - demande de l'utilisateur, 2026-10-01.
+    Multiplie l'espace de base par ~2-3x (HTB2 a deja la matrice complete
+    reelle, HTA/HTB1 beaucoup moins) ; chaque ligne extrapolee reste
+    identifiable via `PortfolioRow.extrapolated`/`.extrapolation_notes` -
+    jamais melangee sans distinction aux lignes reelles. Les combinaisons
+    deja couvertes par une config reelle (y compris ORO) ne sont jamais
+    generees une 2e fois."""
     contract_kinds = contract_kinds or DEFAULT_CONTRACT_KINDS
     power_mw_by_tension = (
         DEFAULT_POWER_MW_BY_TENSION if power_mw_by_tension is None else power_mw_by_tension
@@ -138,6 +153,7 @@ def enumerate_configs(
     duration_years = min(floor_tolling_duration_years, operating_years)
 
     entries: list[tuple[AuStoreConfig, str, portfolio.ProjectConfig]] = []
+    covered: set[tuple[int, str, str, bool, bool]] = set()
     for au_config in au_store.configs:
         if not config_space.has_cost_data(au_config, copex_library):
             continue
@@ -146,6 +162,15 @@ def enumerate_configs(
                 f"No reference power configured for tension '{au_config.tension}' "
                 f"(power_mw_by_tension only has {sorted(power_mw_by_tension)})."
             )
+        covered.add(
+            (
+                au_config.duree_h,
+                au_config.tension,
+                au_config.turpe_type,
+                au_config.gabarit,
+                au_config.oro,
+            )
+        )
         power_mw = power_mw_by_tension[au_config.tension]
         cod_years = config_space.valid_cod_years(au_config, candidate_cod_years)
         for cod_year in cod_years:
@@ -175,6 +200,84 @@ def enumerate_configs(
                     repowering_year_mode="auto" if optimize_repowering else "manual",
                 )
                 entries.append((au_config, kind, project_config))
+
+    if include_extrapolated:
+        real_tensions = sorted({c.tension for c in au_store.configs} - {"HTB3"})
+        for duree_h in config_space.durations(au_store):
+            for tension in real_tensions:
+                if tension not in power_mw_by_tension:
+                    raise ValueError(
+                        f"No reference power configured for tension '{tension}' "
+                        f"(power_mw_by_tension only has {sorted(power_mw_by_tension)})."
+                    )
+                power_mw = power_mw_by_tension[tension]
+                for turpe_type in config_space.ALL_TURPE_TYPES:
+                    for gabarit in config_space.gabarit_options(
+                        au_store, duree_h=duree_h, tension=tension, turpe_type=turpe_type
+                    ):
+                        for oro in config_space.oro_options(turpe_type=turpe_type):
+                            combo = (duree_h, tension, turpe_type, gabarit, oro)
+                            if combo in covered:
+                                continue  # deja une config reelle - jamais generee 2x
+                            try:
+                                resolved = config_extrapolation.resolve_config(
+                                    au_store,
+                                    duree_h=duree_h,
+                                    tension=tension,
+                                    turpe_type=turpe_type,
+                                    gabarit=gabarit,
+                                    oro=oro,
+                                )
+                            except aur_cases.AuroraConfigError:
+                                # Pas cense arriver (gabarit_options/oro_options filtrent deja
+                                # les combos sans sens business) - garde-fou si une tension
+                                # n'a meme pas d'ancre Classique/g0 reelle pour extrapoler.
+                                continue
+                            label_bits = [f"{duree_h}h", tension, turpe_type]
+                            if gabarit:
+                                label_bits.append("gabarit")
+                            if oro:
+                                label_bits.append("ORO")
+                            label_bits.append("(extrapolated)")
+                            synthetic_config = AuStoreConfig(
+                                drop_key=" ".join(label_bits),
+                                austore_key=resolved.config.austore_key,
+                                duree_h=duree_h,
+                                tension=tension,
+                                turpe_type=turpe_type,
+                                gabarit=gabarit,
+                                oro=oro,
+                                pre_degraded=False,
+                                valide_cod=resolved.config.valide_cod,
+                                extrapolated=True,
+                            )
+                            cod_years = config_space.valid_cod_years(
+                                synthetic_config, candidate_cod_years
+                            )
+                            for cod_year in cod_years:
+                                for kind in contract_kinds:
+                                    structure = _contract_structure_for(
+                                        kind,
+                                        duration_years=duration_years,
+                                        price=floor_tolling_price_keur_per_mw_per_year,
+                                        sharing_pct=floor_revenue_sharing_pct,
+                                    )
+                                    project_config = portfolio.ProjectConfig(
+                                        name=f"{synthetic_config.drop_key} COD{cod_year} {kind}",
+                                        duree_h=duree_h,
+                                        tension=tension,
+                                        turpe_type=turpe_type,
+                                        gabarit=gabarit,
+                                        cod_year=cod_year,
+                                        power_mw=power_mw,
+                                        operating_years=operating_years,
+                                        contract_structure=structure,
+                                        oro_requested=oro,
+                                        repowering_year_mode=(
+                                            "auto" if optimize_repowering else "manual"
+                                        ),
+                                    )
+                                    entries.append((synthetic_config, kind, project_config))
     return entries
 
 
@@ -182,6 +285,7 @@ def run_global_sensitivity(
     au_store: AuStoreLibrary,
     copex_library: CopexLibrary,
     financing_terms: dict | None = None,
+    capex_opex_source: str = "icp",
     **enumerate_kwargs,
 ) -> tuple[list[GlobalSensitivityRow], list[str]]:
     """Calcule le KPI de chaque cas de l'espace des configs. A mettre en cache
@@ -195,7 +299,14 @@ def run_global_sensitivity(
     `skipped`, plutot qu'une entree par cas COD/structure genere pour rien.
     Un cas qui echoue malgre tout au calcul y est aussi ajoute individuellement
     - jamais silencieusement absent du resultat sans trace (brief section 7,
-    "zero zero silencieux")."""
+    "zero zero silencieux").
+
+    `capex_opex_source` : `"icp"` (defaut, couts reels QEF + repli Aurora) ou
+    `"aurora"` (hypotheses Aurora `COPEX_library` seules) - meme option que
+    "Use Aurora's own CAPEX/OPEX assumptions" du Configurateur, demande de
+    l'utilisateur 2026-10-01, appliquee ici a TOUT le balayage plutot qu'a un
+    2e tableau cote a cote (168+ cas, un 2e sweep complet serait couteux et
+    illisible) - voir `aur_cases.build_project_inputs`/`capex_and_opex_keur`."""
     terms = financing_terms if financing_terms is not None else aur_cases.load_financing_terms()
 
     skipped: list[str] = []
@@ -220,7 +331,9 @@ def run_global_sensitivity(
     rows: list[GlobalSensitivityRow] = []
     for au_config, kind, project_config in entries:
         try:
-            row = portfolio.run_portfolio([project_config], au_store, copex_library, terms)[0]
+            row = portfolio.run_portfolio(
+                [project_config], au_store, copex_library, terms, capex_opex_source
+            )[0]
         except aur_cases.AuroraConfigError as exc:
             skipped.append(f"{project_config.name} : {exc}")
             continue

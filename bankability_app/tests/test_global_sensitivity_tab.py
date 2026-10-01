@@ -75,3 +75,18 @@ def test_global_sensitivity_has_optimize_repowering_checkbox_off_by_default():
 
     checkbox = at.checkbox(key="optimize_repowering")
     assert checkbox.value is False
+
+
+def test_global_sensitivity_has_extrapolation_and_aurora_cost_checkboxes_off_by_default():
+    """Retour utilisateur, 2026-10-01 : "je le veux en option on coche" (configs
+    extrapolees) "et comme dans Aurora Configurator je veux une option pour
+    repasser avec le CAPEX Aurora" - 2 cases a cocher, toutes les 2 decochees
+    par defaut (comportement inchange tant qu'on ne les active pas)."""
+    at = AppTest.from_file(APP_PATH)
+    at.run(timeout=_TIMEOUT)
+    at.sidebar.radio[0].set_value("Aurora Global Analysis")
+    at.run(timeout=_TIMEOUT)
+    assert not at.exception
+
+    assert at.checkbox(key="include_extrapolated").value is False
+    assert at.checkbox(key="capex_opex_source_aurora").value is False

@@ -199,3 +199,106 @@ def test_run_global_sensitivity_optimize_repowering_exposes_resolved_year(au_sto
     )
     assert rows
     assert all(r.row.repowering_auto_optimized for r in rows)
+
+
+def test_enumerate_configs_include_extrapolated_adds_more_combos(au_store, copex_library):
+    """Retour utilisateur, 2026-10-01 : "je le veux en option" - balaie aussi
+    les combinaisons non directement modelisees par Aurora (duree x tension x
+    type TURPE x gabarit x ORO), que le Configurateur sait deja extrapoler
+    projet par projet mais que l'analyse globale n'enumerait pas jusqu'ici."""
+    entries_real = global_sensitivity.enumerate_configs(
+        au_store, copex_library, operating_years=10, contract_kinds=[contract_overlay.FULL_MERCHANT]
+    )
+    entries_all = global_sensitivity.enumerate_configs(
+        au_store,
+        copex_library,
+        operating_years=10,
+        contract_kinds=[contract_overlay.FULL_MERCHANT],
+        include_extrapolated=True,
+    )
+    assert len(entries_all) > len(entries_real)
+
+    combos_real = {
+        (c.duree_h, c.tension, c.turpe_type, c.gabarit, c.oro) for c, _, _ in entries_real
+    }
+    combos_all = {(c.duree_h, c.tension, c.turpe_type, c.gabarit, c.oro) for c, _, _ in entries_all}
+    assert combos_real < combos_all  # strictement plus de combos, pas juste plus de lignes
+    # HTA Injection (sans gabarit) n'est jamais modelise reellement (voir
+    # docs/specs/config_extrapolation.md) - doit apparaitre seulement avec le flag.
+    assert (2, "HTA", "Injection", False, False) not in combos_real
+    assert (2, "HTA", "Injection", False, False) in combos_all
+
+
+def test_enumerate_configs_include_extrapolated_never_duplicates_real_combos(
+    au_store, copex_library
+):
+    """Une combinaison deja reelle (ex. HTB2 Classique g0) ne doit jamais etre
+    generee une 2e fois comme "extrapolee" - `covered` filtre ca en amont."""
+    entries_all = global_sensitivity.enumerate_configs(
+        au_store,
+        copex_library,
+        operating_years=10,
+        contract_kinds=[contract_overlay.FULL_MERCHANT],
+        include_extrapolated=True,
+    )
+    combos = [(c.duree_h, c.tension, c.turpe_type, c.gabarit, c.oro) for c, _, _ in entries_all]
+    non_extrapolated_combos = {
+        (c.duree_h, c.tension, c.turpe_type, c.gabarit, c.oro)
+        for c, _, _ in entries_all
+        if not c.extrapolated
+    }
+    # Chaque combo reel (non-extrapole) n'apparait qu'une fois dans la liste de combos uniques
+    # consideres comme "reels" - mais surtout, aucune entree extrapolee ne partage le meme
+    # combo qu'une entree reelle (sinon ce serait un doublon).
+    extrapolated_combos = {
+        (c.duree_h, c.tension, c.turpe_type, c.gabarit, c.oro)
+        for c, _, _ in entries_all
+        if c.extrapolated
+    }
+    assert non_extrapolated_combos.isdisjoint(extrapolated_combos)
+    assert len(combos) == len(entries_all)  # sanity: pas de doublon trivial non plus
+
+
+def test_run_global_sensitivity_extrapolated_rows_are_flagged_with_notes(au_store, copex_library):
+    rows, skipped = global_sensitivity.run_global_sensitivity(
+        au_store,
+        copex_library,
+        operating_years=10,
+        contract_kinds=[contract_overlay.FULL_MERCHANT],
+        include_extrapolated=True,
+    )
+    assert not skipped
+    extrapolated_rows = [r for r in rows if r.row.extrapolated]
+    real_rows = [r for r in rows if not r.row.extrapolated]
+    assert extrapolated_rows
+    assert real_rows
+    assert all(r.row.extrapolation_notes for r in extrapolated_rows)
+    assert all(not r.row.extrapolation_notes for r in real_rows)
+
+
+def test_run_global_sensitivity_capex_opex_source_aurora_differs_from_icp(au_store, copex_library):
+    """Meme option que le Configurateur ("Use Aurora's own CAPEX/OPEX
+    assumptions") appliquee a tout le balayage - demande de l'utilisateur,
+    2026-10-01."""
+    rows_icp, _ = global_sensitivity.run_global_sensitivity(
+        au_store,
+        copex_library,
+        operating_years=10,
+        contract_kinds=[contract_overlay.FULL_MERCHANT],
+        capex_opex_source="icp",
+    )
+    rows_aurora, _ = global_sensitivity.run_global_sensitivity(
+        au_store,
+        copex_library,
+        operating_years=10,
+        contract_kinds=[contract_overlay.FULL_MERCHANT],
+        capex_opex_source="aurora",
+    )
+    assert len(rows_icp) == len(rows_aurora)
+    irr_icp = {
+        (r.tension, r.turpe_type, r.duree_h, r.cod_year): r.row.project_irr for r in rows_icp
+    }
+    irr_aurora = {
+        (r.tension, r.turpe_type, r.duree_h, r.cod_year): r.row.project_irr for r in rows_aurora
+    }
+    assert irr_icp != irr_aurora

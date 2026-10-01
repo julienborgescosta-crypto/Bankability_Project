@@ -135,8 +135,19 @@ projets saisis par l'utilisateur dans le Configurateur — voir `docs/adr/0003` 
   ou un artefact du modèle ICP (voir `docs/specs/copex_icp.md`) : non tranché, ce fix choisit des
   puissances de référence réalistes par tension plutôt que de statuer sur la validité de l'économie
   d'échelle elle-même.
-- **N'énumère pas l'espace extrapolé** (2026-09-24, voir `docs/specs/config_extrapolation.md`) :
-  `enumerate_configs` continue de ne balayer que les 22 configs réelles d'`AU_Store`, pas les
-  combinaisons type TURPE/gabarit/ORO manquantes que le Configurateur sait désormais extrapoler
-  projet par projet. Étendre au plein espace théorique multiplierait le nombre de cas par ~3-4x
-  pour une confiance moindre sur ces lignes — scope non demandé pour l'instant.
+- ~~N'énumère pas l'espace extrapolé~~ — implémenté le 2026-10-01, demande explicite de
+  l'utilisateur ("je le veux en option on coche et ça sort toutes les extrapolations"). Nouveau
+  paramètre `enumerate_configs(include_extrapolated=True)` (défaut `False`, comportement inchangé)
+  : balaie en plus tout l'espace théorique (durée x tension x type TURPE x gabarit x ORO, HTB3
+  exclu) via `core.config_extrapolation.resolve_config`, en excluant les combinaisons déjà
+  couvertes par une config réelle (`covered`, jamais générées 2x). Vérifié empiriquement : 20
+  combos réels -> 54 combos au total (~2.7x, dans l'ordre de grandeur "~3-4x" déjà estimé ici).
+  Chaque ligne reste identifiable via `PortfolioRow.extrapolated`/`.extrapolation_notes` (déjà
+  posés par `portfolio.build_project_inputs`, pas de nouveau champ nécessaire sur
+  `GlobalSensitivityRow`) — colonne "Extrapolated" + filtre dédié dans la table UI, jamais mélangée
+  sans distinction aux lignes réelles.
+- **`run_global_sensitivity(capex_opex_source=...)` (2026-10-01, même demande utilisateur)** :
+  "comme dans Aurora Configurator je veux une option pour repasser avec le CAPEX Aurora" - même
+  bascule `"icp"`/`"aurora"` que le Configurateur (`aur_cases.build_project_inputs`), appliquée ici
+  à TOUT le balayage d'un coup (case à cocher UI) plutôt qu'à un 2e tableau côte à côte comme le
+  Configurateur — un 2e sweep complet de 150+ cas aurait été coûteux et peu lisible côte à côte.

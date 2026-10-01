@@ -53,11 +53,14 @@ def _run_cached(
     floor_tolling_duration: int,
     floor_sharing_pct: float,
     optimize_repowering: bool,
+    include_extrapolated: bool,
+    capex_opex_source: str,
 ):
     return global_sensitivity.run_global_sensitivity(
         _au_store,
         _copex_library,
         _financing_terms,
+        capex_opex_source=capex_opex_source,
         operating_years=operating_years,
         power_mw_by_tension=dict(power_mw_by_tension),
         contract_kinds=list(contract_kinds),
@@ -65,6 +68,7 @@ def _run_cached(
         floor_tolling_duration_years=floor_tolling_duration,
         floor_revenue_sharing_pct=floor_sharing_pct,
         optimize_repowering=optimize_repowering,
+        include_extrapolated=include_extrapolated,
     )
 
 
@@ -86,6 +90,7 @@ def _rows_to_dataframe(rows: list[global_sensitivity.GlobalSensitivityRow]) -> p
                 "build_and_flip_net_return_keur": r.row.build_and_flip_net_return_keur,
                 "repowering_op_year": r.row.repowering_op_year_used,
                 "repowering_auto_optimized": r.row.repowering_auto_optimized,
+                "extrapolated": "Yes" if r.row.extrapolated else "No",
             }
             for r in rows
         ]
@@ -140,6 +145,38 @@ def _render_controls(au_store: aur_cases.AuStoreLibrary) -> dict:
             ],
             format_func=lambda k: _CONTRACT_LABELS[k],
         )
+        include_extrapolated = st.checkbox(
+            "Include extrapolated configs",
+            value=False,
+            key="include_extrapolated",
+            help=(
+                "Off (default): only the 22 configs Aurora directly modelled in AU_Store. "
+                "On: also sweeps the full theoretical space (duration x voltage x TURPE type x "
+                "gabarit x ORO, HTB3 excluded) that the Configurator already knows how to "
+                "extrapolate project-by-project but this screen didn't sweep until now - roughly "
+                "2-3x more base cases (HTB2 already has the full real matrix, HTA/HTB1 much less "
+                "so). Every extrapolated row is flagged in the 'Extrapolated' column — never "
+                "mixed in unmarked with real Aurora data. Slower, proportionally to the extra "
+                "cases."
+            ),
+        )
+        capex_opex_source = (
+            "aurora"
+            if st.checkbox(
+                "Use Aurora's own CAPEX/OPEX assumptions",
+                value=False,
+                key="capex_opex_source_aurora",
+                help=(
+                    "Off (default): our own costs (ICP real unit costs + Aurora fallback for "
+                    "line items ICP doesn't cover - same default as the Configurator). On: "
+                    "Aurora's COPEX_library assumptions only, for the whole sweep - same option "
+                    "as 'Use Aurora's own CAPEX/OPEX assumptions' in the Configurator, applied "
+                    "here to the full table at once rather than a second side-by-side table "
+                    "(a full 2nd sweep of 150+ cases would be slow and hard to read)."
+                ),
+            )
+            else "icp"
+        )
     with c3:
         st.caption("Floor/tolling assumptions (representative, **not confirmed**):")
         floor_tolling_price = st.number_input(
@@ -167,6 +204,8 @@ def _render_controls(au_store: aur_cases.AuStoreLibrary) -> dict:
         "floor_tolling_duration": int(floor_tolling_duration),
         "floor_sharing_pct": float(floor_sharing_pct),
         "optimize_repowering": bool(optimize_repowering),
+        "include_extrapolated": bool(include_extrapolated),
+        "capex_opex_source": capex_opex_source,
     }
 
 
@@ -177,7 +216,7 @@ def _render_table_and_filters(df: pd.DataFrame) -> pd.DataFrame:
         "the heatmap averages over it (e.g. filtering Gabarit = Yes isolates gabarit configs "
         "instead of mixing them with unrestricted configs)."
     )
-    c1, c2, c3, c4, c5, c6 = st.columns(6)
+    c1, c2, c3, c4, c5, c6, c7 = st.columns(7)
     with c1:
         tensions = st.multiselect("Voltage (Tension)", sorted(df["tension"].unique()))
     with c2:
@@ -190,6 +229,8 @@ def _render_table_and_filters(df: pd.DataFrame) -> pd.DataFrame:
         durees = st.multiselect("BESS duration (h)", sorted(df["duree_h"].unique()))
     with c6:
         kinds = st.multiselect("Structure", sorted(df["contract_kind"].unique()))
+    with c7:
+        extrapolated_filter = st.multiselect("Extrapolated", sorted(df["extrapolated"].unique()))
 
     filtered = df.copy()
     if tensions:
@@ -204,6 +245,8 @@ def _render_table_and_filters(df: pd.DataFrame) -> pd.DataFrame:
         filtered = filtered[filtered["duree_h"].isin(durees)]
     if kinds:
         filtered = filtered[filtered["contract_kind"].isin(kinds)]
+    if extrapolated_filter:
+        filtered = filtered[filtered["extrapolated"].isin(extrapolated_filter)]
 
     metric_label = st.selectbox("Threshold on", list(_METRICS.keys()), key="threshold_metric")
     metric_col, is_pct = _METRICS[metric_label]
@@ -237,6 +280,7 @@ def _render_table_and_filters(df: pd.DataFrame) -> pd.DataFrame:
             "build_and_flip_net_return_keur": "Build-and-flip return (k€)",
             "repowering_op_year": "Repowering op-year",
             "repowering_auto_optimized": "Repowering optimized",
+            "extrapolated": "Extrapolated",
         }
     )
     st.dataframe(
@@ -388,9 +432,14 @@ def render() -> None:
     au_store, copex_library, financing_terms = load_library()
     controls = _render_controls(au_store)
 
+    slow_reasons = []
+    if controls["optimize_repowering"]:
+        slow_reasons.append("repowering optimization")
+    if controls["include_extrapolated"]:
+        slow_reasons.append("extrapolated configs")
     spinner_message = (
-        "Running the full sweep with repowering optimization (much slower) — please wait..."
-        if controls["optimize_repowering"]
+        f"Running the full sweep with {' and '.join(slow_reasons)} (slower) — please wait..."
+        if slow_reasons
         else "Running the full sweep..."
     )
     with st.spinner(spinner_message):
@@ -405,6 +454,8 @@ def render() -> None:
             controls["floor_tolling_duration"],
             controls["floor_sharing_pct"],
             controls["optimize_repowering"],
+            controls["include_extrapolated"],
+            controls["capex_opex_source"],
         )
     if skipped:
         with st.expander(f"{len(skipped)} case(s) skipped (missing data)"):
