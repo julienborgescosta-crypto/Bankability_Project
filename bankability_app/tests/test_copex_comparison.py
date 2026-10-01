@@ -162,6 +162,49 @@ def test_grid_connection_manual_mode_shows_actual_applied_value_not_library_esti
     )
 
 
+def test_land_lease_manual_override_shows_up_in_ours_but_not_aurora(icp_library, copex_library):
+    """Bug signale par l'utilisateur, 2026-10-01 : un projet avec un loyer
+    foncier manuel (ex. 300 k€/an) ressortait avec exactement le meme OPEX
+    "Ours" qu'Aurora dans l'export - le loyer manuel
+    (aur_cases.capex_and_opex_keur, "ajoute tel quel" par-dessus l'estimation
+    Aurora) n'etait pas du tout repris par ce module de comparaison."""
+    comparison_with_lease = copex_comparison.compare_capex_opex(
+        tension="HTA",
+        duree_h=2,
+        cod_year=2028,
+        power_mw=40.0,
+        icp_library=icp_library,
+        aurora_library=copex_library,
+        land_lease_opex_keur=300.0,
+    )
+    comparison_without_lease = copex_comparison.compare_capex_opex(
+        tension="HTA",
+        duree_h=2,
+        cod_year=2028,
+        power_mw=40.0,
+        icp_library=icp_library,
+        aurora_library=copex_library,
+    )
+    land_lease_with = next(
+        r for r in comparison_with_lease.opex_rows if r.label.startswith("Land lease")
+    )
+    land_lease_without = next(
+        r for r in comparison_without_lease.opex_rows if r.label.startswith("Land lease")
+    )
+    # Le loyer manuel s'ajoute cote "Ours" uniquement - Aurora reste inchange.
+    assert land_lease_with.ours_keur == pytest.approx(land_lease_without.ours_keur + 300.0)
+    assert land_lease_with.aurora_keur == pytest.approx(land_lease_without.aurora_keur)
+    assert land_lease_with.comparable is True
+
+    total_with = next(r for r in comparison_with_lease.opex_rows if r.label == "TOTAL OPEX")
+    total_without = next(r for r in comparison_without_lease.opex_rows if r.label == "TOTAL OPEX")
+    assert total_with.ours_keur == pytest.approx(total_without.ours_keur + 300.0)
+    assert total_with.aurora_keur == pytest.approx(total_without.aurora_keur)
+    # Sans override, "Ours" et Aurora doivent rester identiques sur le loyer
+    # (ligne non couverte par ICP, repli Aurora des 2 cotes par construction).
+    assert land_lease_without.ours_keur == pytest.approx(land_lease_without.aurora_keur)
+
+
 def test_grid_connection_distance_rte_mode_shows_actual_applied_value(icp_library, copex_library):
     comparison = copex_comparison.compare_capex_opex(
         tension="HTA",

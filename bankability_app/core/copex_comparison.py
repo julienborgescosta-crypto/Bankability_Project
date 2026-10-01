@@ -107,7 +107,11 @@ _CAPEX_DEVELOPMENT_LABEL = "Development"
 _ICP_SUBSTATION_LABELS = ["HV Transformer", "HV substation", "MV substation"]
 _ICP_CORE_LABELS = [label for label in _DIRECT_CAPEX_LABELS if label not in _ICP_SUBSTATION_LABELS]
 _OPEX_FIXED_OM_LABEL = "Fixed O&M"
-_OPEX_INFO_ONLY_LABELS = ["Insurance", "Grid charges", "Land lease", "Accise", "Other"]
+_OPEX_LAND_LEASE_LABEL = "Land lease"
+# "Land lease" sorti de cette liste (2026-10-01) : seul poste OPEX challengeable
+# individuellement (`land_lease_opex_keur`), il a sa propre ligne comparable -
+# voir compare_capex_opex.
+_OPEX_INFO_ONLY_LABELS = ["Insurance", "Grid charges", "Accise", "Other"]
 
 # Seuils de statut - meme esprit que la macro VBA source (OK / Vigilance /
 # Ecart fort), pas une constante Aurora documentee ailleurs : choisis par
@@ -222,6 +226,7 @@ def compare_capex_opex(
     connection_capex_mode: str = "library",
     manual_connection_capex_keur: float = 0.0,
     distance_rte_km: float = 0.0,
+    land_lease_opex_keur: float = 0.0,
 ) -> CopexComparison:
     """CAPEX/OPEX initial (hors repowering, voir module docstring) : nos
     valeurs (ICP + repli Aurora, mode raccordement "library") vs les memes
@@ -235,7 +240,18 @@ def compare_capex_opex(
     pour un projet en mode "manual" avec un raccordement reel de 17 k€ - le
     nombre affiche dans la colonne "Ours" ne correspondait donc pas a ce que
     le moteur appliquait reellement a ce projet (uniquement marque
-    `comparable=False`, pas corrige dans la valeur elle-meme)."""
+    `comparable=False`, pas corrige dans la valeur elle-meme).
+
+    `land_lease_opex_keur` : meme type de correction, meme jour - l'ajout
+    manuel de loyer foncier du projet (`aur_cases.capex_and_opex_keur`,
+    "ajoute tel quel" par-dessus l'estimation Aurora "Land lease") n'etait
+    pas du tout repris ici : la ligne OPEX info-only incluait "Land lease"
+    mais avec la MEME valeur Aurora des 2 cotes, donc un projet avec par
+    exemple 300 k€/an de loyer manuel ressortait avec un OPEX "Ours"
+    identique a Aurora - aucune trace du loyer saisi. "Land lease" a sa
+    propre ligne desormais (`ours = aurora + land_lease_opex_keur`), sortie
+    du groupe "Info only" (Insurance/Grid charges/Accise/Other, eux
+    toujours non challengeables individuellement, restent groupes)."""
     key = voltage_duration_key(tension, duree_h)
     notes: list[str] = []
     segment = TENSION_TO_ICP_SEGMENT.get(tension)
@@ -360,17 +376,31 @@ def compare_capex_opex(
             "years), a line item with no Aurora COPEX_library equivalent."
         )
 
+    aurora_land_lease_keur = _aurora_opex_item_keur(
+        aurora_library, key, _OPEX_LAND_LEASE_LABEL, cod_year, power_mw
+    )
+    ours_land_lease_keur = aurora_land_lease_keur + land_lease_opex_keur
+    if land_lease_opex_keur:
+        notes.append(
+            f"Land lease: project adds a manual {land_lease_opex_keur:,.0f} k€/yr on top of "
+            f"Aurora's library estimate ({aurora_land_lease_keur:,.0f} k€/yr) - same convention "
+            "as aur_cases.capex_and_opex_keur (added, not replaced)."
+        )
+
     info_total_keur = sum(
         _aurora_opex_item_keur(aurora_library, key, label, cod_year, power_mw)
         for label in _OPEX_INFO_ONLY_LABELS
     )
-    ours_total_opex = ours_om_keur + info_total_keur
-    aurora_total_opex = aurora_om_keur + info_total_keur
+    ours_total_opex = ours_om_keur + ours_land_lease_keur + info_total_keur
+    aurora_total_opex = aurora_om_keur + aurora_land_lease_keur + info_total_keur
 
     opex_rows = [
         CopexComparisonRow("Fixed O&M (+ ICP Guarantees)", ours_om_keur, aurora_om_keur, True),
         CopexComparisonRow(
-            "Insurance + Grid charges (TURPE fixed part + CTA) + Land lease + Accise + Other",
+            "Land lease (+ manual override)", ours_land_lease_keur, aurora_land_lease_keur, True
+        ),
+        CopexComparisonRow(
+            "Insurance + Grid charges (TURPE fixed part + CTA) + Accise + Other",
             info_total_keur,
             info_total_keur,
             False,

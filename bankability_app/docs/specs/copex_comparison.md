@@ -95,6 +95,23 @@ affichee EST la valeur appliquee (plus "shown for reference only, not applied to
 tout en rappelant qu'elle n'est pas directement comparable au chiffre generique Aurora (statut
 "Info only" inchange).
 
+## Bug corrige (2026-10-01, meme jour) : le loyer foncier manuel n'apparaissait nulle part
+
+Meme classe de bug, signale juste apres le precedent : un projet avec un loyer foncier manuel (ex.
+300 k€/an, `land_lease_opex_keur` sur `ProjectConfig`) ressortait avec un OPEX "Ours" **exactement
+identique** a Aurora dans l'export - le loyer manuel (`aur_cases.capex_and_opex_keur`, "ajoute tel
+quel" par-dessus l'estimation Aurora "Land lease") n'etait tout simplement pas repris ici :
+"Land lease" faisait partie du groupe `_OPEX_INFO_ONLY_LABELS` (Insurance/Grid charges/Land
+lease/Accise/Other), toujours affiche avec la MEME valeur Aurora des 2 cotes par construction -
+correct pour les 4 autres postes (jamais challengeables individuellement), faux pour "Land lease"
+qui, lui, EST challengeable (seul 2e poste OPEX/CAPEX ajustable du formulaire, avec le
+raccordement).
+
+Corrige : "Land lease" a sa propre ligne desormais (`compare_capex_opex(land_lease_opex_keur=...)`),
+`comparable=True`, `ours = estimation Aurora + land_lease_opex_keur` - les 4 autres postes restent
+groupes dans une ligne "Info only" (label mis a jour, "Land lease" retire). "TOTAL OPEX" integre
+desormais correctement l'ajout manuel.
+
 ## Verification faite (donnees reelles, `sample_data/160926_BP_Stockage_Standalone__.xlsx`)
 
 Execution manuelle sur HTA/HTB1/HTB2/HTB3 x 2h/4h, COD 2028, 40 MW :
