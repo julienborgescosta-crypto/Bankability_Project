@@ -200,14 +200,32 @@ n'est PAS le meme millesime que le databook Aurora Q2 2026 fourni par l'utilisat
 Verifie en rejouant 2 cas avec les chiffres du Q2 26 : l'ecart tombe de -2.2/-7.2 pts a -0.8/-1.6
 pt - la quasi-totalite du gap venait du millesime, pas d'un defaut du moteur.
 
-### 2e base COPEX optionnelle : `copex_library_q2_2026.json`
+### Databook Q2 2026 : complement du fixture, jamais un remplacement (`copex_library_q2_2026.json`)
 
-Retour de l'utilisateur (2026-10-01) : ne PAS remplacer le `COPEX_library` fixture existant (base
-par defaut de toute l'app, y compris le repli ICP) - ajouter une **option supplementaire**,
-seulement sous la case "Use Aurora's own CAPEX/OPEX assumptions" du Configurateur, pour comparer
-contre ce millesime plus recent sans rien changer ailleurs.
+Chronologie du 2026-10-01 (meme jour, plusieurs allers-retours avec l'utilisateur) :
 
-- Asset : `config/copex_library_q2_2026.json`, extrait de l'onglet "Costs assumptions" du
+1. Ajout initial : ne PAS remplacer le `COPEX_library` fixture (base par defaut de toute l'app) -
+   ajouter une **option supplementaire**, seulement sous la case "Use Aurora's own CAPEX/OPEX
+   assumptions" du Configurateur, choisie via un `st.radio` ("COPEX_library (base fixture)" vs
+   "Aurora Q2 2026 update (databook)").
+2. L'utilisateur a ensuite confirme que les references CAPEX Aurora du fixture sont
+   **completement caduques** - le radio a ete retire (plus de raison de proposer l'option
+   perimee), et `copex_library` a ete remplace **entierement** par le databook Q2 2026, partout
+   dans l'app (repli ICP, export comparaison, comparaison Aurora).
+3. **Correction finale** : l'utilisateur a precise que le fixture doit rester la base/reference
+   (il connait et fait confiance a ces hypotheses-la), le Q2 2026 ne devant intervenir que **pour
+   combler les trous** du fixture (ex. HTB3, jamais couvert) - pas un remplacement, une fusion.
+
+**Design retenu** (`core.dev_case.merge_copex_libraries(primary, fallback)`) : fusionne 2
+`CopexLibrary` poste par poste - pour chaque cle tension/duree ET chaque poste individuel
+(`capex_unit_costs["2h - HTA"]["Battery system"]`, etc.), `primary` (fixture) l'emporte si elle a
+une valeur, `fallback` (Q2 2026) ne comble que ce qui manque. `ui/configurateur_tab.py::load_library()`
+charge les 2 bibliotheques puis les fusionne en un seul `copex_library`, utilise partout (repli
+ICP par defaut, export "Aurora COPEX Comparison", comparaison "Use Aurora's own CAPEX/OPEX
+assumptions") - **un seul objet, pas 2 en parallele**, donc plus de choix a faire nulle part dans
+l'UI (le `st.radio` retire a l'etape 2 reste retire).
+
+- Asset Q2 2026 : `config/copex_library_q2_2026.json`, extrait de l'onglet "Costs assumptions" du
   classeur `Aurora_Q2_26_FRA_Flexible_Data_Forecast_Investment_Cases_v1.1.xlsm` (fourni par
   l'utilisateur, hors repo) - **committe normalement** (choix explicite de l'utilisateur
   2026-10-01, malgre l'onglet Disclaimer du classeur source ; a la difference du databook TRI/NPV
@@ -219,26 +237,21 @@ contre ce millesime plus recent sans rien changer ailleurs.
   2h et 4h ont exactement le meme ratio 2028->2030), donc la moyenne ne lisse aucune vraie
   divergence. "Grid connection"/"Grid charges" sont plats (memes €/kW toutes annees dans la
   source) -> escalade nulle, verifie par test.
-- UI (`ui/configurateur_tab.py::_render_hold_and_operate`) : la case a cocher recalcule directement
-  avec `copex_library_q2_2026` passe a `portfolio.run_portfolio(..., capex_opex_source="aurora")` -
-  aucun changement cote `core.aur_cases`/`core.portfolio` (le parametre `copex_library` etait deja
-  generique). **Le choix de millesime a ete retire le 2026-10-01** (meme jour) : un `st.radio`
-  offrait initialement "COPEX_library (base fixture)" vs "Aurora Q2 2026 update (databook)", mais
-  l'utilisateur a confirme que les references CAPEX Aurora dans `COPEX_library` (le fixture) sont
-  completement caduques - l'option "base fixture" n'avait donc plus de raison d'etre proposee ici,
-  seul le databook Q2 2026 reste. `copex_library` (fixture) reste en revanche la source du repli
-  ICP par defaut partout ailleurs dans l'app (pas remis en cause, scope limite a ce comparatif) et
-  de l'export "Aurora COPEX Comparison" (`_render_copex_comparison`, question ouverte ci-dessous).
+- **Effet de bord** : la fusion redonne des donnees HTB3 (via le fallback Q2 2026, le fixture
+  n'en ayant jamais eu) - ce qui reactiverait silencieusement cette tension partout (dropdown
+  Configurateur, Aurora Global Analysis), alors que l'utilisateur avait explicitement demande de
+  ne plus la proposer (2026-09-18). `config_space.has_cost_data` l'exclut desormais en dur, en
+  attendant une decision - voir docs/specs/config_space.md, "Questions ouvertes".
 
 ## Questions ouvertes
 
-- **`COPEX_library` (fixture) confirme caduc par l'utilisateur (2026-10-01) pour la comparaison
-  "Aurora's own CAPEX/OPEX assumptions"** (option retiree, voir ci-dessus) - mais reste encore
-  utilise comme repli Aurora par defaut de tout le moteur (`capex_opex_source="icp"`, partout sauf
-  ce comparatif) ET comme reference de `_render_copex_comparison` (export "Aurora COPEX
-  Comparison"). Pas tranche avec l'utilisateur si ces 2 autres usages doivent eux aussi migrer vers
-  le databook Q2 2026 - scope volontairement limite a la demande explicite ("enleve cette
-  option-la") plutot qu'un remplacement silencieux de la base par defaut de toute l'app.
+- **HTB3 a maintenant des donnees CAPEX/OPEX (via le fallback Q2 2026)** - exclusion forcee en dur
+  en attendant une decision de l'utilisateur, voir docs/specs/config_space.md.
+- **Fusion au niveau du poste individuel jamais testee sur un vrai trou partiel** (seul HTB3,
+  trou complet au niveau tension, a ete rencontre en pratique) - `merge_copex_libraries` est ecrit
+  pour gerer un trou partiel (ex. fixture avec "2h - HTA" mais sans "Accise") mais ce cas ne
+  s'est jamais presente avec les donnees actuelles, donc pas verifie empiriquement au-dela des
+  tests unitaires synthetiques.
 - **Perimetre exact du "Grid connection" d'Aurora non confirme** - l'hypothese qu'il inclut la
   sous-station privee (avancee par l'utilisateur) ne se verifie pas numeriquement une fois testee
   (l'ecart s'aggrave, ne se resorbe pas, voir "Verification faite"). A trancher avec l'utilisateur :

@@ -129,6 +129,35 @@ DEFAULT_COPEX_LIBRARY_Q2_2026_PATH = (
 )
 
 
+def merge_copex_libraries(primary: CopexLibrary, fallback: CopexLibrary) -> CopexLibrary:
+    """Fusionne 2 `CopexLibrary` : `primary` prime partout ou elle a une
+    valeur, `fallback` ne comble que ce qui manque - demande explicite de
+    l'utilisateur, 2026-10-01 : garder `COPEX_library` (fixture) comme
+    hypothese CAPEX/OPEX de reference, et ne retomber sur le databook Aurora
+    Q2 2026 que la ou le fixture n'a aucune donnee (ex. HTB3, jamais couvert
+    par le fixture - voir docs/specs/copex_comparison.md). Pas un simple
+    `primary si tension presente sinon fallback` : fusionne jusqu'au niveau
+    du poste individuel (`capex_unit_costs[cle][poste]`), au cas ou le
+    fixture couvrirait une tension/duree sans y avoir tous les postes -
+    aucun cas constate a ce jour, mais plus sur que de fusionner uniquement
+    au niveau de la cle tension/duree."""
+
+    def _merge_nested(
+        primary_dict: dict[str, dict], fallback_dict: dict[str, dict]
+    ) -> dict[str, dict]:
+        merged: dict[str, dict] = {}
+        for key in set(primary_dict) | set(fallback_dict):
+            merged[key] = {**fallback_dict.get(key, {}), **primary_dict.get(key, {})}
+        return merged
+
+    return CopexLibrary(
+        capex_unit_costs=_merge_nested(primary.capex_unit_costs, fallback.capex_unit_costs),
+        opex_unit_costs=_merge_nested(primary.opex_unit_costs, fallback.opex_unit_costs),
+        capex_escalation=_merge_nested(primary.capex_escalation, fallback.capex_escalation),
+        opex_escalation=_merge_nested(primary.opex_escalation, fallback.opex_escalation),
+    )
+
+
 def load_copex_library_q2_2026(path: Path = DEFAULT_COPEX_LIBRARY_Q2_2026_PATH) -> CopexLibrary:
     """Deuxieme jeu d'hypotheses CAPEX/OPEX Aurora, independant du `COPEX_library`
     lu depuis `sample_data/160926_BP_Stockage_Standalone__.xlsx` (celui-la reste

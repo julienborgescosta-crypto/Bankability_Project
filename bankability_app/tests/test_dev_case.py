@@ -341,3 +341,52 @@ def test_load_copex_library_q2_2026_2030_totals_match_databook_costs_assumptions
         assert capex_total == pytest.approx(expected_capex_excl_grid, abs=0.05)
         assert grid == pytest.approx(expected_grid, abs=0.01)
         assert opex_total == pytest.approx(expected_opex, abs=0.05)
+
+
+def test_merge_copex_libraries_primary_wins_when_both_have_a_value():
+    primary = dev_case.CopexLibrary(
+        capex_unit_costs={"2h - HTA": {"Battery system": 100.0}},
+        opex_unit_costs={"2h - HTA": {"Fixed O&M": 10.0}},
+    )
+    fallback = dev_case.CopexLibrary(
+        capex_unit_costs={"2h - HTA": {"Battery system": 999.0}},
+        opex_unit_costs={"2h - HTA": {"Fixed O&M": 999.0}},
+    )
+    merged = dev_case.merge_copex_libraries(primary, fallback)
+    assert merged.capex_unit_costs["2h - HTA"]["Battery system"] == 100.0
+    assert merged.opex_unit_costs["2h - HTA"]["Fixed O&M"] == 10.0
+
+
+def test_merge_copex_libraries_fallback_fills_missing_tension():
+    """Cas reel : le fixture COPEX_library n'a jamais couvert HTB3 - le
+    databook Aurora Q2 2026 comble ce trou (retour utilisateur, 2026-10-01 :
+    garder le fixture comme reference, Q2 2026 seulement pour les manques)."""
+    primary = dev_case.CopexLibrary(
+        capex_unit_costs={"2h - HTA": {"Battery system": 100.0}},
+        opex_unit_costs={"2h - HTA": {"Fixed O&M": 10.0}},
+    )
+    fallback = dev_case.CopexLibrary(
+        capex_unit_costs={"2h - HTB3": {"Battery system": 50.0}},
+        opex_unit_costs={"2h - HTB3": {"Fixed O&M": 5.0}},
+    )
+    merged = dev_case.merge_copex_libraries(primary, fallback)
+    assert merged.capex_unit_costs["2h - HTA"]["Battery system"] == 100.0
+    assert merged.capex_unit_costs["2h - HTB3"]["Battery system"] == 50.0
+    assert merged.opex_unit_costs["2h - HTB3"]["Fixed O&M"] == 5.0
+
+
+def test_merge_copex_libraries_fills_missing_item_within_a_shared_tension():
+    """Fusion au niveau du poste individuel, pas seulement de la cle
+    tension/duree - si le primary a la cle mais pas un poste donne, le
+    fallback comble juste ce poste-la, sans ecraser les autres."""
+    primary = dev_case.CopexLibrary(
+        capex_unit_costs={"2h - HTA": {"Battery system": 100.0}},
+        opex_unit_costs={},
+    )
+    fallback = dev_case.CopexLibrary(
+        capex_unit_costs={"2h - HTA": {"Battery system": 999.0, "Development": 20.0}},
+        opex_unit_costs={},
+    )
+    merged = dev_case.merge_copex_libraries(primary, fallback)
+    assert merged.capex_unit_costs["2h - HTA"]["Battery system"] == 100.0  # primary conserve
+    assert merged.capex_unit_costs["2h - HTA"]["Development"] == 20.0  # fallback comble le trou

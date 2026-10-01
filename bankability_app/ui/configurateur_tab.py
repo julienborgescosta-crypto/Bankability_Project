@@ -6,9 +6,11 @@ Les courbes de revenu/TURPE (AU_Store) viennent de l'asset statique
 `config/aurora_curves_22configs.json` (core.aur_cases.load_aurora_curves) -
 universelles, memes valeurs pour tout projet, verifiees a la decimale contre
 le databook Aurora Q2 2026 brut (voir docs/specs/aur_cases.md) - pas re-parsees
-depuis un classeur uploade. COPEX_library (CAPEX/OPEX), lui, reste lu depuis le
-fixture Aurora commite (bibliotheque partagee, la meme pour tous les projets
-du portefeuille, mais un poste distinct des courbes de revenu).
+depuis un classeur uploade. COPEX_library (CAPEX/OPEX) reste la reference
+("primary") - demande explicite de l'utilisateur, 2026-10-01 - completee
+poste par poste par le databook Aurora Q2 2026 la ou le fixture n'a aucune
+donnee (ex. HTB3, jamais couvert par le fixture) - voir
+`core.dev_case.merge_copex_libraries`, docs/specs/copex_comparison.md.
 
 Textes UI en anglais depuis le 2026-09-24 (demande de l'utilisateur) - TURPE/
 HTA/HTB1/HTB2/HTB3/gabarit/ORO restent en francais (vocabulaire reglementaire
@@ -19,6 +21,7 @@ travail du projet, pas une donnee UI)."""
 from __future__ import annotations
 
 import io
+from pathlib import Path
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -36,6 +39,10 @@ from core import (
 )
 from ui import chart_theme
 
+SAMPLE_AURORA_BP_PATH = (
+    Path(__file__).resolve().parent.parent / "sample_data" / "160926_BP_Stockage_Standalone__.xlsx"
+)
+
 _CONTRACT_LABELS = {
     contract_overlay.FULL_MERCHANT: "Full merchant",
     contract_overlay.FLOOR: "Floor",
@@ -45,18 +52,20 @@ _CONTRACT_LABELS = {
 
 @st.cache_resource
 def load_library() -> tuple[aur_cases.AuStoreLibrary, object, dict]:
-    """`copex_library` (CAPEX/OPEX Aurora) vient du databook Aurora Q2 2026
-    (`core.dev_case.load_copex_library_q2_2026`) - demande de l'utilisateur,
-    2026-10-01 : les references CAPEX Aurora du fixture
-    `sample_data/160926_BP_Stockage_Standalone__.xlsx` (COPEX_library) sont
-    confirmees caduques, remplacees partout (repli ICP par defaut, export
-    "Aurora COPEX Comparison", comparaison "Use Aurora's own CAPEX/OPEX
-    assumptions") - un seul jeu d'hypotheses Aurora dans toute l'app, pas 2
-    en parallele (voir docs/specs/copex_comparison.md)."""
-    from core.dev_case import load_copex_library_q2_2026
+    """`copex_library` (CAPEX/OPEX Aurora) = fixture `COPEX_library` en
+    primaire, complete par le databook Aurora Q2 2026 poste par poste la ou
+    le fixture n'a aucune donnee - demande explicite de l'utilisateur,
+    2026-10-01 : garder les hypotheses du fixture comme reference, ne
+    retomber sur le Q2 2026 que pour combler un trou (ex. HTB3). Voir
+    `core.dev_case.merge_copex_libraries`, docs/specs/copex_comparison.md."""
+    from core.dev_case import load_copex_library_q2_2026, merge_copex_libraries
+    from core.dev_case_parser import load_dev_case_grids, parse_copex_library
 
     au_store = aur_cases.load_aurora_curves()
-    copex_library = load_copex_library_q2_2026()
+    _, copex_grid, _ = load_dev_case_grids(SAMPLE_AURORA_BP_PATH)
+    fixture_library = parse_copex_library(copex_grid)
+    q2_2026_library = load_copex_library_q2_2026()
+    copex_library = merge_copex_libraries(fixture_library, q2_2026_library)
     financing_terms = aur_cases.load_financing_terms()
     return au_store, copex_library, financing_terms
 
