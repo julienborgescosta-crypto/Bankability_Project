@@ -539,7 +539,6 @@ def _render_hold_and_operate(
     *,
     projects: list[portfolio.ProjectConfig],
     au_store: aur_cases.AuStoreLibrary,
-    copex_library,
     copex_library_q2_2026,
     financing_terms: dict,
 ) -> None:
@@ -594,31 +593,22 @@ def _render_hold_and_operate(
         "Also show results with Aurora's own CAPEX/OPEX assumptions",
         help="Recomputes the table above using Aurora's own CAPEX/OPEX instead of ours "
         "(ICP + Aurora fallback) - same revenue, same financing terms, only the cost source "
-        "changes. See core/copex_comparison.py for how our costs compare to Aurora's.",
+        "changes. Uses the Aurora Q2 2026 databook ('Costs assumptions' sheet) - the older "
+        "COPEX_library fixture reference was dropped (2026-10-01, confirmed outdated by the "
+        "user). See core/copex_comparison.py for how our costs compare to Aurora's.",
     ):
-        cost_vintage = st.radio(
-            "Which Aurora cost assumptions?",
-            ["COPEX_library (base fixture)", "Aurora Q2 2026 update (databook)"],
-            horizontal=True,
-            help="'COPEX_library (base fixture)' is the same reference used everywhere else in "
-            "the app (unchanged default). 'Aurora Q2 2026 update' uses a separate, more recent "
-            "cost table extracted from the user-provided Aurora Q2 2026 databook ('Costs "
-            "assumptions' sheet) - kept as an independent option rather than overwriting the "
-            "base fixture (docs/specs/copex_comparison.md).",
-        )
-        library_to_use = (
-            copex_library_q2_2026
-            if cost_vintage == "Aurora Q2 2026 update (databook)"
-            else copex_library
-        )
         try:
             rows_aurora = portfolio.run_portfolio(
-                projects, au_store, library_to_use, financing_terms, capex_opex_source="aurora"
+                projects,
+                au_store,
+                copex_library_q2_2026,
+                financing_terms,
+                capex_opex_source="aurora",
             )
         except aur_cases.AuroraConfigError as exc:
             st.error(f"Calculation error with Aurora's CAPEX/OPEX assumptions: {exc}")
             return
-        st.markdown(f"**With Aurora's own CAPEX/OPEX assumptions ({cost_vintage})**")
+        st.markdown("**With Aurora's own CAPEX/OPEX assumptions (Aurora Q2 2026 databook)**")
         df_aurora = _hold_and_operate_df(rows_aurora)
         st.dataframe(df_aurora, use_container_width=True, hide_index=True)
         _download_results_button(
@@ -928,7 +918,6 @@ def _render_results(
             rows,
             projects=projects,
             au_store=au_store,
-            copex_library=copex_library,
             copex_library_q2_2026=copex_library_q2_2026,
             financing_terms=financing_terms,
         )

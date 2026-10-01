@@ -258,7 +258,11 @@ def test_configurateur_copex_comparison_checkbox_shows_download_only():
 def test_configurateur_aurora_costs_checkbox_shows_second_table():
     """Demande de l'utilisateur, 2026-10-01 : voir le TRI avec les hypotheses
     CAPEX/OPEX d'Aurora plutot que les notres, en 2e tableau sous le tableau
-    Hold & Operate habituel."""
+    Hold & Operate habituel. Utilise toujours le databook Aurora Q2 2026
+    (plus de choix de millesime depuis le meme jour : la reference
+    COPEX_library/fixture a ete jugee caduque par l'utilisateur et retiree,
+    voir core.dev_case.load_copex_library_q2_2026 / docs/specs/
+    copex_comparison.md)."""
     at = AppTest.from_file(APP_PATH)
     at.run(timeout=_TIMEOUT)
     at.sidebar.radio[0].set_value("Aurora Configurator (multi-project)")
@@ -278,39 +282,7 @@ def test_configurateur_aurora_costs_checkbox_shows_second_table():
     at.run(timeout=_TIMEOUT)
     assert not at.exception
     assert len(at.dataframe) == dataframes_before + 1
-    assert any(
-        b.label.startswith("Download Hold & Operate (Aurora CAPEX-OPEX)")
-        for b in at.download_button
-    )
-
-
-def test_configurateur_aurora_costs_radio_switches_to_q2_2026_vintage():
-    """Demande de l'utilisateur, 2026-10-01 : garder COPEX_library (fixture) comme
-    base par defaut, mais offrir en plus les couts Aurora Q2 2026 (databook) sans
-    remplacer la base existante - voir core.dev_case.load_copex_library_q2_2026."""
-    at = AppTest.from_file(APP_PATH)
-    at.run(timeout=_TIMEOUT)
-    at.sidebar.radio[0].set_value("Aurora Configurator (multi-project)")
-    at.run(timeout=_TIMEOUT)
-
-    add_button = next(b for b in at.button if b.label == "Add the project")
-    add_button.click()
-    at.run(timeout=_TIMEOUT)
-    assert not at.exception
-
-    next(
-        cb
-        for cb in at.checkbox
-        if cb.label == "Also show results with Aurora's own CAPEX/OPEX assumptions"
-    ).set_value(True)
-    at.run(timeout=_TIMEOUT)
-    assert not at.exception
-    radio = next(r for r in at.radio if r.label == "Which Aurora cost assumptions?")
-    assert radio.value == "COPEX_library (base fixture)"  # defaut inchange
-
-    radio.set_value("Aurora Q2 2026 update (databook)")
-    at.run(timeout=_TIMEOUT)
-    assert not at.exception
+    assert not any(r.label == "Which Aurora cost assumptions?" for r in at.radio)
     assert any(
         b.label.startswith("Download Hold & Operate (Aurora CAPEX-OPEX)")
         for b in at.download_button

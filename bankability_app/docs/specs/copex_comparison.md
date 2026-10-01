@@ -219,14 +219,26 @@ contre ce millesime plus recent sans rien changer ailleurs.
   2h et 4h ont exactement le meme ratio 2028->2030), donc la moyenne ne lisse aucune vraie
   divergence. "Grid connection"/"Grid charges" sont plats (memes €/kW toutes annees dans la
   source) -> escalade nulle, verifie par test.
-- UI (`ui/configurateur_tab.py::_render_hold_and_operate`) : un `st.radio` apparait sous la case
-  a cocher, "COPEX_library (base fixture)" (defaut, comportement inchange) vs "Aurora Q2 2026
-  update (databook)". `load_library()` charge les 2 bibliotheques ; le radio choisit laquelle est
-  passee a `portfolio.run_portfolio(..., capex_opex_source="aurora")` - aucun changement cote
-  `core.aur_cases`/`core.portfolio` (le parametre `copex_library` etait deja generique).
+- UI (`ui/configurateur_tab.py::_render_hold_and_operate`) : la case a cocher recalcule directement
+  avec `copex_library_q2_2026` passe a `portfolio.run_portfolio(..., capex_opex_source="aurora")` -
+  aucun changement cote `core.aur_cases`/`core.portfolio` (le parametre `copex_library` etait deja
+  generique). **Le choix de millesime a ete retire le 2026-10-01** (meme jour) : un `st.radio`
+  offrait initialement "COPEX_library (base fixture)" vs "Aurora Q2 2026 update (databook)", mais
+  l'utilisateur a confirme que les references CAPEX Aurora dans `COPEX_library` (le fixture) sont
+  completement caduques - l'option "base fixture" n'avait donc plus de raison d'etre proposee ici,
+  seul le databook Q2 2026 reste. `copex_library` (fixture) reste en revanche la source du repli
+  ICP par defaut partout ailleurs dans l'app (pas remis en cause, scope limite a ce comparatif) et
+  de l'export "Aurora COPEX Comparison" (`_render_copex_comparison`, question ouverte ci-dessous).
 
 ## Questions ouvertes
 
+- **`COPEX_library` (fixture) confirme caduc par l'utilisateur (2026-10-01) pour la comparaison
+  "Aurora's own CAPEX/OPEX assumptions"** (option retiree, voir ci-dessus) - mais reste encore
+  utilise comme repli Aurora par defaut de tout le moteur (`capex_opex_source="icp"`, partout sauf
+  ce comparatif) ET comme reference de `_render_copex_comparison` (export "Aurora COPEX
+  Comparison"). Pas tranche avec l'utilisateur si ces 2 autres usages doivent eux aussi migrer vers
+  le databook Q2 2026 - scope volontairement limite a la demande explicite ("enleve cette
+  option-la") plutot qu'un remplacement silencieux de la base par defaut de toute l'app.
 - **Perimetre exact du "Grid connection" d'Aurora non confirme** - l'hypothese qu'il inclut la
   sous-station privee (avancee par l'utilisateur) ne se verifie pas numeriquement une fois testee
   (l'ecart s'aggrave, ne se resorbe pas, voir "Verification faite"). A trancher avec l'utilisateur :
