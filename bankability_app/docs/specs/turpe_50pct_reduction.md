@@ -120,13 +120,14 @@ parallele a partir de chiffres non officiels.
   etait eligible ?"), pas une verification automatique des 3 criteres reels (consommation annuelle
   soutiree > 10 GWh, taux heures creuses >= 0.44, dispatch reel simule) - l'app n'a pas de modele
   de dispatch horaire, seulement des revenus annuels agreges par `AU_Store`.
-- **Taux de reduction de "Grid charges" suppose identique (50%) a celui du TURPE variable** - les
-  sources consultees parlent de la "part acheminement" globalement, pas d'un taux distinct par
-  composante ; si la CTA (incluse dans "Grid charges") n'est en realite PAS concernee par
-  l'abattement TURPE (c'est une contribution distincte, pas strictement le TURPE lui-meme), la
-  reduction serait legerement surestimee sur ce sous-poste - non tranche, pas isolable sans
-  recalculer "Grid charges" depuis une vraie grille tarifaire CTA/TURPE separee (voir ci-dessus,
-  non fait faute de donnees officielles chargees dans l'app).
+- ~~Taux de reduction de "Grid charges" suppose identique a celui du TURPE variable~~ - tranche le
+  2026-10-01 (demande explicite de l'utilisateur : recalculer la CTA sur la base du nouveau TURPE
+  reduit, pas la laisser inchangee). D'apres `I-Fixed` (ligne 86-87), la CTA est definie comme un
+  **pourcentage du TURPE fixe** (`CTA = taux x TURPE_fixe`, donc `Grid_charges = TURPE_fixe x
+  (1 + taux)`) - recalculer la CTA sur le TURPE fixe reduit de 50% donne algebriquement
+  `Grid_charges x 0.5` (demonstration dans la conversation du 2026-10-01), **exactement** ce que
+  `_opex_with_turpe_50pct_reduction` fait deja en divisant directement la ligne bundlee - aucun
+  changement de code necessaire, la mise en oeuvre du 2026-10-01 est deja la bonne methode.
 - **Grille tarifaire TURPE officielle non chargee dans l'app** : `COPEX_library!Grid charges` reste
   une estimation generique Aurora (€/kW/an, pas la grille CRE reelle par tension/puissance
   souscrite) - suffisant pour ce scenario (l'app ne pretend jamais reproduire le TURPE exact d'un
