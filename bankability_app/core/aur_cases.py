@@ -588,6 +588,43 @@ def aggregator_fee_series(
     return fees
 
 
+def _opex_with_land_lease_override(
+    opex_keur: float,
+    *,
+    tension: str,
+    duree_h: int,
+    cod_year: int,
+    power_mw: float,
+    copex_library: CopexLibrary,
+    land_lease_opex_keur: float,
+) -> float:
+    """`opex_keur` inclut deja la ligne 'Land lease' generique d'Aurora
+    (toujours sommee dans `OPEX_LINE_ITEMS`, que la source soit ICP ou
+    Aurora seul - voir `icp_opex_year1_keur`). Si `land_lease_opex_keur` est
+    renseigne (!=0), il REMPLACE cette ligne au lieu de s'y ajouter - corrige
+    un bug signale par l'utilisateur le 2026-10-01 : un loyer manuel de
+    300 k€/an ressortait additionne a l'estimation Aurora (ex. 130 k€/an),
+    pour un total de 430 k€/an - un projet ne paie pas 2 loyers fonciers
+    empiles, le manuel represente LE loyer reel, pas un ajout dessus. `0.0`
+    (defaut, "non renseigne") garde le comportement d'avant - impossible de
+    distinguer un loyer manuel explicitement a 0 de ce defaut (meme
+    convention que `manual_connection_capex_keur` avant l'introduction du
+    mode explicite `connection_capex_mode` - limite documentee, voir
+    docs/specs/portfolio.md)."""
+    if not land_lease_opex_keur:
+        return opex_keur
+    key = voltage_duration_key(tension, duree_h)
+    aurora_land_lease_keur = (
+        escalated_unit_cost(
+            copex_library.opex_unit_costs.get(key, {}).get("Land lease", 0.0),
+            copex_library.opex_escalation.get("Land lease", {}),
+            cod_year,
+        )
+        * power_mw
+    )
+    return opex_keur - aurora_land_lease_keur + land_lease_opex_keur
+
+
 def capex_and_opex_keur(
     *,
     tension: str,
@@ -618,7 +655,9 @@ def capex_and_opex_keur(
     connection' d'ICP quand la tension est couverte, sinon Aurora ; "manual"/
     "distance_rte"/"distance_rte_and_substation" inchanges, ce sont des
     valeurs/formules saisies directement) et l'OPEX loyer foncier
-    (`land_lease_opex_keur`, ajoute tel quel, non couvert par ICP ni Aurora).
+    (`land_lease_opex_keur` - REMPLACE la ligne 'Land lease' generique
+    d'Aurora quand renseigne (!=0), ne s'y ajoute plus - corrige le
+    2026-10-01, voir `_opex_with_land_lease_override`).
 
     Garde-fou HTB3 inchange : si la tension n'a ni donnees ICP ni Aurora, leve
     explicitement plutot que de laisser passer un CAPEX/OPEX a 0 (brief
@@ -672,8 +711,17 @@ def capex_and_opex_keur(
         icp_library=icp_library,
         aurora_library=copex_library,
     )
+    opex_keur = _opex_with_land_lease_override(
+        opex_generic_keur,
+        tension=tension,
+        duree_h=duree_h,
+        cod_year=cod_year,
+        power_mw=power_mw,
+        copex_library=copex_library,
+        land_lease_opex_keur=land_lease_opex_keur,
+    )
 
-    return capex_generic_keur + connection_keur, opex_generic_keur + land_lease_opex_keur
+    return capex_generic_keur + connection_keur, opex_keur
 
 
 def capex_and_opex_keur_aurora_only(
@@ -740,15 +788,24 @@ def capex_and_opex_keur_aurora_only(
         connection_keur = connection_capex_keur(params, copex_library)
 
     opex_unit_costs = copex_library.opex_unit_costs.get(key, {})
-    opex_keur = sum(
+    opex_generic_keur = sum(
         escalated_unit_cost(
             opex_unit_costs.get(label, 0.0), copex_library.opex_escalation.get(label, {}), cod_year
         )
         * power_mw
         for label in OPEX_LINE_ITEMS
     )
+    opex_keur = _opex_with_land_lease_override(
+        opex_generic_keur,
+        tension=tension,
+        duree_h=duree_h,
+        cod_year=cod_year,
+        power_mw=power_mw,
+        copex_library=copex_library,
+        land_lease_opex_keur=land_lease_opex_keur,
+    )
 
-    return capex_keur + connection_keur, opex_keur + land_lease_opex_keur
+    return capex_keur + connection_keur, opex_keur
 
 
 def repowering_capex_keur_aurora_only(

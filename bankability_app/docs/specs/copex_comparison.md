@@ -107,10 +107,30 @@ correct pour les 4 autres postes (jamais challengeables individuellement), faux 
 qui, lui, EST challengeable (seul 2e poste OPEX/CAPEX ajustable du formulaire, avec le
 raccordement).
 
-Corrige : "Land lease" a sa propre ligne desormais (`compare_capex_opex(land_lease_opex_keur=...)`),
+Corrige (1ere passe) : "Land lease" a sa propre ligne (`compare_capex_opex(land_lease_opex_keur=...)`),
 `comparable=True`, `ours = estimation Aurora + land_lease_opex_keur` - les 4 autres postes restent
-groupes dans une ligne "Info only" (label mis a jour, "Land lease" retire). "TOTAL OPEX" integre
-desormais correctement l'ajout manuel.
+groupes dans une ligne "Info only" (label mis a jour, "Land lease" retire).
+
+**Corrige a nouveau le meme jour** : l'utilisateur a signale que ce `ours = aurora + override`
+n'etait pas non plus ce qu'il attendait - "c'est comme pour le grid cost, c'est pas en plus, c'est
+la valeur manuelle". Root cause plus profonde : `aur_cases.capex_and_opex_keur` lui-meme (pas
+seulement ce module de comparaison) ajoutait `land_lease_opex_keur` par-dessus l'estimation Aurora
+"Land lease" (deja incluse dans son OPEX generique via `OPEX_LINE_ITEMS`) au lieu de la remplacer -
+un projet avec un loyer manuel de 300 k€/an et une estimation Aurora de 130 k€/an se retrouvait
+avec 430 k€/an, alors qu'un projet ne paie pas 2 loyers fonciers empiles. Corrige dans
+`aur_cases._opex_with_land_lease_override` (nouveau helper, utilise par `capex_and_opex_keur` ET
+`capex_and_opex_keur_aurora_only`) : `land_lease_opex_keur` REMPLACE desormais la ligne Aurora
+quand renseigne (`!= 0`), au lieu de s'y ajouter - ce module de comparaison suit le meme principe
+(`ours = land_lease_opex_keur si renseigne, sinon l'estimation Aurora`). Limite assumee : un loyer
+manuel explicitement mis a 0 (plutot que "non renseigne") n'est pas distinguable du defaut - meme
+limite que `manual_connection_capex_keur` avant l'introduction du mode explicite
+`connection_capex_mode`, pas corrigee ici (pas de mode dedie introduit pour le loyer, jugé non
+necessaire pour l'instant).
+
+**`dev_case.opex_year1_keur` (onglet "Cas de developpement") n'a PAS ete modifie** - il reste
+additif, voir docs/specs/portfolio.md "Questions ouvertes" : ce chemin reproduit le BP reel a
+l'euro pres (valide), impossible de re-verifier sans le fichier confidentiel si son addition est
+elle-meme un bug ou un comportement intentionnel du fichier source.
 
 ## Verification faite (donnees reelles, `sample_data/160926_BP_Stockage_Standalone__.xlsx`)
 

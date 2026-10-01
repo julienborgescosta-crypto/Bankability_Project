@@ -45,7 +45,10 @@ class ProjectConfig:
     connection_capex_mode: str = "library"  # "library" | "manual" | "distance_rte"
     manual_connection_capex_keur: float = 0.0  # utilise si connection_capex_mode == "manual"
     distance_rte_km: float = 0.0  # utilise si connection_capex_mode == "distance_rte"
-    land_lease_opex_keur: float = 0.0  # ajoute tel quel a l'OPEX (non couvert par COPEX_library)
+    # Remplace (pas s'ajoute a) l'estimation generique Aurora "Land lease" quand
+    # renseigne (!=0) - voir aur_cases._opex_with_land_lease_override, corrige le
+    # 2026-10-01 (un loyer manuel ne doit pas s'empiler sur l'estimation generique).
+    land_lease_opex_keur: float = 0.0
     # Limitation non-firm 3000h/an (Offre de Raccordement Optimise) - demande de
     # l'utilisateur, 2026-09-23 (les 6 cas ORO du databook Aurora partageaient la
     # cle de la variante standard et etaient ecartes en silence, voir

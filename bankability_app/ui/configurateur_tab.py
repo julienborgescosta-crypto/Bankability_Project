@@ -384,7 +384,11 @@ def _render_add_project_form(
                 )
         with a2:
             land_lease_opex_keur = st.number_input(
-                "Land lease OPEX (k€/yr)", value=0.0, min_value=0.0
+                "Land lease OPEX (k€/yr)",
+                value=0.0,
+                min_value=0.0,
+                help="Replaces (not added to) Aurora's generic COPEX_library 'Land lease' "
+                "estimate when set - leave at 0 to keep using that generic estimate.",
             )
 
         turpe_50pct_reduction = False

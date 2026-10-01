@@ -243,14 +243,16 @@ def compare_capex_opex(
     `comparable=False`, pas corrige dans la valeur elle-meme).
 
     `land_lease_opex_keur` : meme type de correction, meme jour - l'ajout
-    manuel de loyer foncier du projet (`aur_cases.capex_and_opex_keur`,
-    "ajoute tel quel" par-dessus l'estimation Aurora "Land lease") n'etait
-    pas du tout repris ici : la ligne OPEX info-only incluait "Land lease"
-    mais avec la MEME valeur Aurora des 2 cotes, donc un projet avec par
-    exemple 300 k€/an de loyer manuel ressortait avec un OPEX "Ours"
-    identique a Aurora - aucune trace du loyer saisi. "Land lease" a sa
-    propre ligne desormais (`ours = aurora + land_lease_opex_keur`), sortie
-    du groupe "Info only" (Insurance/Grid charges/Accise/Other, eux
+    manuel de loyer foncier du projet n'etait pas du tout repris ici : la
+    ligne OPEX info-only incluait "Land lease" mais avec la MEME valeur
+    Aurora des 2 cotes, donc un projet avec par exemple 300 k€/an de loyer
+    manuel ressortait avec un OPEX "Ours" identique a Aurora - aucune trace
+    du loyer saisi. "Land lease" a sa propre ligne desormais (`ours =
+    land_lease_opex_keur si renseigne, sinon l'estimation Aurora` - REMPLACE,
+    ne s'ajoute plus, corrige un 2e bug le meme jour dans
+    `aur_cases.capex_and_opex_keur` ou l'override s'ajoutait a l'estimation
+    Aurora au lieu de la remplacer, voir `_opex_with_land_lease_override`),
+    sortie du groupe "Info only" (Insurance/Grid charges/Accise/Other, eux
     toujours non challengeables individuellement, restent groupes)."""
     key = voltage_duration_key(tension, duree_h)
     notes: list[str] = []
@@ -379,12 +381,12 @@ def compare_capex_opex(
     aurora_land_lease_keur = _aurora_opex_item_keur(
         aurora_library, key, _OPEX_LAND_LEASE_LABEL, cod_year, power_mw
     )
-    ours_land_lease_keur = aurora_land_lease_keur + land_lease_opex_keur
+    ours_land_lease_keur = land_lease_opex_keur if land_lease_opex_keur else aurora_land_lease_keur
     if land_lease_opex_keur:
         notes.append(
-            f"Land lease: project adds a manual {land_lease_opex_keur:,.0f} k€/yr on top of "
+            f"Land lease: project uses a manual {land_lease_opex_keur:,.0f} k€/yr instead of "
             f"Aurora's library estimate ({aurora_land_lease_keur:,.0f} k€/yr) - same convention "
-            "as aur_cases.capex_and_opex_keur (added, not replaced)."
+            "as aur_cases.capex_and_opex_keur (replaced, not added)."
         )
 
     info_total_keur = sum(

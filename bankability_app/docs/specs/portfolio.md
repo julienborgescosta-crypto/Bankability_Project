@@ -90,6 +90,11 @@ section 4.
   à comparer - le toggle "Aurora vs QEnergy" reste à construire une fois une vraie bibliothèque de
   coûts QEnergy identifiée.
 - ~~Pas d'UI Configurateur/Vue portefeuille~~ — fait, voir `ui/configurateur_tab.py`.
+- **`dev_case.opex_year1_keur` (onglet "Cas de développement") reste additif sur le loyer
+  foncier**, alors que `aur_cases.capex_and_opex_keur` (Configurateur) a été corrigé pour remplacer
+  (2026-10-01, voir ci-dessus) — pas tranché avec l'utilisateur si ce 2e chemin souffre du même
+  bug ou si son addition est intentionnelle (le fichier BP réel qu'il reproduit n'est pas
+  disponible pour re-vérifier).
 
 ## Ajustement global CAPEX/OPEX (%) — retiré, remplacé par 2 leviers ciblés
 
@@ -109,8 +114,16 @@ développement", donc alignés sur le BP réel) :
 - **CAPEX de raccordement** (`ProjectConfig.connection_capex_mode` : `"library"` par défaut, ou
   `"manual"` avec `manual_connection_capex_keur`, ou `"distance_rte"` avec `distance_rte_km` →
   coût = `4650.7 * distance_km**0.239` k€, formule I-Project du BP Stockage Standalone 160926).
-- **OPEX loyer foncier** (`ProjectConfig.land_lease_opex_keur`, additif, non escaladé — ajouté tel
-  quel à l'OPEX année 1 comme dans `dev_case.opex_year1_keur`).
+- **OPEX loyer foncier** (`ProjectConfig.land_lease_opex_keur`, non escaladé). **Corrigé le
+  2026-10-01** (retour utilisateur — un loyer manuel de 300 k€/an ressortait additionné à
+  l'estimation générique Aurora "Land lease", ex. 130 k€/an → 430 k€/an au total, alors qu'un
+  projet ne paie pas 2 loyers empilés) : quand renseigné (`!= 0`), il **remplace** désormais la
+  ligne "Land lease" générique d'Aurora au lieu de s'y ajouter — voir
+  `aur_cases._opex_with_land_lease_override`. **Diverge délibérément de `dev_case.opex_year1_keur`**
+  (onglet "Cas de développement"), qui reste additif — ce module-là reproduit le fichier BP réel à
+  l'euro près (validé), et on ne peut pas re-vérifier sans ce fichier confidentiel si son addition
+  est elle-même correcte ou souffre du même bug ; question ouverte avec l'utilisateur plutôt qu'un
+  alignement silencieux des 2 chemins.
 
 Les deux sont passés jusqu'à `aur_cases.build_project_inputs`/`capex_and_opex_keur`, qui les
 transmet à la construction interne du `DevCaseParams` (au lieu du `connection_capex_mode="library"`

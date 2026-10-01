@@ -270,18 +270,33 @@ def test_build_project_inputs_connection_capex_distance_rte_matches_formula(
     )
 
 
-def test_build_project_inputs_land_lease_opex_is_additive(
+def test_build_project_inputs_land_lease_opex_replaces_aurora_estimate(
     au_store, copex_library, default_financing_terms
 ):
+    """Corrige le 2026-10-01 (retour utilisateur) : un loyer manuel REMPLACE
+    l'estimation generique Aurora 'Land lease', il ne s'y ajoute plus."""
+    from core import aur_cases
+
     config = _config()
     baseline, _, _ = portfolio.build_project_inputs(
         config, au_store, copex_library, default_financing_terms
     )
     with_land_lease, _, _ = portfolio.build_project_inputs(
-        _config(land_lease_opex_keur=20.0), au_store, copex_library, default_financing_terms
+        _config(land_lease_opex_keur=200.0), au_store, copex_library, default_financing_terms
     )
-    assert with_land_lease.opex_year1_keur == pytest.approx(baseline.opex_year1_keur + 20.0)
-    assert with_land_lease.opex_keur[1] == pytest.approx(baseline.opex_keur[1] - 20.0)
+    key = aur_cases.voltage_duration_key(config.tension, config.duree_h)
+    aurora_land_lease = (
+        aur_cases.escalated_unit_cost(
+            copex_library.opex_unit_costs[key]["Land lease"],
+            copex_library.opex_escalation.get("Land lease", {}),
+            config.cod_year,
+        )
+        * config.power_mw
+    )
+    assert with_land_lease.opex_year1_keur == pytest.approx(
+        baseline.opex_year1_keur - aurora_land_lease + 200.0
+    )
+    assert with_land_lease.opex_year1_keur != pytest.approx(baseline.opex_year1_keur + 200.0)
     # CAPEX non touche par le loyer foncier.
     assert with_land_lease.capex_keur[0] == pytest.approx(baseline.capex_keur[0])
 

@@ -88,7 +88,11 @@ _COLUMN_SPECS: list[tuple[str, str, str]] = [
     ),
     ("Manual grid connection CAPEX (k€)", "Used if mode=manual", "e.g. 2000"),
     ("Distance to RTE substation (km)", "Used if mode=distance_rte", "e.g. 5"),
-    ("Land lease OPEX (k€/yr)", "Optional, default 0", "e.g. 0"),
+    (
+        "Land lease OPEX (k€/yr)",
+        "Optional, default 0 (uses Aurora's generic estimate) - REPLACES it when set",
+        "e.g. 0",
+    ),
     ("Gearing override (%)", "Optional, blank = model default", "e.g. 70"),
     ("Interest rate override (%)", "Optional, blank = model default", "e.g. 5"),
     ("DSA override (k€)", "Optional, blank = model default", "e.g. 500"),

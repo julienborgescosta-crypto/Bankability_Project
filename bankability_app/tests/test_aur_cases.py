@@ -283,7 +283,12 @@ def test_capex_and_opex_keur_distance_rte_connection_capex(au_store, copex_libra
     )
 
 
-def test_capex_and_opex_keur_land_lease_opex_is_additive(au_store, copex_library):
+def test_capex_and_opex_keur_land_lease_opex_replaces_aurora_estimate(au_store, copex_library):
+    """Corrige le 2026-10-01 (retour utilisateur) : un loyer manuel REMPLACE
+    l'estimation generique Aurora 'Land lease' (deja incluse dans l'OPEX par
+    defaut) - il ne s'y ajoute plus (un projet ne paie pas 2 loyers fonciers
+    empiles). Teste a power_mw=1.0 pour que le resultat soit directement
+    comparable au loyer manuel saisi (lui non escalade par MW)."""
     _, opex_without = aur_cases.capex_and_opex_keur(
         tension="HTA", duree_h=2, cod_year=2027, power_mw=1.0, copex_library=copex_library
     )
@@ -295,7 +300,15 @@ def test_capex_and_opex_keur_land_lease_opex_is_additive(au_store, copex_library
         copex_library=copex_library,
         land_lease_opex_keur=20.0,
     )
-    assert opex_with == pytest.approx(opex_without + 20.0)
+    key = aur_cases.voltage_duration_key("HTA", 2)
+    aurora_land_lease = aur_cases.escalated_unit_cost(
+        copex_library.opex_unit_costs[key]["Land lease"],
+        copex_library.opex_escalation.get("Land lease", {}),
+        2027,
+    )
+    assert opex_with == pytest.approx(opex_without - aurora_land_lease + 20.0)
+    # Sans override, l'estimation Aurora reste utilisee telle quelle (comportement inchange).
+    assert opex_without > 0.0
 
 
 def test_capex_and_opex_keur_raises_for_tension_missing_from_copex_library(au_store, copex_library):
