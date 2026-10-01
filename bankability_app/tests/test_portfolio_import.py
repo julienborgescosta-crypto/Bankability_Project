@@ -39,6 +39,8 @@ def test_template_round_trips_into_valid_project_configs():
     assert site_b.contract_structure.price_keur_per_mw_per_year == pytest.approx(80.0)
     assert site_b.gearing_pct_override == pytest.approx(0.70)
     assert site_b.interest_rate_override == pytest.approx(0.05)
+    assert site_a.turpe_50pct_reduction is False
+    assert site_b.turpe_50pct_reduction is True
 
 
 def test_minimal_file_with_only_required_columns_uses_defaults(tmp_path):

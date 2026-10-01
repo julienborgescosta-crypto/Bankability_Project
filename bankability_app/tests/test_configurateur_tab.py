@@ -49,6 +49,35 @@ def test_configurateur_add_default_project_and_see_results():
     assert len(at.dataframe) == 3
 
 
+def test_configurateur_turpe_50pct_checkbox_only_shown_for_htb_tensions():
+    """Demande de l'utilisateur, 2026-10-01 : abattement TURPE 50% reserve
+    aux raccordements >=50kV (HTB1/HTB2/HTB3) - la case ne doit pas meme
+    etre proposee en HTA (voir docs/specs/turpe_50pct_reduction.md)."""
+    at = AppTest.from_file(APP_PATH)
+    at.run(timeout=_TIMEOUT)
+    at.sidebar.radio[0].set_value("Aurora Configurator (multi-project)")
+    at.run(timeout=_TIMEOUT)
+    assert not at.exception
+
+    tension_selectbox = next(sb for sb in at.selectbox if sb.label == "Voltage (Tension)")
+    assert tension_selectbox.value == "HTA"
+    assert not any(cb.label == "TURPE 50% reduction" for cb in at.checkbox)
+
+    tension_selectbox.set_value("HTB2")
+    at.run(timeout=_TIMEOUT)
+    assert not at.exception
+    turpe_checkbox = next(cb for cb in at.checkbox if cb.label == "TURPE 50% reduction")
+    assert turpe_checkbox.value is False
+
+    turpe_checkbox.set_value(True)
+    at.run(timeout=_TIMEOUT)
+    add_button = next(b for b in at.button if b.label == "Add the project")
+    add_button.click()
+    at.run(timeout=_TIMEOUT)
+    assert not at.exception
+    assert "TURPE 50%" in "".join(w.value for w in at.markdown)
+
+
 def test_configurateur_extrapolated_combo_shows_warning_and_adds_project():
     """HTB1 + Injection n'est pas modelise par Aurora (seul Classique existe) -
     depuis le 2026-09-24 c'est extrapole plutot que bloque, et l'UI doit le

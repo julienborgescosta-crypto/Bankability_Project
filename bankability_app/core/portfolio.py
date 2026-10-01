@@ -76,6 +76,15 @@ class ProjectConfig:
     repowering_enabled: bool = True
     repowering_year_mode: str = "manual"  # "auto" | "manual"
     repowering_op_year_manual: int = 15  # utilise seulement si repowering_year_mode == "manual"
+    # Abattement TURPE 50% pour sites de stockage raccordes RTE/>=50kV (code de
+    # l'energie, annexe art. D.341-9 ; voir docs/specs/turpe_50pct_reduction.md
+    # pour les sources et le detail du calcul). Reserve aux tensions HTB1/HTB2/
+    # HTB3 (raccordement >=50kV) - leve une erreur explicite si coche en HTA
+    # (portfolio.build_project_inputs). Option scenario, pas une verification
+    # automatique de l'eligibilite reelle (qui depend en plus de >10 GWh/an de
+    # soutirage et d'un taux d'utilisation en heures creuses >=0.44 - non
+    # modelises ici) - demande de l'utilisateur, 2026-10-01.
+    turpe_50pct_reduction: bool = False
 
 
 @dataclass(frozen=True)
@@ -237,7 +246,14 @@ def build_project_inputs(
     `find_best_repowering_op_year` en mode 'auto' (2026-09-24). `capex_opex_source`
     ("icp" par defaut ou "aurora") : voir `aur_cases.build_project_inputs" -
     option "Use Aurora's own CAPEX/OPEX assumptions" du Configurateur
-    (demande de l'utilisateur, 2026-10-01)."""
+    (demande de l'utilisateur, 2026-10-01). `turpe_50pct_reduction` : abattement
+    TURPE 50% (voir `ProjectConfig`, docs/specs/turpe_50pct_reduction.md) -
+    applique au TURPE variable cote revenu (`base_inputs.turpe_keur`) avant
+    tout usage downstream (frais d'agregateur net-of-turpe inclus), pas a la
+    composante OPEX fixe "Grid charges" (voir doc, limite connue) - la validation de
+    tension et l'application de l'abattement vivent toutes les deux dans
+    `aur_cases.build_project_inputs`, pas ici (jamais de scaling post-hoc d'un
+    `ProjectInputs` deja construit, voir docs/specs/portfolio.md)."""
     resolved = _resolve_au_config(config, au_store)
     repowering_op_year, _auto_optimized = _effective_repowering_op_year(
         config, au_store, copex_library, financing_terms, capex_opex_source
@@ -257,6 +273,7 @@ def build_project_inputs(
         distance_rte_km=config.distance_rte_km,
         land_lease_opex_keur=config.land_lease_opex_keur,
         capex_opex_source=capex_opex_source,
+        turpe_50pct_reduction=config.turpe_50pct_reduction,
     )
     operating_revenue = base_inputs.revenues_keur[1:]
     operating_turpe = base_inputs.turpe_keur[1:]

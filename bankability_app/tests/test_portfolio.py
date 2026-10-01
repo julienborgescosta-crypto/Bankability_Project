@@ -286,6 +286,39 @@ def test_build_project_inputs_land_lease_opex_is_additive(
     assert with_land_lease.capex_keur[0] == pytest.approx(baseline.capex_keur[0])
 
 
+def test_build_project_inputs_turpe_50pct_reduction_halves_turpe_series(
+    au_store, copex_library, default_financing_terms
+):
+    """Abattement TURPE 50% (code de l'energie, annexe art. D.341-9) - demande
+    de l'utilisateur, 2026-10-01, voir docs/specs/turpe_50pct_reduction.md.
+    Applique au TURPE variable cote revenu uniquement (limite documentee)."""
+    config = _config(tension="HTB2", turpe_type="Classique")
+    baseline, _, _ = portfolio.build_project_inputs(
+        config, au_store, copex_library, default_financing_terms
+    )
+    reduced, _, _ = portfolio.build_project_inputs(
+        _config(tension="HTB2", turpe_type="Classique", turpe_50pct_reduction=True),
+        au_store,
+        copex_library,
+        default_financing_terms,
+    )
+    assert reduced.turpe_keur == pytest.approx([t * 0.5 for t in baseline.turpe_keur])
+    # Rien d'autre ne doit bouger (revenu brut, CAPEX) - seul le TURPE est reduit.
+    assert reduced.capex_keur == pytest.approx(baseline.capex_keur)
+
+
+def test_build_project_inputs_turpe_50pct_reduction_raises_for_hta(
+    au_store, copex_library, default_financing_terms
+):
+    """Reserve aux raccordements >=50kV (HTB1/HTB2/HTB3) - HTA (raccordement
+    distribution Enedis, < 50kV) n'est pas eligible."""
+    from core.aur_cases import AuroraConfigError
+
+    config = _config(tension="HTA", turpe_50pct_reduction=True)
+    with pytest.raises(AuroraConfigError, match="HTA"):
+        portfolio.build_project_inputs(config, au_store, copex_library, default_financing_terms)
+
+
 def test_run_portfolio_connection_capex_mode_defaults_to_library(
     au_store, copex_library, default_financing_terms
 ):

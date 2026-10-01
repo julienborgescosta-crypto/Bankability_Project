@@ -824,6 +824,7 @@ def build_project_inputs(
     distance_rte_km: float = 0.0,
     land_lease_opex_keur: float = 0.0,
     capex_opex_source: str = "icp",
+    turpe_50pct_reduction: bool = False,
 ) -> ProjectInputs:
     """Construit un `ProjectInputs` pour une config Aurora - meme forme que
     `dev_case.build_project_inputs`, utilisable tel quel par
@@ -839,7 +840,19 @@ def build_project_inputs(
     `capex_and_opex_keur_aurora_only` - option "Use Aurora's own CAPEX/OPEX
     assumptions" du Configurateur, demande de l'utilisateur, 2026-10-01, pour
     voir a quoi ressemblerait le TRI avec les hypotheses Aurora plutot que
-    les notres)."""
+    les notres). `turpe_50pct_reduction` : abattement TURPE 50% pour sites de
+    stockage raccordes RTE/>=50kV (code de l'energie, annexe art. D.341-9) -
+    voir docs/specs/turpe_50pct_reduction.md. Reserve a HTB1/HTB2/HTB3 - leve
+    `AuroraConfigError` sinon. Applique au TURPE variable (`turpe_series`,
+    cote revenu) AVANT tout usage downstream (frais d'agregateur inclus),
+    jamais un scaling post-hoc de `ProjectInputs` deja construit."""
+    if turpe_50pct_reduction and config.tension not in ("HTB1", "HTB2", "HTB3"):
+        raise AuroraConfigError(
+            f"turpe_50pct_reduction requires a connection >=50kV (HTB1/HTB2/HTB3), "
+            f"not '{config.tension}' - the abatement (code de l'energie, annexe art. "
+            "D.341-9) is reserved to sites connected directly to RTE or to a >=50kV "
+            "infrastructure."
+        )
     effective_repowering_op_year = (
         repowering_op_year_override
         if repowering_op_year_override is not None
@@ -854,6 +867,8 @@ def build_project_inputs(
         with_repowering=with_repowering,
         repowering_op_year_override=repowering_op_year_override,
     )
+    if turpe_50pct_reduction:
+        turpe_series = [t * 0.5 for t in turpe_series]
     if aggregator_fee is not None:
         fees = aggregator_fee_series(revenue_series, turpe_series, power_mw, aggregator_fee)
         revenue_series = [r + f for r, f in zip(revenue_series, fees, strict=True)]

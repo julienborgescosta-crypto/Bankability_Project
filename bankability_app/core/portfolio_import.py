@@ -95,6 +95,11 @@ _COLUMN_SPECS: list[tuple[str, str, str]] = [
     ("DEVEX override (k€)", "Optional, blank = model default", "e.g. 300"),
     ("Carry months override", "Optional, blank = model default", "e.g. 18"),
     ("Carry rate override (%)", "Optional, blank = model default", "e.g. 8"),
+    (
+        "TURPE 50% reduction",
+        "Optional, default No - HTB1/HTB2/HTB3 only, see docs/specs/turpe_50pct_reduction.md",
+        "Yes or No",
+    ),
 ]
 _COLUMNS = [label for label, _, _ in _COLUMN_SPECS]
 _REQUIRED_COLUMNS = [
@@ -269,6 +274,9 @@ def parse_portfolio_excel(file_or_path) -> list[ProjectConfig]:
                     repowering_op_year_manual=_to_int(
                         _cell(row, index, "Repowering year (manual)"), default=15
                     ),
+                    turpe_50pct_reduction=_to_bool(
+                        _cell(row, index, "TURPE 50% reduction"), default=False
+                    ),
                 )
             )
         except (ValueError, KeyError) as exc:
@@ -320,6 +328,7 @@ def build_template_workbook() -> openpyxl.Workbook:
             None,
             None,
             None,
+            "No",
         ]
     )
     ws.append(
@@ -351,6 +360,7 @@ def build_template_workbook() -> openpyxl.Workbook:
             None,
             None,
             None,
+            "Yes",
         ]
     )
     for i in range(1, len(_COLUMNS) + 1):

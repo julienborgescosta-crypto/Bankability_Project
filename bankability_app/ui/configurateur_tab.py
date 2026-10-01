@@ -387,6 +387,22 @@ def _render_add_project_form(
                 "Land lease OPEX (k€/yr)", value=0.0, min_value=0.0
             )
 
+        turpe_50pct_reduction = False
+        if tension in ("HTB1", "HTB2", "HTB3"):
+            turpe_50pct_reduction = st.checkbox(
+                "TURPE 50% reduction",
+                help="Code de l'énergie, annexe art. D.341-9: storage sites connected "
+                "directly to RTE or to a ≥50kV infrastructure can get a 50% TURPE "
+                "reduction, conditional on >10 GWh/yr of withdrawal and an off-peak "
+                "withdrawal share ≥44% - a real BESS dispatch strategy, confirmed "
+                "achievable by Aurora in a 2025 internal study they shared with QEF. "
+                "This app does NOT verify eligibility (dispatch pattern, volume) - it's "
+                "a scenario toggle, applied to the variable TURPE on the revenue side "
+                "only (halves core.aur_cases' TURPE series) - the OPEX-side 'Grid "
+                "charges' fixed component is NOT reduced (see "
+                "docs/specs/turpe_50pct_reduction.md).",
+            )
+
     if st.button("Add the project", type="primary", disabled=cod_invalid):
         project = portfolio.ProjectConfig(
             name=name,
@@ -414,6 +430,7 @@ def _render_add_project_form(
             manual_connection_capex_keur=float(manual_connection_capex_keur),
             distance_rte_km=float(distance_rte_km),
             land_lease_opex_keur=float(land_lease_opex_keur),
+            turpe_50pct_reduction=bool(turpe_50pct_reduction),
             oro_requested=bool(oro_requested),
             curtailment_hours=int(curtailment_hours) if curtailment_hours is not None else None,
         )
@@ -439,6 +456,8 @@ def _render_project_list() -> None:
                 adjustments.append(f"connection {project.distance_rte_km:.0f} km")
             if project.land_lease_opex_keur != 0.0:
                 adjustments.append(f"land lease {_fmt_keur(project.land_lease_opex_keur)}")
+            if project.turpe_50pct_reduction:
+                adjustments.append("TURPE 50%")
             if not project.repowering_enabled:
                 adjustments.append("repowering disabled")
             elif project.repowering_year_mode == "manual":

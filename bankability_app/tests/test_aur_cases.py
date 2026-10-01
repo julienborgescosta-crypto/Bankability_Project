@@ -419,6 +419,42 @@ def test_build_project_inputs_rejects_unknown_capex_opex_source(au_store, copex_
         )
 
 
+def test_build_project_inputs_turpe_50pct_reduction_halves_turpe_series(au_store, copex_library):
+    """Abattement TURPE 50% (code de l'energie, annexe art. D.341-9) - demande
+    de l'utilisateur, 2026-10-01, voir docs/specs/turpe_50pct_reduction.md."""
+    config = au_store.config_by_drop_key("2h HTB2 Classique g0")
+    baseline = aur_cases.build_project_inputs(
+        au_store, config, copex_library, cod_year=2027, power_mw=10.0, operating_years=10
+    )
+    reduced = aur_cases.build_project_inputs(
+        au_store,
+        config,
+        copex_library,
+        cod_year=2027,
+        power_mw=10.0,
+        operating_years=10,
+        turpe_50pct_reduction=True,
+    )
+    assert reduced.turpe_keur == pytest.approx([t * 0.5 for t in baseline.turpe_keur])
+    assert reduced.revenues_keur == pytest.approx(baseline.revenues_keur)
+
+
+def test_build_project_inputs_turpe_50pct_reduction_rejects_tension_below_50kv(
+    au_store, copex_library
+):
+    config = au_store.config_by_drop_key("2h HTA Classique g0")
+    with pytest.raises(aur_cases.AuroraConfigError, match="HTA"):
+        aur_cases.build_project_inputs(
+            au_store,
+            config,
+            copex_library,
+            cod_year=2027,
+            power_mw=10.0,
+            operating_years=10,
+            turpe_50pct_reduction=True,
+        )
+
+
 def test_build_project_inputs_adds_repowering_capex_at_op_year_15(au_store, copex_library):
     config = au_store.config_by_drop_key("2h HTA Classique g0")
     inputs = aur_cases.build_project_inputs(
