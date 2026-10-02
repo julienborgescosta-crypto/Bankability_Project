@@ -142,6 +142,19 @@ section 4.
   ci-dessus), pas un comportement neutre à imposer par défaut. Nouveau défaut :
   `repowering_year_mode="manual"` à l'année `operating_years // 2` (mi-vie du projet, clampée dans
   la plage valide) — "auto" reste disponible en option explicite via le radio bouton.
+- **3ᵉ mode `repowering_year_mode="soh"` — méthode Aurora (2026-10-02, décision de l'utilisateur)** :
+  repowering (nouvelle batterie) l'année qui suit le dernier op-year où le SoH reste au-dessus du
+  seuil Aurora (`soh_repowering_op_year(operating_years, duree_h)` =
+  `max_op_year_without_forced_repowering(duree_h) + 1`, soit l'op-year 18 en 2h et 23 en 4h), et
+  aucun repowering si le projet s'arrête avant (`None`). Aurora ne repowere que sur déclenchement
+  SoH, jamais sur un critère économique. C'est le défaut de l'analyse globale
+  (`docs/specs/global_sensitivity.md`) et une 3ᵉ option du radio bouton du Configurateur (et de
+  l'import Excel, valeur `soh`). Le défaut du formulaire reste "manual" à mi-vie.
+- **Sortie CAPEX de repowering payée l'année d'avant (2026-10-02)** : voir
+  `docs/specs/aur_cases.md` — un repowering en op-year `R` sort à l'index `R - 1` de
+  `capex_keur`, quel que soit le mode (ICP ou coûts Aurora). `repowering_op_year_used` désigne
+  toujours l'année de mise en service de la nouvelle batterie (reset de dégradation), pas l'année
+  de paiement.
 
 ## Questions ouvertes
 

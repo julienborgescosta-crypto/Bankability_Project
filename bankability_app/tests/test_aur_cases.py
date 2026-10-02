@@ -409,15 +409,19 @@ def test_end_of_life_value_keur_manual_connection_uses_actual_value(au_store, co
 def test_build_project_inputs_credits_end_of_life_value_at_final_year_only(au_store, copex_library):
     """Retour utilisateur, 2026-10-01 : la valeur de fin de vie (non modelisee
     jusqu'ici, `end_of_life_keur` toujours a 0 - voir README "Limites
-    connues") doit creditee au DERNIER op-year seulement, jamais ailleurs."""
+    connues") doit creditee au DERNIER op-year seulement, jamais ailleurs.
+    Valorisee aux prix de cette derniere annee (2027 + 15 - 1 = 2041), pas de la
+    COD - definition Aurora, "% of the CAPEX value in the last year of operation"
+    (corrige le 2026-10-02)."""
     config = au_store.config_by_drop_key("2h HTA Classique g0")
     inputs = aur_cases.build_project_inputs(
         au_store, config, copex_library, cod_year=2027, power_mw=10.0, operating_years=15
     )
+    assert inputs.years[-1] == 2041
     assert inputs.end_of_life_keur[-1] > 0
     assert all(v == 0.0 for v in inputs.end_of_life_keur[:-1])
     expected = aur_cases.end_of_life_value_keur(
-        tension="HTA", duree_h=2, cod_year=2027, power_mw=10.0, copex_library=copex_library
+        tension="HTA", duree_h=2, cod_year=2041, power_mw=10.0, copex_library=copex_library
     )
     assert inputs.end_of_life_keur[-1] == pytest.approx(expected)
 
@@ -486,20 +490,75 @@ def test_capex_and_opex_keur_aurora_only_differs_from_icp(au_store, copex_librar
     assert opex_aurora != pytest.approx(opex_icp)
 
 
-def test_repowering_capex_keur_aurora_only_uses_battery_and_inverter_line_items(copex_library):
-    expected = sum(
-        aur_cases.escalated_unit_cost(
-            copex_library.capex_unit_costs["4h - HTA"][label],
-            copex_library.capex_escalation.get(label, {}),
-            2041,
-        )
-        * 1.0
-        for label in aur_cases.REPOWERING_CAPEX_LINE_ITEMS
+def test_repowering_capex_keur_aurora_only_uses_battery_system_only(copex_library):
+    """Definition Aurora (databook Q2 2026, onglet Inputs) : "Repowering cost =
+    battery system cost" - l'onduleur n'est PAS remplace, a la difference de
+    notre mode ICP (Battery + Inverter, confirme par l'utilisateur 2026-09-18)."""
+    assert aur_cases.AURORA_REPOWERING_CAPEX_LINE_ITEMS == ["Battery system"]
+    expected = aur_cases.escalated_unit_cost(
+        copex_library.capex_unit_costs["4h - HTA"]["Battery system"],
+        copex_library.capex_escalation.get("Battery system", {}),
+        2041,
     )
     result = aur_cases.repowering_capex_keur_aurora_only(
         tension="HTA", duree_h=4, repowering_year=2041, power_mw=1.0, copex_library=copex_library
     )
     assert result == pytest.approx(expected)
+
+
+def test_build_project_inputs_aurora_source_uses_pure_q2_2026_capex_priced_at_cod_minus_1(
+    au_store, copex_library
+):
+    """Mode "couts Aurora" : databook Q2 2026 pur (jamais fusionne avec le
+    fixture), CAPEX valorise l'annee avant la COD et OPEX a l'annee d'entree -
+    convention Aurora, "for a battery entering the market in 2027, the 2026 CAPEX
+    value is used" (decision de l'utilisateur, 2026-10-02)."""
+    from core.dev_case import load_copex_library_q2_2026_cached
+
+    q2_library = load_copex_library_q2_2026_cached()
+    config = au_store.config_by_drop_key("2h HTA Classique g0")
+    inputs = aur_cases.build_project_inputs(
+        au_store,
+        config,
+        copex_library,
+        cod_year=2030,
+        power_mw=10.0,
+        operating_years=20,
+        capex_opex_source="aurora",
+    )
+    expected_capex, _ = aur_cases.capex_and_opex_keur_aurora_only(
+        tension="HTA", duree_h=2, cod_year=2029, power_mw=10.0, copex_library=q2_library
+    )
+    _, expected_opex = aur_cases.capex_and_opex_keur_aurora_only(
+        tension="HTA", duree_h=2, cod_year=2030, power_mw=10.0, copex_library=q2_library
+    )
+    assert inputs.capex_initial_keur == pytest.approx(expected_capex)
+    assert inputs.opex_year1_keur == pytest.approx(expected_opex)
+    expected_repowering = aur_cases.repowering_capex_keur_aurora_only(
+        tension="HTA", duree_h=2, repowering_year=2044, power_mw=10.0, copex_library=q2_library
+    )
+    assert inputs.capex_repowering_keur == pytest.approx(expected_repowering)
+
+
+def test_q2_2026_copex_library_escalation_extends_past_2035():
+    """Le databook Aurora Q2 2026 couvre l'escalade jusqu'en 2060 : la plafonner
+    a 2035 (ancienne extraction) surestimait le cout d'un repowering ~2045-2050
+    et la valeur de fin de vie (retour utilisateur, 2026-10-02)."""
+    from core.dev_case import load_copex_library_q2_2026_cached
+
+    q2_library = load_copex_library_q2_2026_cached()
+    battery_2035 = aur_cases.escalated_unit_cost(
+        q2_library.capex_unit_costs["2h - HTA"]["Battery system"],
+        q2_library.capex_escalation["Battery system"],
+        2035,
+    )
+    battery_2050 = aur_cases.escalated_unit_cost(
+        q2_library.capex_unit_costs["2h - HTA"]["Battery system"],
+        q2_library.capex_escalation["Battery system"],
+        2050,
+    )
+    assert battery_2050 < battery_2035
+    assert max(int(y) for y in q2_library.capex_escalation["Battery system"]) >= 2050
 
 
 def test_build_project_inputs_capex_opex_source_aurora_differs_from_icp(au_store, copex_library):
@@ -636,14 +695,79 @@ def test_build_project_inputs_turpe_50pct_reduction_rejects_tension_below_50kv(
         )
 
 
-def test_build_project_inputs_adds_repowering_capex_at_op_year_15(au_store, copex_library):
+def test_build_project_inputs_pays_repowering_capex_the_year_before_op_year_15(
+    au_store, copex_library
+):
+    """Repowering (reset de degradation) a l'op-year 15 -> CAPEX paye l'op-year
+    14 (index 14), comme le CAPEX initial est paye l'annee avant la COD -
+    convention Aurora, appliquee aussi au mode ICP (retour utilisateur,
+    2026-10-02). Value aux prix de l'annee de mise en service (2027 + 15 - 1)."""
     config = au_store.config_by_drop_key("2h HTA Classique g0")
     inputs = aur_cases.build_project_inputs(
         au_store, config, copex_library, cod_year=2027, power_mw=10.0, operating_years=20
     )
-    assert inputs.capex_keur[15] < 0
-    assert inputs.capex_repowering_keur == pytest.approx(-inputs.capex_keur[15])
+    assert inputs.capex_keur[14] < 0
+    assert inputs.capex_keur[15] == 0.0
+    assert inputs.capex_repowering_keur == pytest.approx(-inputs.capex_keur[14])
     assert inputs.repowering_op_year == 15
+    expected = aur_cases.repowering_capex_keur(
+        tension="HTA", duree_h=2, repowering_year=2041, power_mw=10.0, copex_library=copex_library
+    )
+    assert inputs.capex_repowering_keur == pytest.approx(expected)
+
+
+def test_build_project_inputs_degrades_turpe_with_mean_year_soh(au_store, copex_library):
+    """Le TURPE variable (proportionnel aux volumes soutires/injectes) decroit
+    avec la retention d'energie, comme le revenu - Aurora applique le SoH moyen
+    de l'annee ((SoH debut + SoH fin) / 2) a ses "network charges" (databook Q2
+    2026, Case 40 : ratio 0.98 a l'op1, 0.87 a l'op6). Il restait fige a la
+    courbe brute jusqu'au 2026-10-02 (~1.5 pt de TRI sur un 4h HTA 30 ans)."""
+    from core import soh_degradation
+
+    config = au_store.config_by_drop_key("2h HTA Classique g0")
+    inputs = aur_cases.build_project_inputs(
+        au_store,
+        config,
+        copex_library,
+        cod_year=2027,
+        power_mw=10.0,
+        operating_years=20,
+        with_repowering=False,
+    )
+    soh_curve = soh_degradation.load_soh_curves_cached()[2]
+    turpe_curve = au_store.turpe_by_key[config.austore_key]
+    for op_year in (1, 6, 12):
+        mean_soh = (
+            soh_degradation.soh_at_op_year(soh_curve, op_year - 1)
+            + soh_degradation.soh_at_op_year(soh_curve, op_year)
+        ) / 2
+        assert inputs.turpe_keur[op_year] == pytest.approx(
+            turpe_curve[2027 + op_year - 1] * mean_soh * 10.0
+        )
+    assert abs(inputs.turpe_keur[12]) < abs(inputs.turpe_keur[1])
+
+
+def test_build_project_inputs_resets_turpe_degradation_at_repowering(au_store, copex_library):
+    from core import soh_degradation
+
+    config = au_store.config_by_drop_key("2h HTA Classique g0")
+    inputs = aur_cases.build_project_inputs(
+        au_store,
+        config,
+        copex_library,
+        cod_year=2027,
+        power_mw=10.0,
+        operating_years=20,
+        repowering_op_year_override=12,
+    )
+    soh_curve = soh_degradation.load_soh_curves_cached()[2]
+    mean_soh_new_battery = (
+        soh_degradation.soh_at_op_year(soh_curve, 0) + soh_degradation.soh_at_op_year(soh_curve, 1)
+    ) / 2
+    turpe_curve = au_store.turpe_by_key[config.austore_key]
+    assert inputs.turpe_keur[12] == pytest.approx(
+        turpe_curve[2027 + 12 - 1] * mean_soh_new_battery * 10.0
+    )
 
 
 def test_build_project_inputs_repowering_op_year_override_moves_capex_and_reset(
@@ -663,8 +787,8 @@ def test_build_project_inputs_repowering_op_year_override_moves_capex_and_reset(
         repowering_op_year_override=10,
     )
     assert inputs.repowering_op_year == 10
-    assert inputs.capex_keur[10] < 0
-    assert inputs.capex_keur[15] == 0.0  # plus de sortie a l'ancien op-year par defaut
+    assert inputs.capex_keur[9] < 0  # paye l'annee avant la mise en service
+    assert inputs.capex_keur[14] == 0.0  # plus de sortie a l'ancien op-year par defaut
     # Le revenu de l'op-year 10 (annee du repowering) doit refleter un reset
     # (deg factor = op1) plutot que la poursuite de la decroissance brute.
     raw_curve = au_store.raw_by_key[config.austore_key]
@@ -752,11 +876,11 @@ def test_build_project_inputs_produces_valid_engine_input(au_store, copex_librar
     assert inputs.years[0] == 2026  # annee de construction = COD - 1
     assert len(inputs.years) == 21
     assert inputs.capex_keur[0] < 0
-    # op-year 15 (index 15) porte la sortie de repowering (with_repowering=True
-    # par defaut, operating_years=20 >= repowering_op_year=15) - toutes les
+    # Repowering a l'op-year 15 (with_repowering=True par defaut, operating_years=20
+    # >= repowering_op_year=15), paye l'annee d'avant (index 14) - toutes les
     # autres annees restent a 0.
-    assert inputs.capex_keur[15] < 0
-    assert all(c == 0.0 for i, c in enumerate(inputs.capex_keur[1:], start=1) if i != 15)
+    assert inputs.capex_keur[14] < 0
+    assert all(c == 0.0 for i, c in enumerate(inputs.capex_keur[1:], start=1) if i != 14)
     assert inputs.capex_repowering_keur > 0.0
 
     result = financial_engine.compute_results(inputs, gearing_pct=0.0)
@@ -811,6 +935,54 @@ def test_load_aurora_curves_has_22_configs_and_degradation_table():
     assert library.eol_per_kw == pytest.approx(118.44)
     assert library.degradation[1] == pytest.approx(0.9942)
     assert library.degradation[15] == pytest.approx(library.degradation[1])  # reset repowering
+
+
+def test_load_aurora_curves_uses_a_2h_specific_revenue_degradation():
+    """Backtest du 2026-10-02 contre la Summary table Aurora : la table
+    `DegFactor_noRepo` est celle des 4h ; l'appliquer aux 2h (qui cyclent 1,5 fois
+    par jour) surestimait leur revenu d'environ +0,5 pt de TRI. Les 2h ont leur
+    propre table (config/aurora_degradation_and_cm.json), les 4h gardent l'ancienne."""
+    library = aur_cases.load_aurora_curves()
+    table_2h = library.degradation_no_repo_for(2)
+    assert library.degradation_no_repo_for(4) is library.degradation_no_repo
+    assert set(table_2h) == set(library.degradation_no_repo)
+    assert table_2h[1] == pytest.approx(0.9932, abs=1e-4)
+    assert table_2h[10] < library.degradation_no_repo[10] - 0.015
+    assert all(table_2h[op] > table_2h[op + 1] for op in range(1, 30))
+
+
+def test_revenue_series_applies_the_duration_specific_degradation(copex_library):
+    library = aur_cases.load_aurora_curves()
+    config = library.config_by_drop_key("2h HTB2 Classique g0")
+    _, revenue, _ = aur_cases.revenue_and_turpe_series(
+        library, config, cod_year=2027, operating_years=12, power_mw=1.0, with_repowering=False
+    )
+    raw = library.raw_by_key[config.austore_key]
+    assert revenue[9] == pytest.approx(raw[2036] * library.degradation_no_repo_for(2)[10])
+
+
+def test_capacity_mechanism_is_excluded_from_the_trading_fee_base():
+    """Aurora : frais de trading = 7,5 % x (energie + services systeme + network
+    charges), hors mecanisme de capacite (decision de l'utilisateur, 2026-10-02)."""
+    terms = aur_cases.AggregatorFeeTerms(
+        rate_before_threshold=0.0, rate_after_threshold=-0.075, yearly_threshold_keur_per_mw=0.0
+    )
+    with_cm = aur_cases.aggregator_fee_series([100.0], [-10.0], power_mw=1.0, terms=terms)
+    without_cm = aur_cases.aggregator_fee_series(
+        [100.0], [-10.0], power_mw=1.0, terms=terms, excluded_keur=[6.0]
+    )
+    assert with_cm[0] == pytest.approx(-0.075 * 90.0)
+    assert without_cm[0] == pytest.approx(-0.075 * 84.0)
+
+
+def test_capacity_mechanism_series_depends_only_on_duration_and_year():
+    library = aur_cases.load_aurora_curves()
+    cm_2h = aur_cases.capacity_mechanism_series(library, 2, [2027, 2038, 2040], power_mw=10.0)
+    cm_4h = aur_cases.capacity_mechanism_series(library, 4, [2027, 2038, 2040], power_mw=10.0)
+    assert cm_2h[0] == pytest.approx(69.79715)
+    assert cm_4h[0] > cm_2h[0]
+    assert cm_2h[1] < cm_2h[0]  # creux du mecanisme de capacite 2038-2041 chez Aurora
+    assert aur_cases.capacity_mechanism_series(library, 6, [2027], power_mw=10.0) == [0.0]
 
 
 def test_load_aurora_curves_raises_on_unmodelled_combo():

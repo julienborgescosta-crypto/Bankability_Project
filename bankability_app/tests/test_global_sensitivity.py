@@ -155,16 +155,20 @@ def test_enumerate_configs_defaults_to_default_power_mw_by_tension(au_store, cop
         )
 
 
-def test_enumerate_configs_defaults_repowering_to_manual_year_15(au_store, copex_library):
-    """Retour utilisateur, 2026-10-01 : sans optimize_repowering, le balayage
-    global doit rester sur le defaut ProjectConfig (manual/15) - comportement
-    inchange par defaut, pour ne pas ralentir silencieusement le balayage
-    complet (voir core/portfolio.py, commentaire sur ProjectConfig.repowering_year_mode)."""
+def test_enumerate_configs_defaults_to_30_years_and_soh_triggered_repowering(
+    au_store, copex_library
+):
+    """Decision de l'utilisateur, 2026-10-02 : par defaut, le balayage global
+    suit la methode Aurora - 30 ans d'exploitation, repowering l'annee ou le SoH
+    passe sous le seuil (66% 2h / 68.67% 4h), sans balayage Equity IRR (qui
+    reste en option, `optimize_repowering=True`)."""
+    assert global_sensitivity.DEFAULT_OPERATING_YEARS == 30
     entries = global_sensitivity.enumerate_configs(
         au_store, copex_library, contract_kinds=[contract_overlay.FULL_MERCHANT]
     )
-    assert all(pc.repowering_year_mode == "manual" for _, _, pc in entries)
-    assert all(pc.repowering_op_year_manual == 15 for _, _, pc in entries)
+    assert entries
+    assert all(pc.repowering_year_mode == "soh" for _, _, pc in entries)
+    assert all(pc.operating_years == 30 for _, _, pc in entries)
 
 
 def test_enumerate_configs_optimize_repowering_sets_auto_mode(au_store, copex_library):

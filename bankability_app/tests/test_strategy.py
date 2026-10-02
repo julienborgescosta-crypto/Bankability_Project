@@ -131,6 +131,51 @@ def test_cod_resale_value_matches_present_value_of_post_cod_cfads(simple_inputs)
     assert value == pytest.approx(expected)
 
 
+def test_dev_and_sell_dsa_replaces_development_already_in_capex(simple_inputs):
+    """Le developpement deja compte dans le CAPEX initial est remplace par le
+    DSA, jamais additionne (corrige le 2026-10-02)."""
+    from dataclasses import replace
+
+    with_development = replace(simple_inputs, development_capex_keur=100.0)
+    result = strategy.compute_dev_and_sell(
+        with_development,
+        dsa_keur=150.0,
+        buyer_target_equity_irr=0.12,
+        financing_kwargs={"gearing_pct": 0.5, "interest_rate": 0.05, "debt_tenor_years": 2},
+    )
+    # CAPEX 1000 (dont 100 de developpement) -> 900 de construction + 150 de DSA.
+    assert result.result_at_dsa_only.capex_total_initial_keur == pytest.approx(1050.0)
+
+
+def test_build_and_flip_construction_capex_excludes_development(simple_inputs):
+    from dataclasses import replace
+
+    with_development = replace(simple_inputs, development_capex_keur=100.0)
+    result = strategy.compute_build_and_flip(
+        with_development,
+        dsa_keur=150.0,
+        buyer_target_equity_irr_at_rtb=0.12,
+        resale_target_irr=0.10,
+        carry_months=18,
+        carry_rate=0.08,
+        financing_kwargs={"gearing_pct": 0.5, "interest_rate": 0.05, "debt_tenor_years": 2},
+    )
+    assert result.construction_capex_keur == pytest.approx(900.0)
+
+
+def test_cod_resale_value_keeps_the_repowering_payment_year(simple_inputs):
+    """Bug corrige le 2026-10-02 : les annees d'exploitation etaient reperees par
+    "CAPEX nul", ce qui faisait disparaitre l'annee ou le repowering est paye -
+    ni son CFADS ni sa sortie CAPEX n'entraient dans la valeur de revente.
+    L'acheteur au COD paiera ce repowering : il doit reduire la valeur."""
+    from dataclasses import replace
+
+    with_repowering = replace(simple_inputs, capex_keur=[-1000.0, -200.0, 0.0])
+    value = strategy.compute_cod_resale_value_keur(with_repowering, resale_target_irr=0.10)
+    expected = financial_engine.present_value([380.0 - 200.0, 380.0], 0.10)
+    assert value == pytest.approx(expected)
+
+
 def test_build_and_flip_net_return_is_internally_consistent(simple_inputs):
     result = strategy.compute_build_and_flip(
         simple_inputs,

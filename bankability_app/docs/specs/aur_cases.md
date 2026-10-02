@@ -20,10 +20,16 @@ méthodologie complète et `CONTEXT.md` pour le vocabulaire (AU_Store, AUStoreKe
   `capex_total_keur`/`opex_year1_keur` de `dev_case.py` sont réutilisées pour `COPEX_library`
   (même table pour les deux chemins de donnée), via un `DevCaseParams` construit comme simple
   vecteur de calcul (`voltage_class_override` court-circuite le besoin de `connection_type`).
-- **TURPE non dégradé** : seule la courbe RAW est multipliée par le facteur de dégradation par
-  op-year — hypothèse non extraite du fichier (AU_Store ne précise pas si TURPE doit l'être),
-  raisonnée par analogie avec le reste de l'app (TURPE = charge réseau, pas liée à la dégradation
-  de la batterie). Voir "Questions ouvertes" ci-dessous.
+- **TURPE variable dégradé au SoH moyen de l'année** (corrigé le 2026-10-02, il ne l'était pas) :
+  le TURPE d'`AU_Store` ("Storage volume-related network charges") est facturé sur les volumes
+  échangés, qui baissent avec la capacité restante. `revenue_and_turpe_series` le multiplie par
+  `(SoH(âge-1) + SoH(âge)) / 2` (courbe `core/soh_degradation.py`, âge remis à 1 l'année du
+  repowering) — pas par le `DegFactor` de revenu, qui est une autre grandeur. Validé contre le
+  databook Aurora Q2 2026 (Case 40, 4h HTA 2030) : ratio TURPE dégradé/non dégradé de 0,98 en
+  op-year 1, 0,87 en op-year 6, 0,70 en op-year 21, identique au SoH moyen. L'ancienne hypothèse
+  "TURPE non dégradé" surfacturait jusqu'à ~9 €/kW/an en fin de vie et coûtait ~1,5 pt de TRI
+  sur un 4h HTA 30 ans (TURPE HTA ~3x celui de HTB2). La part fixe (poste OPEX "Grid charges")
+  reste, elle, non dégradée (abonnement, pas volume).
 - **Frais d'agrégateur en mécanisme complet** (paliers avant/après seuil + bascule net-du-TURPE),
   pas un taux plat — voir `docs/adr/0001`. Le toggle `net_of_energy_costs` est extrait mais n'a
   pas d'effet distinct implémenté : la courbe RAW est déjà nette des coûts d'énergie par
@@ -67,6 +73,32 @@ méthodologie complète et `CONTEXT.md` pour le vocabulaire (AU_Store, AUStoreKe
   Piste écartée : le coût réel observé dans `I-Project!183` (-5 723 k€ pour un projet à 16 626 k€
   de CAPEX initial, ≈34 %) — un seul point de données projet-spécifique, moins fiable que
   recomposer depuis `COPEX_library` (déjà validée, réutilisable par n'importe quelle config).
+  **Mises à jour depuis** : en mode ICP, le coût suit `copex_icp.xlsx` (Batteries and PCS, depuis
+  le 2026-09-24) ; en mode "coûts Aurora", il suit la définition Aurora, **Battery system seul**
+  (`AURORA_REPOWERING_CAPEX_LINE_ITEMS`, l'onduleur n'est pas remplacé — databook Q2 2026, onglet
+  Inputs). **Depuis le 2026-10-02, dans les 2 modes, la sortie CAPEX tombe l'année d'AVANT le
+  reset** (index `R - 1` pour un repowering — nouvelle batterie — en op-year `R`), comme le CAPEX
+  initial est payé l'année avant la COD ; elle est valorisée aux prix de l'année de mise en service
+  (op-year `R`). Elle tombait jusqu'ici la même année que le reset, ce qui affichait un cashflow
+  très négatif l'année où la nouvelle batterie produit déjà. `build_project_inputs` refuse un
+  repowering en op-year 1 (il serait payé pendant la construction).
+
+- **Mode "coûts Aurora" = databook Aurora Q2 2026 pur** (décision de l'utilisateur, 2026-10-02,
+  pour retrouver les TRI publiés par Aurora à hypothèses identiques) : `capex_opex_source="aurora"`
+  utilise `dev_case.load_copex_library_q2_2026_cached()` (`config/copex_library_q2_2026.json`,
+  régénéré par `sample_data/build_copex_library_q2_2026.py <databook.xlsm>`), jamais la fusion
+  fixture `COPEX_library` + Q2 utilisée par le mode ICP pour ses postes de repli. Conventions
+  Aurora reproduites : CAPEX valorisé et payé l'année avant la COD ("for a battery entering the
+  market in 2027, the 2026 CAPEX value is used"), OPEX figé à la valeur de l'année d'entrée,
+  repowering = Battery system de l'année de mise en service payé l'année d'avant, valeur de fin de
+  vie au prix de la dernière année. L'escalade du JSON couvre désormais 2026-2060 (elle s'arrêtait
+  à 2035, ce qui surestimait le coût d'un repowering vers 2045-2050 et la valeur de fin de vie).
+
+- **Valeur de fin de vie aux prix de la dernière année d'exploitation** (corrigé le 2026-10-02,
+  elle était valorisée aux prix de la COD) — définition Aurora : "The end of life value is
+  calculated as a percentage of the CAPEX value in the last year of operation" (5 % de Battery
+  system + Inverter + Balance of system, 100 % du raccordement). Créditée au dernier op-year
+  uniquement, jamais recalculée sur le coût de repowering.
 
 - **CAPEX de raccordement et OPEX loyer foncier challengeables individuellement** (remplace
   l'ajustement global CAPEX/OPEX en %, retiré le 2026-09-23 suite à un retour négatif — voir
@@ -151,12 +183,30 @@ méthodologie complète et `CONTEXT.md` pour le vocabulaire (AU_Store, AUStoreKe
 
 ## Questions ouvertes
 
-- **Valeur résiduelle de fin de vie non modélisée** (signalé par l'utilisateur, 2026-09-18) :
-  `AU_Store!EoL_perkW` (118,44 €/kW) est chargé dans `AuStoreLibrary.eol_per_kw` mais **jamais
-  utilisé** dans `build_project_inputs` — `end_of_life_keur` reste une série de zéros. Sous-estime
-  légèrement le rendement des projets longs (l'effet inverse du gap repowering ci-dessus, de
-  moindre ampleur). Donnée directement disponible et simple à câbler (contrairement au coût de
-  repowering) si une future session veut fermer ce point.
+- **Backtest contre la Summary table Aurora (2026-10-02)** : Aurora Global Analysis en mode
+  "coûts Aurora", 30 ans, repowering SoH, full merchant, comparé aux TRI publiés des 34 cas
+  standalone Central qu'on modélise (HTA/HTB1/HTB2, 2h/4h, COD 2027/2030, standard/injection/
+  soutirage/gabarit/ORO — HTB3 est exclu de Global Analysis). Résultat : **écart moyen +0,08 pt,
+  de -0,29 à +0,33 pt, les 34 cas à ±0,5 pt** (les TRI Aurora sont publiés arrondis à 0,1 pt).
+  Avant les corrections du jour : +0,24 pt en moyenne, jusqu'à +0,72 pt, et Case 40 à 2,87 % au
+  lieu de 5,3 %. Deux corrections trouvées par ce backtest, en plus de celles listées dans
+  "Décisions" :
+  - **Dégradation du revenu propre aux 2h** : la table `DegFactor_noRepo` d'`AU_Store` est celle
+    des 4h (elle colle aux Cases 17/36) ; appliquée aux 2h, qui cyclent 1,5 fois par jour, elle
+    surestimait leur revenu (+2 à +5 €/kW/an en fin de vie, ~+0,5 pt de TRI sur tous les cas 2h).
+    `config/aurora_degradation_and_cm.json` (`sample_data/build_aurora_degradation_and_cm.py`)
+    porte une table 2h : ratio revenu dégradé/non dégradé moyen des 12 cas 2h COD 2027 du databook,
+    op-years 1-16 (écart entre cas ≤ 2 %), extrapolée linéairement au-delà.
+    `AuStoreLibrary.degradation_no_repo_for(duree_h)` la sert aux 2h, les 4h gardent l'ancienne.
+  - **Mécanisme de capacité hors assiette des frais de trading**, comme Aurora (7,5 % x énergie
+    + services système + network charges). Il ne dépend que de l'année et de la durée (identique
+    quelle que soit la tension/TURPE/gabarit/ORO, jamais dégradé) : une courbe par durée dans le
+    même fichier, `capacity_mechanism_series`. Exclu seulement les années 100 % merchant (sous
+    contrat, le revenu merchant n'est plus le revenu Aurora brut).
+  Résidu connu : les courbes de dégradation (revenu et SoH) restent génériques par durée, alors
+  qu'Aurora dégrade chaque cas selon ses cycles réels — d'où aussi un repowering Aurora un an plus
+  tôt (op-year 17/22 contre 18/23), sans effet mesurable sur le TRI. Les 4 cas 4h verrouillés COD
+  2030 (gabarit, ORO) sortent à -0,2/-0,3 pt.
 - **Validation contre la Aurora Summary Table non reproduite exactement — écart attendu,
   confirmé par l'utilisateur.** Le brief cite "2h HTA COD 2027 = TRI 9,9 %" comme cible de
   non-régression. `COPEX_library` (466,76/35,06 €/kW, base 2028) n'est **pas** la même hypothèse
@@ -174,7 +224,5 @@ méthodologie complète et `CONTEXT.md` pour le vocabulaire (AU_Store, AUStoreKe
   utilise `COPEX_library` par design (Round 1 Q5 de la session de cadrage : reutiliser
   l'escalade deja validee plutot que de chasser un chiffre approximatif), donc ce residu est
   **accepte comme limite connue**, pas a corriger avant la Phase 3.
-- **TURPE dégradé ou non** : non tranché faute de point de validation exact (voir ci-dessus) —
-  actuellement non dégradé.
 - **Toggle `net_of_energy_costs`** : extrait du fichier mais sans effet distinct implémenté (voir
   Décisions) — à revisiter si un projet réel l'active en désaccord avec la définition de RAW.

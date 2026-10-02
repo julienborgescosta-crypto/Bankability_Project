@@ -101,7 +101,9 @@ overridable par projet), pas une sortie de calcul. Construit ainsi, `DSA - DEVEX
 exactement quand SPA = 0 (le projet atteint pile le TRI cible de l'acheteur, ni plus ni moins —
 voir SPA ci-dessous). Reconnu par les banques
 comme financable par dette : rejoint l'assiette « Total Uses » gearée, au même titre que les
-ajouts DSRA/frais de financement déjà gérés pour le CAPEX.
+ajouts DSRA/frais de financement déjà gérés pour le CAPEX. C'est aussi le poste **Development** du
+CAPEX du moteur Aurora v2 en mode "nos coûts" (depuis le 2026-10-02, à la place de la ligne
+Development d'Aurora) — compté une seule fois, jamais en plus d'un autre coût de développement.
 _Avoid_: "coût de dev" seul (ambigu avec le coût de dev réel de QEF, différent) — DSA est ce que
 l'**acheteur** paie, pas ce que QEF a dépensé pour développer.
 

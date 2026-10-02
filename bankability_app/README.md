@@ -303,9 +303,9 @@ Modules (`core/`) :
 | `risk_rules.py` | Regles de seuils -> flags rouge/orange/vert | 5 |
 | `acquisition.py` | Prime d'acquisition maximale (M&A) + sensibilite | extension hors 6 couches |
 | `dev_case.py` / `dev_case_parser.py` | Construit un `ProjectInputs` depuis des hypotheses de developpement (COD, puissance, duree, segment, TURPE) + bibliotheques CAPEX/revenu (`COPEX_library`/`CF Aurora`) | extension hors 6 couches, en amont |
-| `copex_icp.py` | CAPEX/OPEX BESS depuis `config/copex_icp.xlsx` (couts unitaires QEF reels, "ICP", mis a jour mensuellement) - source primaire pour le moteur Aurora v2, Aurora `COPEX_library` en repli pour les postes non couverts (Development, Insurance/Grid charges/Land lease/Accise/Other, HTB3) | 5bis (CAPEX/OPEX du moteur Aurora v2) |
+| `copex_icp.py` | CAPEX/OPEX BESS depuis `config/copex_icp.xlsx` (couts unitaires QEF reels, "ICP", mis a jour mensuellement) - source primaire pour le moteur Aurora v2, Aurora `COPEX_library` en repli pour les postes non couverts (Insurance/Grid charges/Land lease/Accise/Other, HTB3). Le poste Development est le DSA du projet (marge de dev cible + DEVEX, voir `docs/specs/strategy.md`) | 5bis (CAPEX/OPEX du moteur Aurora v2) |
 | `portfolio_import.py` | Import/export en masse du portefeuille Configurateur via Excel (`ProjectConfig` par ligne, template telechargeable) - l'app n'ayant pas de memoire entre sessions, voir `docs/specs/portfolio_import.md` | extension hors 6 couches (Configurateur Aurora v2) |
-| `copex_comparison.py` | Compare notre CAPEX/OPEX (ICP + repli Aurora, applique par le moteur) a la bibliotheque Aurora `COPEX_library` seule, poste par poste et au total (option "Aurora COPEX Comparison" du Configurateur) - voir `docs/specs/copex_comparison.md` | extension hors 6 couches (Configurateur Aurora v2) |
+| `copex_comparison.py` | Compare notre CAPEX/OPEX (ICP + repli Aurora + DSA en Development, applique par le moteur) aux hypotheses Aurora seules (databook Q2 2026), poste par poste et au total (option "Aurora COPEX Comparison" du Configurateur) - voir `docs/specs/copex_comparison.md` | extension hors 6 couches (Configurateur Aurora v2) |
 | `soh_degradation.py` | Vraie courbe SoH (State of Health) depuis `config/soh_degradation.xlsx`, par duree (2h/4h), extrapolee lineairement au-dela de l'annee 15 - force un repowering quand le SoH passerait sous le seuil Aurora (66%/68.67%), independamment de ce que l'optimisation Equity IRR seule choisirait (voir `docs/specs/soh_degradation.md`) | extension hors 6 couches (Configurateur Aurora v2) |
 
 Configuration (`config/`) :
@@ -318,6 +318,9 @@ Configuration (`config/`) :
 - `copex_icp.xlsx` — couts unitaires CAPEX/OPEX BESS reels ("ICP"), source primaire du moteur
   Aurora v2 depuis le 2026-09-24 — a remplacer (meme nom de fichier) a chaque mise a jour mensuelle,
   voir `docs/specs/copex_icp.md`
+- `aurora_degradation_and_cm.json` — degradation du revenu des 2h et mecanisme de capacite par
+  duree, extraits du databook Aurora Q2 2026 par `sample_data/build_aurora_degradation_and_cm.py`
+  (voir `docs/specs/aur_cases.md`)
 - `soh_degradation.xlsx` — courbe SoH (State of Health) reelle par duree BESS (2h/4h), annee 0 a 15,
   fournie par l'utilisateur le 2026-10-01 — voir `docs/specs/soh_degradation.md`
 
@@ -360,12 +363,12 @@ positives** (valeurs d'info, pas des flux de cashflow) — ne pas les confondre 
   taux (reel vs nominal) differente.
 - **Ecart CAPEX entre `O-Control` et `I-Project`** (~1000 k€ sur un projet reel observe) — voir
   couche 4 ci-dessus et `docs/specs/bp_parsing.md`, section "Questions ouvertes".
-- **Moteur Aurora v2 (`core/aur_cases.py`, Configurateur/Analyse globale) : valeur residuelle de
-  fin de vie non modelisee.** `AU_Store!EoL_perkW` (118,44 EUR/kW) est charge mais jamais applique
-  dans `build_project_inputs` — `end_of_life_keur` reste une serie de zeros, ce qui sous-estime
-  legerement le rendement des projets longs. Le cout de repowering (2e sortie CAPEX a l'op-year
-  15), lui, est modelise depuis le 2026-09-18 (Battery system + Inverter, source `copex_icp.xlsx`
-  depuis le 2026-09-24 — voir `docs/specs/copex_icp.md`).
+- **Moteur Aurora v2 (`core/aur_cases.py`, Configurateur/Analyse globale) : TRI Aurora reproduits
+  a ±0,3 pt pres, pas exactement.** Backtest du 2026-10-02 (Global Analysis en mode "couts
+  Aurora", 30 ans, repowering SoH) contre les 34 cas standalone Central publies par Aurora : ecart
+  moyen +0,08 pt, de -0,29 a +0,33 pt. Le residu vient des courbes de degradation generiques par
+  duree (Aurora degrade chaque cas selon ses cycles reels) — voir `docs/specs/aur_cases.md`,
+  "Questions ouvertes".
 - **CAPEX/OPEX du moteur Aurora v2 : poste "OPEX Guarantees & preventive maint" (ICP, cout total
   15 ans) etale comme addition constante a l'OPEX annuel**, pas limite aux 15 premieres annees
   (le moteur financier n'a pas de notion d'OPEX variable dans le temps) — voir

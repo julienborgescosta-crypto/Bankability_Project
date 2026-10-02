@@ -34,6 +34,7 @@ from core import (
     contract_overlay,
     copex_comparison,
     copex_icp,
+    dev_case,
     portfolio,
     portfolio_import,
 )
@@ -397,7 +398,7 @@ def _render_add_project_form(
         )
         repowering_op_year_manual = default_manual_year
         if repowering_enabled:
-            repowering_year_mode_options = ["manual", "auto"]
+            repowering_year_mode_options = ["manual", "auto", "soh"]
             repowering_year_mode = st.radio(
                 "Repowering year",
                 repowering_year_mode_options,
@@ -407,6 +408,7 @@ def _render_add_project_form(
                 format_func=lambda m: {
                     "auto": "Automatically optimized (best Equity IRR)",
                     "manual": "Manual",
+                    "soh": "SoH-triggered (Aurora method)",
                 }[m],
                 key=f"repo_mode_{form_id}",
                 horizontal=True,
@@ -419,6 +421,17 @@ def _render_add_project_form(
                     max_value=repowering_candidates[-1],
                     step=1,
                     key=f"repo_year_{form_id}",
+                )
+            elif repowering_year_mode == "soh":
+                soh_year = portfolio.soh_repowering_op_year(int(operating_years), duree_h)
+                st.caption(
+                    "Repowering in the first year the battery's state of health would fall "
+                    "below Aurora's trigger (66% for 2h, 68.67% for 4h): "
+                    + (
+                        f"op-year {soh_year}."
+                        if soh_year is not None
+                        else "never reached within this operating life — no repowering."
+                    )
                 )
             else:
                 st.caption(
@@ -664,6 +677,8 @@ def _render_project_list() -> None:
                 adjustments.append("repowering disabled")
             elif project.repowering_year_mode == "manual":
                 adjustments.append(f"repowering year {project.repowering_op_year_manual}")
+            elif project.repowering_year_mode == "soh":
+                adjustments.append("repowering SoH-triggered")
             else:
                 adjustments.append("repowering auto-optimized")
             adjustment_suffix = f" ({', '.join(adjustments)})" if adjustments else ""
@@ -802,11 +817,12 @@ def _render_hold_and_operate(
     st.divider()
     if st.checkbox(
         "Also show results with Aurora's own CAPEX/OPEX assumptions",
-        help="Recomputes the table above using Aurora's own CAPEX/OPEX instead of ours "
+        help="Recomputes the table above using Aurora's own cost assumptions instead of ours "
         "(ICP + Aurora fallback) - same revenue, same financing terms, only the cost source "
-        "changes (Aurora Q2 2026 databook, 'Costs assumptions' sheet - same copex_library used "
-        "everywhere else in the app). See core/copex_comparison.py for how our costs compare "
-        "to Aurora's.",
+        "changes. Uses the Aurora Q2 2026 databook ('Costs assumptions' sheet) exactly as "
+        "Aurora does in its investment cases: CAPEX priced the year before COD, OPEX fixed at "
+        "the entry-year value, repowering = battery system cost, end-of-life value at "
+        "last-year prices.",
     ):
         try:
             rows_aurora = portfolio.run_portfolio(
@@ -1002,7 +1018,9 @@ def _download_multi_sheet_button(
     )
 
 
-def _render_copex_comparison(projects: list[portfolio.ProjectConfig], copex_library) -> None:
+def _render_copex_comparison(
+    projects: list[portfolio.ProjectConfig], copex_library, financing_terms: dict
+) -> None:
     """Compare notre CAPEX/OPEX (ICP + repli Aurora, deja applique par le
     moteur) a ce que la bibliotheque Aurora COPEX_library aurait donne
     seule - demande de l'utilisateur, 2026-09-30, sur le modele d'une macro
@@ -1015,11 +1033,12 @@ def _render_copex_comparison(projects: list[portfolio.ProjectConfig], copex_libr
     if not st.checkbox("Aurora COPEX Comparison"):
         return
     st.caption(
-        "Is our CAPEX/OPEX (ICP + Aurora fallback, as actually applied) below or above Aurora's "
-        "own COPEX_library assumption? Download the Excel export below (one CAPEX/OPEX sheet per "
-        "project, plus a Notes sheet)."
+        "Is our CAPEX/OPEX (ICP + Aurora fallback, development = project DSA, as actually "
+        "applied) below or above Aurora's own assumptions (Q2 2026 databook)? Download the Excel "
+        "export below (one CAPEX/OPEX sheet per project, plus a Notes sheet)."
     )
     icp_library = copex_icp.load_icp_library_cached()
+    aurora_reference_library = dev_case.load_copex_library_q2_2026_cached()
     all_notes: list[str] = []
     sheets: dict[str, pd.DataFrame] = {}
     used_sheet_names: set[str] = set()
@@ -1035,6 +1054,8 @@ def _render_copex_comparison(projects: list[portfolio.ProjectConfig], copex_libr
             manual_connection_capex_keur=project.manual_connection_capex_keur,
             distance_rte_km=project.distance_rte_km,
             land_lease_opex_keur=project.land_lease_opex_keur,
+            aurora_reference_library=aurora_reference_library,
+            development_keur=portfolio.resolved_devex_and_dsa_keur(project, financing_terms)[1],
         )
         capex_df = _copex_rows_to_df(comparison.capex_rows)
         opex_df = _copex_rows_to_df(comparison.opex_rows)
@@ -1116,7 +1137,7 @@ def _render_results(
                 for note in r.extrapolation_notes:
                     st.caption(f"- {note}")
 
-    _render_copex_comparison(projects, copex_library)
+    _render_copex_comparison(projects, copex_library, financing_terms)
     st.divider()
 
     _render_best_configs(rows)

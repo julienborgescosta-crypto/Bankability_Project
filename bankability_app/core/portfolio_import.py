@@ -42,7 +42,7 @@ _CONTRACT_LABEL_TO_KIND = {
 # une trace opaque - "zero zero silencieux" s'applique aussi aux erreurs, pas
 # seulement aux valeurs manquantes).
 _VALID_CONNECTION_CAPEX_MODES = {"library", "manual", "distance_rte"}
-_VALID_REPOWERING_YEAR_MODES = {"auto", "manual"}
+_VALID_REPOWERING_YEAR_MODES = {"auto", "manual", "soh"}
 
 # (libelle de colonne, description, valeurs attendues) - sert a la fois de
 # feuille "Legend" du template et de documentation inline ici. Ordre =
@@ -74,7 +74,7 @@ _COLUMN_SPECS: list[tuple[str, str, str]] = [
     (
         "Repowering year mode",
         "Used if Repowering enabled=Yes, default manual",
-        "auto or manual",
+        "auto, manual or soh (SoH-triggered, Aurora method)",
     ),
     (
         "Repowering year (manual)",

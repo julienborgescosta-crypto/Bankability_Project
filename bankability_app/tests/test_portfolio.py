@@ -351,13 +351,106 @@ def test_run_portfolio_build_and_flip_net_return_is_internally_consistent(
 ):
     rows = portfolio.run_portfolio([_config()], au_store, copex_library, default_financing_terms)
     row = rows[0]
+    # Le developpement (= DSA, poste Development du CAPEX) est paye via le prix RtB
+    # (TSP = DSA + SPA) : le CAPEX de construction l'exclut, sinon double compte.
     assert row.build_and_flip_net_return_keur == pytest.approx(
         row.resale_value_cod_keur
         - row.tsp_keur
-        - row.capex_total_keur
+        - (row.capex_total_keur - row.dsa_keur)
         - row.build_and_flip_carry_cost_keur
     )
     assert row.build_and_flip_carry_cost_keur > 0.0
+
+
+def test_build_project_inputs_excludes_capacity_mechanism_from_fees_in_merchant_years_only(
+    copex_library, default_financing_terms
+):
+    """Frais de trading hors mecanisme de capacite (comme Aurora) les annees 100 %
+    merchant ; sous tolling, le revenu merchant n'est plus le revenu Aurora brut,
+    l'assiette reste inchangee."""
+    library = aur_cases.load_aurora_curves()
+    tolling = contract_overlay.ContractStructure(
+        kind=contract_overlay.TOLLING, price_keur_per_mw_per_year=80.0, duration_years=5
+    )
+    config = _config(operating_years=10, contract_structure=tolling)
+    inputs, _, _ = portfolio.build_project_inputs(
+        config, library, copex_library, default_financing_terms
+    )
+    base = aur_cases.build_project_inputs(
+        library,
+        library.config_by_drop_key("2h HTA Classique g0"),
+        copex_library,
+        cod_year=2027,
+        power_mw=10.0,
+        operating_years=10,
+        with_repowering=False,
+    )
+    cm = aur_cases.capacity_mechanism_series(library, 2, base.years[1:], 10.0)
+    rate = default_financing_terms["aggregator_fee_rate_after_threshold"]
+    # op-year 6 : contrat termine, 100 % merchant -> mecanisme de capacite exclu.
+    expected_merchant = base.revenues_keur[6] + rate * (
+        base.revenues_keur[6] + base.turpe_keur[6] - cm[5]
+    )
+    assert inputs.revenues_keur[6] == pytest.approx(expected_merchant)
+    # op-year 2 : sous tolling, assiette = revenu merchant (0) + TURPE <= 0, donc pas de
+    # frais - inchange, le mecanisme de capacite n'y est pas deduit.
+    assert inputs.revenues_keur[2] == pytest.approx(800.0)
+
+
+def test_build_project_inputs_development_capex_is_the_project_dsa(
+    au_store, copex_library, default_financing_terms
+):
+    """Decision de l'utilisateur, 2026-10-02 : en mode "nos couts", le poste
+    Development du CAPEX est le DSA fixe ensemble (marge cible 50 k€/MW en 2h +
+    DEVEX 150 k€ en HTA = 650 k€ pour 10 MW), plus la ligne Aurora."""
+    config = _config(operating_years=20, repowering_year_mode="manual")
+    inputs, _, _ = portfolio.build_project_inputs(
+        config, au_store, copex_library, default_financing_terms
+    )
+    assert inputs.development_capex_keur == pytest.approx(650.0)
+    aurora_line_inputs = aur_cases.build_project_inputs(
+        au_store,
+        au_store.config_by_drop_key("2h HTA Classique g0"),
+        copex_library,
+        cod_year=2027,
+        power_mw=10.0,
+        operating_years=20,
+    )
+    assert inputs.capex_initial_keur - 650.0 == pytest.approx(
+        aurora_line_inputs.capex_initial_keur - aurora_line_inputs.development_capex_keur
+    )
+
+
+def test_build_project_inputs_development_capex_follows_dsa_override(
+    au_store, copex_library, default_financing_terms
+):
+    config = _config(operating_years=20, repowering_year_mode="manual", dsa_keur_override=1234.0)
+    inputs, _, _ = portfolio.build_project_inputs(
+        config, au_store, copex_library, default_financing_terms
+    )
+    assert inputs.development_capex_keur == pytest.approx(1234.0)
+
+
+def test_run_portfolio_dev_and_sell_counts_development_once(
+    au_store, copex_library, default_financing_terms
+):
+    """L'acheteur paie le developpement une seule fois, via le DSA : le CAPEX qu'il
+    finance (DSA inclus) est le CAPEX de base, pas le CAPEX de base + DSA."""
+    from core import strategy
+
+    config = _config(operating_years=20, repowering_year_mode="manual")
+    inputs, _, _ = portfolio.build_project_inputs(
+        config, au_store, copex_library, default_financing_terms
+    )
+    result = strategy.compute_dev_and_sell(
+        inputs,
+        dsa_keur=inputs.development_capex_keur,
+        buyer_target_equity_irr=0.11,
+        financing_kwargs={"gearing_pct": 0.0},
+    )
+    assert result.result_at_dsa_only.capex_total_initial_keur == pytest.approx(
+        inputs.capex_initial_keur
+    )
 
 
 def test_run_portfolio_carry_overrides(au_store, copex_library, default_financing_terms):
@@ -603,7 +696,30 @@ def test_build_project_inputs_repowering_manual_uses_chosen_year(
         config, au_store, copex_library, default_financing_terms
     )
     assert inputs.repowering_op_year == 12
-    assert inputs.capex_keur[12] < 0
+    assert inputs.capex_keur[11] < 0  # paye l'annee avant la mise en service
+
+
+def test_soh_repowering_op_year_is_first_year_below_aurora_trigger():
+    """Mode "soh" (methode Aurora) : repowering l'annee qui suit le dernier
+    op-year ou le SoH reste au-dessus du seuil (66% en 2h, 68.67% en 4h) - None
+    si ce seuil n'est jamais franchi pendant la duree d'exploitation."""
+    for duree_h in (2, 4):
+        last_safe_year = portfolio.max_op_year_without_forced_repowering(duree_h)
+        assert portfolio.soh_repowering_op_year(30, duree_h) == last_safe_year + 1
+        assert portfolio.soh_repowering_op_year(last_safe_year, duree_h) is None
+
+
+def test_build_project_inputs_repowering_soh_mode_uses_soh_trigger_year(
+    au_store, copex_library, default_financing_terms
+):
+    config = _config(operating_years=30, repowering_year_mode="soh")
+    inputs, _, _ = portfolio.build_project_inputs(
+        config, au_store, copex_library, default_financing_terms
+    )
+    expected_year = portfolio.soh_repowering_op_year(30, config.duree_h)
+    assert expected_year is not None
+    assert inputs.repowering_op_year == expected_year
+    assert inputs.capex_keur[expected_year - 1] < 0
 
 
 def test_build_project_inputs_repowering_auto_matches_find_best_repowering_op_year(

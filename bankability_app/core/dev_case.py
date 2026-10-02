@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field, replace
+from functools import lru_cache
 from pathlib import Path
 
 from . import degradation as degradation_module
@@ -190,6 +191,16 @@ def load_copex_library_q2_2026(path: Path = DEFAULT_COPEX_LIBRARY_Q2_2026_PATH) 
         capex_escalation=_int_keys(data["capex_escalation"]),
         opex_escalation=_int_keys(data["opex_escalation"]),
     )
+
+
+@lru_cache(maxsize=1)
+def load_copex_library_q2_2026_cached() -> CopexLibrary:
+    """Bibliotheque du mode "couts Aurora" (`aur_cases.build_project_inputs`,
+    `capex_opex_source="aurora"`) - toujours le databook Q2 2026 pur, jamais
+    fusionne avec le fixture : c'est la seule facon de reproduire les TRI publies
+    par Aurora (decision de l'utilisateur, 2026-10-02 ; voir docs/specs/aur_cases.md).
+    Memoise : relu potentiellement des milliers de fois en analyse globale."""
+    return load_copex_library_q2_2026()
 
 
 @dataclass

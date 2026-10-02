@@ -55,11 +55,12 @@ son cas plutot que de faire confiance a une hypothese non confirmee :
   priorite. Le total ne depend pas de la repartition core/grid/substation -
   seule la lecture poste par poste change.
 
-Les autres postes (CAPEX Development ; OPEX Insurance/Grid charges/Land
-lease bibliotheque/Accise/Other) restent **toujours** = Aurora (ICP ne les
-couvre pas) - affiches pour information (`comparable=False`), jamais comme
-un ecart a interpreter (un ecart de 0% n'est pas un signal, c'est la meme
-donnee des 2 cotes par construction).
+CAPEX Development : notre valeur est le DSA du projet (marge de dev cible +
+DEVEX, decision de l'utilisateur du 2026-10-02), comparee a la ligne Aurora.
+
+Les postes OPEX Insurance/Grid charges/Land lease bibliotheque/Accise/Other
+restent **toujours** = Aurora (ICP ne les couvre pas) - affiches pour
+information (`comparable=False`), jamais comme un ecart a interpreter.
 
 Attention (meme mise en garde que la macro VBA source) : "Grid charges" ne
 represente que la part FIXE du TURPE (+ CTA) - le TURPE VARIABLE (charge
@@ -97,7 +98,7 @@ from .dev_case import (
 
 # Les 4 lignes Aurora du meme perimetre que le bucket ICP "core equipment"
 # (poste direct x marge EPC x assurance, hors sous-stations) - Development
-# est toujours = Aurora des 2 cotes, affiche a part (voir module docstring).
+# est affiche a part (voir module docstring).
 _CAPEX_CORE_LABELS = ["Battery system", "Inverter", "Balance of system", "EPC soft costs"]
 _CAPEX_DEVELOPMENT_LABEL = "Development"
 # Postes ICP a reallouer du bucket "construction" vers "Grid connection" -
@@ -227,10 +228,21 @@ def compare_capex_opex(
     manual_connection_capex_keur: float = 0.0,
     distance_rte_km: float = 0.0,
     land_lease_opex_keur: float = 0.0,
+    aurora_reference_library: CopexLibrary | None = None,
+    development_keur: float | None = None,
 ) -> CopexComparison:
     """CAPEX/OPEX initial (hors repowering, voir module docstring) : nos
     valeurs (ICP + repli Aurora, mode raccordement "library") vs les memes
-    postes lus uniquement dans `COPEX_library`.
+    postes lus uniquement dans la bibliotheque Aurora de reference.
+
+    `aurora_library` : bibliotheque de repli de NOS couts (celle que le moteur
+    applique en mode ICP aux postes qu'ICP ne couvre pas). `aurora_reference_library`
+    : colonne "Aurora" - le databook Q2 2026 pur dans l'UI, la meme que le mode
+    "couts Aurora" du moteur (decision de l'utilisateur, 2026-10-02) ; par defaut
+    `aurora_library` (comportement d'avant). `development_keur` : notre poste
+    Development, le DSA du projet tel que le moteur l'applique (meme jour) - la
+    ligne devient alors une vraie comparaison avec celle d'Aurora ; par defaut, la
+    ligne Aurora de repli des 2 cotes.
 
     `manual_connection_capex_keur`/`distance_rte_km` : valeur reellement
     appliquee au projet quand `connection_capex_mode` n'est pas "library"
@@ -257,16 +269,22 @@ def compare_capex_opex(
     key = voltage_duration_key(tension, duree_h)
     notes: list[str] = []
     segment = TENSION_TO_ICP_SEGMENT.get(tension)
+    reference = aurora_reference_library if aurora_reference_library is not None else aurora_library
 
-    development_keur = _aurora_capex_item_keur(
-        aurora_library, key, _CAPEX_DEVELOPMENT_LABEL, cod_year, power_mw
+    development_comparable = development_keur is not None
+    if development_keur is None:
+        development_keur = _aurora_capex_item_keur(
+            aurora_library, key, _CAPEX_DEVELOPMENT_LABEL, cod_year, power_mw
+        )
+    aurora_development_keur = _aurora_capex_item_keur(
+        reference, key, _CAPEX_DEVELOPMENT_LABEL, cod_year, power_mw
     )
     aurora_core_keur = sum(
-        _aurora_capex_item_keur(aurora_library, key, label, cod_year, power_mw)
+        _aurora_capex_item_keur(reference, key, label, cod_year, power_mw)
         for label in _CAPEX_CORE_LABELS
     )
     aurora_grid_keur = _aurora_capex_item_keur(
-        aurora_library, key, CAPEX_GRID_CONNECTION_LABEL, cod_year, power_mw
+        reference, key, CAPEX_GRID_CONNECTION_LABEL, cod_year, power_mw
     )
 
     ours_grid_library_keur, grid_source_notes = icp_connection_capex_keur(
@@ -298,9 +316,12 @@ def compare_capex_opex(
                 f"{', '.join(missing)}."
             )
     else:
-        # HTB3 : aucune colonne ICP - tout retombe sur Aurora, comme avant
-        # (voir icp_capex_total_keur), donc pas de signal sur ce bucket non plus.
-        ours_core_keur = aurora_core_keur
+        # HTB3 : aucune colonne ICP - tout retombe sur la bibliotheque de repli,
+        # comme dans le moteur (voir icp_capex_total_keur).
+        ours_core_keur = sum(
+            _aurora_capex_item_keur(aurora_library, key, label, cod_year, power_mw)
+            for label in _CAPEX_CORE_LABELS
+        )
         substation_keur = 0.0
     ours_grid_and_substation_keur = ours_grid_only_keur + substation_keur
 
@@ -330,7 +351,16 @@ def compare_capex_opex(
             aurora_core_keur,
             True,
         ),
-        CopexComparisonRow("Development", development_keur, development_keur, False),
+        CopexComparisonRow(
+            (
+                "Development (ours = project DSA: target margin + DEVEX)"
+                if development_comparable
+                else "Development"
+            ),
+            development_keur,
+            aurora_development_keur,
+            development_comparable,
+        ),
         CopexComparisonRow(
             "Grid connection (PTF only)", ours_grid_only_keur, aurora_grid_keur, grid_comparable
         ),
@@ -349,7 +379,7 @@ def compare_capex_opex(
         CopexComparisonRow(
             "TOTAL CAPEX",
             ours_core_keur + development_keur + ours_grid_and_substation_keur,
-            aurora_core_keur + development_keur + aurora_grid_keur,
+            aurora_core_keur + aurora_development_keur + aurora_grid_keur,
             True,
         ),
     ]
@@ -361,8 +391,11 @@ def compare_capex_opex(
         if segment is not None
         else None
     )
-    aurora_om_keur = _aurora_opex_item_keur(
+    fallback_om_keur = _aurora_opex_item_keur(
         aurora_library, key, _OPEX_FIXED_OM_LABEL, cod_year, power_mw
+    )
+    aurora_om_keur = _aurora_opex_item_keur(
+        reference, key, _OPEX_FIXED_OM_LABEL, cod_year, power_mw
     )
     guarantees_keur = (
         icp_opex_guarantees_annualized_keur(
@@ -371,21 +404,26 @@ def compare_capex_opex(
         if segment is not None
         else 0.0
     )
-    ours_om_keur = (om_icp if om_icp is not None else aurora_om_keur) + guarantees_keur
+    ours_om_keur = (om_icp if om_icp is not None else fallback_om_keur) + guarantees_keur
     if guarantees_keur:
         notes.append(
             "OPEX O&M includes ICP 'Guarantees & preventive maintenance' (annualized over 15 "
             "years), a line item with no Aurora COPEX_library equivalent."
         )
 
-    aurora_land_lease_keur = _aurora_opex_item_keur(
+    fallback_land_lease_keur = _aurora_opex_item_keur(
         aurora_library, key, _OPEX_LAND_LEASE_LABEL, cod_year, power_mw
     )
-    ours_land_lease_keur = land_lease_opex_keur if land_lease_opex_keur else aurora_land_lease_keur
+    aurora_land_lease_keur = _aurora_opex_item_keur(
+        reference, key, _OPEX_LAND_LEASE_LABEL, cod_year, power_mw
+    )
+    ours_land_lease_keur = (
+        land_lease_opex_keur if land_lease_opex_keur else fallback_land_lease_keur
+    )
     if land_lease_opex_keur:
         notes.append(
             f"Land lease: project uses a manual {land_lease_opex_keur:,.0f} k€/yr instead of "
-            f"Aurora's library estimate ({aurora_land_lease_keur:,.0f} k€/yr) - same convention "
+            f"Aurora's library estimate ({fallback_land_lease_keur:,.0f} k€/yr) - same convention "
             "as aur_cases.capex_and_opex_keur (replaced, not added)."
         )
 
@@ -393,8 +431,12 @@ def compare_capex_opex(
         _aurora_opex_item_keur(aurora_library, key, label, cod_year, power_mw)
         for label in _OPEX_INFO_ONLY_LABELS
     )
+    aurora_info_total_keur = sum(
+        _aurora_opex_item_keur(reference, key, label, cod_year, power_mw)
+        for label in _OPEX_INFO_ONLY_LABELS
+    )
     ours_total_opex = ours_om_keur + ours_land_lease_keur + info_total_keur
-    aurora_total_opex = aurora_om_keur + aurora_land_lease_keur + info_total_keur
+    aurora_total_opex = aurora_om_keur + aurora_land_lease_keur + aurora_info_total_keur
 
     opex_rows = [
         CopexComparisonRow("Fixed O&M (+ ICP Guarantees)", ours_om_keur, aurora_om_keur, True),
@@ -404,7 +446,7 @@ def compare_capex_opex(
         CopexComparisonRow(
             "Insurance + Grid charges (TURPE fixed part + CTA) + Accise + Other",
             info_total_keur,
-            info_total_keur,
+            aurora_info_total_keur,
             False,
         ),
         CopexComparisonRow("TOTAL OPEX", ours_total_opex, aurora_total_opex, True),

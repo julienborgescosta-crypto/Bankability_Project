@@ -71,6 +71,10 @@ Postes en % : `Insurances during construction (% of Total Capex)`, `EPC Margin`.
 - **`Development` (CAPEX) reste additif, hors marquage EPC/assurance** : c'est un cout de
   developpement/origination (etudes, permitting, foncier), pas un cout de construction — la marge
   EPC et l'assurance chantier ne s'y appliquent pas. Absent d'ICP, source Aurora `COPEX_library`.
+  **Depuis le 2026-10-02, le moteur Aurora v2 lui substitue le DSA du projet** (marge de dev cible
+  50 k€/MW en 2h / 80 k€/MW en 4h + DEVEX 150 k€ HTA / 300 k€ HTB, ou l'override du projet) via
+  `icp_capex_total_keur(development_keur=...)` - decision de l'utilisateur, voir
+  `docs/specs/strategy.md`. La ligne Aurora ne sert plus que si l'appelant ne fournit rien.
 - **Mapping tension -> segment ICP**, reprenant le mapping deja etabli ailleurs dans l'app (voir
   `docs/specs/dev_case.md` "Deux taxonomies de segment coexistent") : `DSO -> HTA`,
   `TSO 63kV/90kV -> HTB1`, `TSO 225kV -> HTB2`. **`TSO 90kV` retenu comme representant HTB1**

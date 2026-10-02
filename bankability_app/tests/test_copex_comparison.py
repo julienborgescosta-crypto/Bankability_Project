@@ -31,6 +31,48 @@ def test_total_capex_row_sums_construction_development_and_grid(icp_library, cop
     )
 
 
+def test_aurora_column_uses_reference_library_and_development_is_project_dsa(
+    icp_library, copex_library
+):
+    """Decision de l'utilisateur, 2026-10-02 : colonne "Aurora" = databook Q2 2026
+    pur (comme le mode "couts Aurora" du moteur), notre Development = le DSA du
+    projet - une vraie comparaison, plus la meme valeur des 2 cotes."""
+    from core import aur_cases
+    from core.dev_case import load_copex_library_q2_2026_cached
+
+    q2_library = load_copex_library_q2_2026_cached()
+    comparison = copex_comparison.compare_capex_opex(
+        tension="HTA",
+        duree_h=2,
+        cod_year=2028,
+        power_mw=10.0,
+        icp_library=icp_library,
+        aurora_library=copex_library,
+        aurora_reference_library=q2_library,
+        development_keur=650.0,
+    )
+    total_capex = next(r for r in comparison.capex_rows if r.label == "TOTAL CAPEX")
+    total_opex = next(r for r in comparison.opex_rows if r.label == "TOTAL OPEX")
+    expected_capex, expected_opex = aur_cases.capex_and_opex_keur_aurora_only(
+        tension="HTA", duree_h=2, cod_year=2028, power_mw=10.0, copex_library=q2_library
+    )
+    assert total_capex.aurora_keur == pytest.approx(expected_capex)
+    assert total_opex.aurora_keur == pytest.approx(expected_opex)
+
+    development = next(r for r in comparison.capex_rows if r.label.startswith("Development"))
+    assert development.ours_keur == pytest.approx(650.0)
+    assert development.comparable
+    ours_capex, _ = aur_cases.capex_and_opex_keur(
+        tension="HTA",
+        duree_h=2,
+        cod_year=2028,
+        power_mw=10.0,
+        copex_library=copex_library,
+        development_capex_keur=650.0,
+    )
+    assert total_capex.ours_keur == pytest.approx(ours_capex)
+
+
 def test_total_capex_unaffected_by_core_substation_reallocation(icp_library, copex_library):
     """Reallouer les 3 postes HV/MV substation du bucket "core" vers "grid"
     ne doit rien changer au TOTAL CAPEX - seule la ventilation poste par

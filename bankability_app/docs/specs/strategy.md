@@ -34,6 +34,23 @@ financier — voir `docs/specs/aur_v2_methodology.md` section 3, `docs/adr/0002`
   base de calcul (prix RtB + CAPEX, pas juste le CAPEX) restant le choix le plus défendable en
   l'absence d'un échéancier de tirage détaillé.
 
+- **Le développement n'est compté qu'une fois : le DSA remplace le poste Development du CAPEX,
+  il ne s'y ajoute plus** (corrigé le 2026-10-02). Jusqu'ici, le CAPEX de base contenait la ligne
+  Development d'Aurora (~72 k€/MW en 2h HTA, ~106 k€/MW en 4h HTB2) et `compute_dev_and_sell` y
+  ajoutait le DSA : l'acheteur payait le développement deux fois, et `compute_build_and_flip`
+  comptait aussi ce poste dans le CAPEX de construction en plus du prix RtB. Désormais :
+  - en mode "nos coûts", le poste Development du CAPEX **est** le DSA du projet (marge de dev cible
+    50 k€/MW en 2h, 80 k€/MW en 4h + DEVEX 150 k€ HTA / 300 k€ HTB, ou l'override DSA — décision
+    de l'utilisateur, `portfolio.resolved_devex_and_dsa_keur`) : c'est aussi ce qui entre dans le
+    TRI projet de « garder & exploiter ». Le mode "coûts Aurora" garde la ligne Aurora pour
+    reproduire ses TRI ;
+  - `ProjectInputs.development_capex_keur` expose le montant compté ; `compute_dev_and_sell` ajoute
+    `DSA - development_capex_keur` (0 en mode "nos coûts"), et `compute_build_and_flip` retire
+    `development_capex_keur` du CAPEX de construction (déjà payé via le prix RtB).
+- **Valeur de revente au COD : années repérées par la COD, plus par "CAPEX nul"** (corrigé le
+  2026-10-02). Le filtre `capex == 0.0` écartait aussi l'année où le repowering est payé — ni son
+  CFADS ni sa sortie CAPEX n'entraient dans la valeur. `compute_cod_resale_value_keur` prend
+  désormais toutes les années `>= COD`, CAPEX de repowering inclus (l'acheteur le paiera).
 - **`devex_keur` optionnel (défaut 0.0)** sur `compute_dev_and_sell`, donne
   `net_margin_keur = TSP - DEVEX` — distinct de TSP (revenu brut), jamais affiché à sa place. Le
   DEVEX est forfaitaire par classe de tension (150 k€ HTA / 300 k€ HTB1-2-3, confirmé

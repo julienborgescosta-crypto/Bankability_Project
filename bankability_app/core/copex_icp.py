@@ -312,6 +312,7 @@ def icp_capex_total_keur(
     power_mw: float,
     icp_library: IcpCostLibrary,
     aurora_library: CopexLibrary,
+    development_keur: float | None = None,
 ) -> tuple[float, list[str]]:
     """CAPEX generique (hors raccordement, gere separement comme avant par
     `connection_capex_mode` - voir `icp_connection_capex_keur`) :
@@ -319,9 +320,10 @@ def icp_capex_total_keur(
     (somme des postes directs ICP : Batteries+PCS, Electrical works, Civil
     works, HV Transformer, HV/MV substation, Communication, Other BoP,
     Integration) x (1 + EPC Margin) x (1 + Insurance during construction)
-    + Development (Aurora, additif, hors perimetre EPC/assurance construction
-    - couts de developpement/origination, pas de construction - voir
-    docs/specs/copex_icp.md).
+    + Development (additif, hors perimetre EPC/assurance construction - couts
+    de developpement/origination, pas de construction - voir
+    docs/specs/copex_icp.md) : `development_keur` si fourni (le DSA du projet,
+    voir `portfolio.resolved_devex_and_dsa_keur`), sinon la ligne Aurora.
 
     Assurance appliquee sur le total incluant la marge EPC (convention
     "Total Capex" = travaux + marge EPC, assurance Construction All Risks
@@ -338,9 +340,22 @@ def icp_capex_total_keur(
         # comme avant ce changement (garde-fou tension/COPEX_library inchange,
         # gere en amont par aur_cases.capex_and_opex_keur).
         key = voltage_duration_key(tension, duree_h)
-        return _aurora_capex_total_keur_for_key(aurora_library, key, cod_year, power_mw), [
+        total_keur = _aurora_capex_total_keur_for_key(aurora_library, key, cod_year, power_mw)
+        notes = [
             f"{tension} : aucune colonne ICP - CAPEX entierement source depuis Aurora COPEX_library."
         ]
+        if development_keur is not None:
+            aurora_development_keur = (
+                escalated_unit_cost(
+                    aurora_library.capex_unit_costs.get(key, {}).get("Development", 0.0),
+                    aurora_library.capex_escalation.get("Development", {}),
+                    cod_year,
+                )
+                * power_mw
+            )
+            total_keur += development_keur - aurora_development_keur
+            notes.append("Development : DSA du projet (marge de dev cible + DEVEX).")
+        return total_keur, notes
 
     direct_keur = 0.0
     missing: list[str] = []
@@ -360,17 +375,19 @@ def icp_capex_total_keur(
     insurance_pct = icp_library.insurance_construction_pct.get(segment, 0.0)
     construction_keur = direct_keur * (1 + epc_margin) * (1 + insurance_pct)
 
-    key = voltage_duration_key(tension, duree_h)
-    development_keur = (
-        escalated_unit_cost(
-            aurora_library.capex_unit_costs.get(key, {}).get("Development", 0.0),
-            aurora_library.capex_escalation.get("Development", {}),
-            cod_year,
+    if development_keur is None:
+        key = voltage_duration_key(tension, duree_h)
+        development_keur = (
+            escalated_unit_cost(
+                aurora_library.capex_unit_costs.get(key, {}).get("Development", 0.0),
+                aurora_library.capex_escalation.get("Development", {}),
+                cod_year,
+            )
+            * power_mw
         )
-        * power_mw
-    )
-
-    notes = ["Development : source Aurora COPEX_library (absent d'ICP)."]
+        notes = ["Development : source Aurora COPEX_library (absent d'ICP)."]
+    else:
+        notes = ["Development : DSA du projet (marge de dev cible + DEVEX)."]
     if missing:
         notes.append(f"Postes ICP absents pour {segment} (repli Aurora) : {', '.join(missing)}.")
 

@@ -101,7 +101,13 @@ def _render_controls(au_store: aur_cases.AuStoreLibrary) -> dict:
     c1, c2, c3 = st.columns(3)
     with c1:
         operating_years = st.number_input(
-            "Reference operating life (years)", value=20, min_value=1, step=1
+            "Reference operating life (years)",
+            value=global_sensitivity.DEFAULT_OPERATING_YEARS,
+            min_value=1,
+            max_value=30,
+            step=1,
+            help="Default 30 years = Aurora's investment-case storage lifetime. The Aurora "
+            "curves end in 2060, so a 30-year life limits the swept COD years to 2027-2031.",
         )
         st.caption("Reference power (MW), one per voltage class:")
         st.caption(
@@ -122,17 +128,15 @@ def _render_controls(au_store: aur_cases.AuStoreLibrary) -> dict:
             )
     with c2:
         optimize_repowering = st.checkbox(
-            "Optimize repowering year (like Configurator)",
+            "Optimize repowering year (best Equity IRR)",
             value=False,
             key="optimize_repowering",
             help=(
-                "Off (default): repowering forced at op-year 15 for every case, like the "
-                "ProjectConfig default. On: sweeps the candidate repowering years and keeps "
-                "whichever maximizes the Equity IRR for each case, same 'auto' mode the "
-                "Configurator pre-selects by default — needed to get comparable IRRs between "
-                "the two screens. Much slower (multiplies compute time by ~9 at 20 years of "
-                "operating life, ~19 at 30 years — one extra full financial run per candidate "
-                "year, per case)."
+                "Off (default): Aurora's method - repowering in the year the battery's "
+                "state of health would fall below Aurora's trigger (66% for 2h, 68.67% for 4h), "
+                "no repowering if the project ends before. On: sweeps the candidate repowering "
+                "years and keeps whichever maximizes the Equity IRR for each case. Much slower "
+                "(one extra full financial run per candidate year, per case)."
             ),
         )
         contract_kinds = st.multiselect(
@@ -169,10 +173,10 @@ def _render_controls(au_store: aur_cases.AuStoreLibrary) -> dict:
                 help=(
                     "Off (default): our own costs (ICP real unit costs + Aurora fallback for "
                     "line items ICP doesn't cover - same default as the Configurator). On: "
-                    "Aurora's COPEX_library assumptions only, for the whole sweep - same option "
-                    "as 'Use Aurora's own CAPEX/OPEX assumptions' in the Configurator, applied "
-                    "here to the full table at once rather than a second side-by-side table "
-                    "(a full 2nd sweep of 150+ cases would be slow and hard to read)."
+                    "Aurora's Q2 2026 databook cost assumptions only, applied the way Aurora "
+                    "does in its investment cases (CAPEX priced the year before COD, "
+                    "repowering = battery system cost, end-of-life value at last-year "
+                    "prices) - same option as in the Configurator, applied to the whole sweep."
                 ),
             )
             else "icp"

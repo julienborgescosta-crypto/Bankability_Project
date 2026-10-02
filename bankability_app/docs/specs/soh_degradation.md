@@ -61,9 +61,18 @@ besoin d'aller plus loin, son scenario central repowere toujours a 15 ans.
 - **Pas de dependance circulaire avec `core/aur_cases.py`/`core/portfolio.py`** : ce module ne
   connait que la courbe SoH et le seuil, jamais les revenus/CAPEX/OPEX - c'est `portfolio.py` qui
   fait le lien (voir docs/specs/portfolio.md, section repowering).
+- **2 consommateurs depuis le 2026-10-02** : (1) le mode de repowering `"soh"`
+  (`portfolio.soh_repowering_op_year`, methode Aurora : nouvelle batterie a
+  `max_op_year_before_forced_repowering + 1`, soit l'op-year 18 en 2h et 23 en 4h) ; (2) la
+  degradation du TURPE variable dans `aur_cases.revenue_and_turpe_series`, au SoH moyen de l'annee
+  `(SoH(age-1) + SoH(age)) / 2`, age remis a 1 au repowering - voir `docs/specs/aur_cases.md`.
 
 ## Questions ouvertes
 
+- **Courbe generique, alors qu'Aurora degrade chaque cas selon ses cycles reels** : sur Case 1
+  (2h HTB2 2027) et Case 40 (4h HTA 2030) du databook Q2 2026, la retention d'energie Aurora est
+  ~0,01 sous notre courbe en fin de premiere vie, et Aurora repowere un an plus tot (op-year 17 et
+  22 contre 18 et 23). Effet sur le TRI negligeable (< 0,05 pt), mais l'annee affichee differe.
 - **Le fichier source (`config/soh_degradation.xlsx`) n'est pas (encore) un fichier QEF interne
   maintenu/mis a jour comme `copex_icp.xlsx`** - fourni une fois par l'utilisateur le 2026-10-01
   pour debloquer ce fix, statut de mise a jour future (mensuelle ? jamais ?) non precise.

@@ -76,8 +76,12 @@ class ProjectConfig:
     # projet a la fois) pre-selectionne "auto" explicitement dans son widget -
     # seul ce chemin paie le cout du balayage, la ou l'utilisateur en profite
     # reellement.
+    #
+    # Mode "soh" (2026-10-02) : methode Aurora - repowering l'annee ou le SoH
+    # passerait sous le seuil Aurora (`soh_repowering_op_year`), aucun repowering
+    # si le projet s'arrete avant. Defaut de l'analyse globale.
     repowering_enabled: bool = True
-    repowering_year_mode: str = "manual"  # "auto" | "manual"
+    repowering_year_mode: str = "manual"  # "auto" | "manual" | "soh"
     repowering_op_year_manual: int = 15  # utilise seulement si repowering_year_mode == "manual"
     # Abattement TURPE 50% pour sites de stockage raccordes RTE/>=50kV (code de
     # l'energie, annexe art. D.341-9 ; voir docs/specs/turpe_50pct_reduction.md
@@ -168,6 +172,18 @@ def max_op_year_without_forced_repowering(duree_h: int) -> int:
     sur un projet de 30 ans, alors que la vraie courbe SoH, elle, l'exigerait
     bien avant)."""
     return soh_degradation.max_op_year_before_forced_repowering(duree_h)
+
+
+def soh_repowering_op_year(operating_years: int, duree_h: int) -> int | None:
+    """Mode "soh" (methode Aurora) : la nouvelle batterie entre en service la 1re
+    annee ou le SoH serait sous le seuil Aurora, ou `None` si le projet s'arrete
+    avant d'y arriver (Aurora ne repowere que sur declenchement SoH). Compare au
+    databook Aurora Q2 2026 : Aurora repowere un an plus tot (Case 1, 2h COD
+    2027 : op-year 17 contre 18 ici ; Case 40, 4h COD 2030 : 22 contre 23) - sa
+    degradation suit les cycles reels de chaque cas, notre courbe SoH est
+    generique. Impact mesure < 0.05 pt de TRI."""
+    year = max_op_year_without_forced_repowering(duree_h) + 1
+    return year if year <= operating_years else None
 
 
 def repowering_candidate_years(operating_years: int, duree_h: int) -> list[int]:
@@ -313,10 +329,36 @@ def _effective_repowering_op_year(
                 f"{max_safe_op_year + 1}), or use automatic optimization."
             )
         return config.repowering_op_year_manual, False
+    if config.repowering_year_mode == "soh":
+        return soh_repowering_op_year(config.operating_years, config.duree_h), False
+    if config.repowering_year_mode != "auto":
+        raise aur_cases.AuroraConfigError(
+            f"Unknown repowering_year_mode: '{config.repowering_year_mode}' "
+            "(expected 'manual', 'auto' or 'soh')."
+        )
     best_year, _, _ = find_best_repowering_op_year(
         config, au_store, copex_library, financing_terms, capex_opex_source
     )
     return best_year, True
+
+
+def resolved_devex_and_dsa_keur(config: ProjectConfig, terms: dict) -> tuple[float, float]:
+    """(DEVEX, DSA) du projet : overrides s'ils sont renseignes, sinon les defauts
+    confirmes (DEVEX forfaitaire par tension, DSA = marge de dev cible par MW selon
+    la duree + DEVEX - voir config/aur_financing_terms.yaml)."""
+    devex_keur = (
+        config.devex_keur_override
+        if config.devex_keur_override is not None
+        else aur_cases.devex_keur_for_tension(config.tension, terms)
+    )
+    dsa_keur = (
+        config.dsa_keur_override
+        if config.dsa_keur_override is not None
+        else aur_cases.dsa_default_keur(
+            duree_h=config.duree_h, power_mw=config.power_mw, devex_keur=devex_keur, terms=terms
+        )
+    )
+    return devex_keur, dsa_keur
 
 
 def _resolve_au_config(config: ProjectConfig, au_store: AuStoreLibrary) -> ResolvedConfig:
@@ -364,6 +406,11 @@ def build_project_inputs(
     repowering_op_year, _auto_optimized = _effective_repowering_op_year(
         config, au_store, copex_library, financing_terms, capex_opex_source
     )
+    # Poste Development du CAPEX = le DSA du projet (decision de l'utilisateur,
+    # 2026-10-02), plus la ligne Aurora : c'est le prix de developpement fixe
+    # ensemble (marge cible + DEVEX). core/strategy.py le remplace par le DSA paye
+    # par l'acheteur, il n'est donc jamais compte deux fois.
+    _, dsa_keur = resolved_devex_and_dsa_keur(config, financing_terms)
     base_inputs = aur_cases.build_project_inputs(
         resolved.library,
         resolved.config,
@@ -380,6 +427,7 @@ def build_project_inputs(
         land_lease_opex_keur=config.land_lease_opex_keur,
         capex_opex_source=capex_opex_source,
         turpe_50pct_reduction=config.turpe_50pct_reduction,
+        development_capex_keur=dsa_keur,
     )
     operating_revenue = base_inputs.revenues_keur[1:]
     operating_turpe = base_inputs.turpe_keur[1:]
@@ -388,8 +436,18 @@ def build_project_inputs(
     )
     merchant_revenue = [a - s for a, s in zip(adjusted_revenue, secured_revenue, strict=True)]
     fee_terms = aur_cases.aggregator_fee_terms_from_config(financing_terms)
+    # Mecanisme de capacite hors assiette des frais de trading, comme Aurora - seulement
+    # les annees 100 % merchant : sous contrat, le revenu merchant n'est plus le revenu
+    # Aurora brut (remplace par le tolling, ou seul l'excedent au-dessus du floor).
+    capacity_mechanism = aur_cases.capacity_mechanism_series(
+        resolved.library, config.duree_h, base_inputs.years[1:], config.power_mw
+    )
+    excluded = [
+        cm if secured == 0.0 else 0.0
+        for cm, secured in zip(capacity_mechanism, secured_revenue, strict=True)
+    ]
     fees = aur_cases.aggregator_fee_series(
-        merchant_revenue, operating_turpe, config.power_mw, fee_terms
+        merchant_revenue, operating_turpe, config.power_mw, fee_terms, excluded
     )
     final_operating_revenue = [a + f for a, f in zip(adjusted_revenue, fees, strict=True)]
     revenues_keur = [0.0] + final_operating_revenue
@@ -472,18 +530,7 @@ def run_portfolio(
         buyer_target_equity_irr = _buyer_target_equity_irr(
             config, secured_revenue, operating_revenue, terms
         )
-        devex_keur = (
-            config.devex_keur_override
-            if config.devex_keur_override is not None
-            else aur_cases.devex_keur_for_tension(config.tension, terms)
-        )
-        dsa_keur = (
-            config.dsa_keur_override
-            if config.dsa_keur_override is not None
-            else aur_cases.dsa_default_keur(
-                duree_h=config.duree_h, power_mw=config.power_mw, devex_keur=devex_keur, terms=terms
-            )
-        )
+        devex_keur, dsa_keur = resolved_devex_and_dsa_keur(config, terms)
         carry_months = (
             config.carry_months_override
             if config.carry_months_override is not None

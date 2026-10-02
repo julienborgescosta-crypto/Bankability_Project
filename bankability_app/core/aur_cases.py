@@ -12,13 +12,13 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 import yaml
 
-from . import copex_icp
+from . import copex_icp, soh_degradation
 from .bp_parser import _normalize, load_grid
 from .dev_case import (
     CAPEX_GRID_CONNECTION_LABEL,
@@ -28,6 +28,7 @@ from .dev_case import (
     DevCaseParams,
     connection_capex_keur,
     escalated_unit_cost,
+    load_copex_library_q2_2026_cached,
     voltage_duration_key,
 )
 from .models import ProjectInputs
@@ -38,6 +39,9 @@ DEFAULT_FINANCING_TERMS_PATH = (
 )
 DEFAULT_AURORA_CURVES_PATH = (
     Path(__file__).resolve().parent.parent / "config" / "aurora_curves_22configs.json"
+)
+DEFAULT_AURORA_DEGRADATION_AND_CM_PATH = (
+    Path(__file__).resolve().parent.parent / "config" / "aurora_degradation_and_cm.json"
 )
 
 _DUREE_PATTERN = re.compile(r"(\d+)\s*h", re.IGNORECASE)
@@ -50,6 +54,11 @@ _ORO_PATTERN = re.compile(r"\bORO\b", re.IGNORECASE)
 # les autres postes CAPEX (Balance of system/Development/EPC/raccordement) :
 # seuls les composants qui degradent physiquement sont remplaces au repowering.
 REPOWERING_CAPEX_LINE_ITEMS = ["Battery system", "Inverter"]
+# Mode "couts Aurora" : Aurora definit le repowering comme le seul systeme
+# batterie ("The repowering cost is equal to the battery system cost in the year
+# of repowering", databook Q2 2026, onglet Inputs) - pas l'onduleur. Verifie :
+# reproduit a l'euro pres la ligne "Storage system - cost of repowering".
+AURORA_REPOWERING_CAPEX_LINE_ITEMS = ["Battery system"]
 
 
 class AuroraConfigError(ValueError):
@@ -84,6 +93,16 @@ class AuStoreLibrary:
     degradation_no_repo: dict[int, float]  # op-year -> DegFactor_noRepo
     repowering_op_year: int
     eol_per_kw: float
+    # Table de degradation du revenu propre a une duree, quand elle existe
+    # (config/aurora_degradation_and_cm.json : 2h) - sinon `degradation_no_repo`,
+    # qui est celle des 4h (voir `degradation_no_repo_for`).
+    degradation_no_repo_by_duration: dict[int, dict[int, float]] = field(default_factory=dict)
+    # Mecanisme de capacite inclus dans RAW, EUR/kW par annee civile, par duree -
+    # exclu de l'assiette des frais de trading (voir `capacity_mechanism_series`).
+    capacity_mechanism_by_duration: dict[int, dict[int, float]] = field(default_factory=dict)
+
+    def degradation_no_repo_for(self, duree_h: int) -> dict[int, float]:
+        return self.degradation_no_repo_by_duration.get(duree_h, self.degradation_no_repo)
 
     def config_by_drop_key(self, drop_key: str) -> AuStoreConfig:
         for config in self.configs:
@@ -380,7 +399,10 @@ def load_au_store(file_or_path) -> AuStoreLibrary:
     )
 
 
-def load_aurora_curves(path: Path = DEFAULT_AURORA_CURVES_PATH) -> AuStoreLibrary:
+def load_aurora_curves(
+    path: Path = DEFAULT_AURORA_CURVES_PATH,
+    degradation_and_cm_path: Path = DEFAULT_AURORA_DEGRADATION_AND_CM_PATH,
+) -> AuStoreLibrary:
     """Charge les 22 courbes RAW/TURPE Aurora depuis l'asset statique
     `config/aurora_curves_22configs.json`, plutot que de les re-parser depuis
     l'`AU_Store` d'un classeur uploade.
@@ -402,9 +424,28 @@ def load_aurora_curves(path: Path = DEFAULT_AURORA_CURVES_PATH) -> AuStoreLibrar
     uniforme, sans cas particulier. Verifie : les 2 conventions (JSON
     un-degrade x DegFactor, vs AU_Store historique deja degrade x 1.0)
     retombent sur exactement le meme revenu/TURPE final, config par config,
-    annee par annee."""
+    annee par annee.
+
+    `degradation_and_cm_path` (`sample_data/build_aurora_degradation_and_cm.py`,
+    2026-10-02) : table de degradation du revenu des 2h - la `DegFactor_noRepo` du
+    JSON principal est celle des 4h, qui surestimait le revenu des 2h d'environ
+    +0,5 pt de TRI (backtest contre la Summary table Aurora) - et mecanisme de
+    capacite par duree. Optionnel : absent, on retombe sur l'ancien comportement."""
     with open(path, encoding="utf-8") as handle:
         data = json.load(handle)
+    degradation_no_repo_by_duration: dict[int, dict[int, float]] = {}
+    capacity_mechanism_by_duration: dict[int, dict[int, float]] = {}
+    if degradation_and_cm_path.exists():
+        with open(degradation_and_cm_path, encoding="utf-8") as handle:
+            extras = json.load(handle)
+        table_2h = extras["degradation_no_repo_2h"]
+        degradation_no_repo_by_duration[2] = dict(
+            zip(table_2h["op_years"], table_2h["values"], strict=True)
+        )
+        capacity_mechanism_by_duration = {
+            _parse_duree_h(duration): {int(year): float(v) for year, v in by_year.items()}
+            for duration, by_year in extras["capacity_mechanism"].items()
+        }
 
     degradation_data = data["degradation"]
     degradation = dict(
@@ -447,6 +488,8 @@ def load_aurora_curves(path: Path = DEFAULT_AURORA_CURVES_PATH) -> AuStoreLibrar
         degradation_no_repo=degradation_no_repo,
         repowering_op_year=int(degradation_data["RepowOpYear"]),
         eol_per_kw=float(degradation_data["EoL_perkW"]),
+        degradation_no_repo_by_duration=degradation_no_repo_by_duration,
+        capacity_mechanism_by_duration=capacity_mechanism_by_duration,
     )
 
 
@@ -500,9 +543,17 @@ def revenue_and_turpe_series(
     """Lit la courbe RAW/TURPE **par annee civile** a partir du COD, x facteur de
     degradation par op-year, x puissance - la courbe elle-meme ne depend jamais
     du COD (voir CONTEXT.md "AU_Store" : courbe COD-independante x degradation
-    par op-year, ne jamais re-indexer la courbe RAW). Le TURPE n'est pas degrade
-    (charges reseau non liees a la degradation de la batterie - hypothese non
-    verifiee faute de point de validation exact, voir docs/specs/aur_cases.md).
+    par op-year, ne jamais re-indexer la courbe RAW).
+
+    Le TURPE variable ("Storage volume-related network charges") est degrade lui
+    aussi, au SoH moyen de l'annee ((SoH debut + SoH fin) / 2, courbe
+    `core/soh_degradation.py`, remise a zero au repowering) : il est facture sur
+    les volumes echanges, qui baissent avec la capacite restante. Corrige le
+    2026-10-02 - l'ancienne hypothese "TURPE non degrade" surfacturait jusqu'a
+    9 EUR/kW/an en fin de vie et expliquait l'essentiel de l'ecart de TRI avec
+    Aurora sur HTA (TURPE ~3x celui de HTB2). Valide contre le databook Aurora Q2
+    2026 (Case 40, 4h HTA 2030 : ratio TURPE degrade/non degrade 0.98 en op-year
+    1, 0.87 en op-year 6, 0.70 en op-year 21, identique au SoH moyen de l'annee).
 
     `repowering_op_year_override` : annee de reset a utiliser a la place de
     `library.repowering_op_year` (15 par defaut) - demande de l'utilisateur,
@@ -517,15 +568,18 @@ def revenue_and_turpe_series(
         )
     raw_curve = library.raw_by_key[config.austore_key]
     turpe_curve = library.turpe_by_key[config.austore_key]
+    degradation_no_repo = library.degradation_no_repo_for(config.duree_h)
+    effective_repowering_op_year = None
     if with_repowering:
         effective_repowering_op_year = (
             repowering_op_year_override
             if repowering_op_year_override is not None
             else library.repowering_op_year
         )
-        deg_table = _shifted_degradation(library.degradation_no_repo, effective_repowering_op_year)
+        deg_table = _shifted_degradation(degradation_no_repo, effective_repowering_op_year)
     else:
-        deg_table = library.degradation_no_repo
+        deg_table = degradation_no_repo
+    soh_curve = soh_degradation.load_soh_curves_cached()[config.duree_h]
 
     calendar_years = [cod_year + i for i in range(operating_years)]
     revenue_series = []
@@ -546,6 +600,7 @@ def revenue_and_turpe_series(
             # (reset de degradation) n'est pas modelise pour cette config, faute
             # de mecanisme de reset dans la trajectoire Aurora source.
             deg = 1.0
+            turpe_deg = 1.0
         else:
             deg = deg_table.get(op_year)
             if deg is None:
@@ -553,9 +608,23 @@ def revenue_and_turpe_series(
                     f"No degradation factor for op-year {op_year} "
                     f"(covered range: 1-{max(deg_table)})."
                 )
+            turpe_deg = _mean_year_soh(soh_curve, op_year, effective_repowering_op_year)
         revenue_series.append(raw_curve[year] * deg * power_mw)
-        turpe_series.append(turpe_curve[year] * power_mw)
+        turpe_series.append(turpe_curve[year] * turpe_deg * power_mw)
     return calendar_years, revenue_series, turpe_series
+
+
+def _mean_year_soh(
+    soh_curve: soh_degradation.SohCurve, op_year: int, repowering_op_year: int | None
+) -> float:
+    """SoH moyen sur l'annee d'exploitation `op_year` - compteur remis a 1 a
+    l'annee de repowering (nouvelle batterie)."""
+    age = op_year
+    if repowering_op_year is not None and op_year >= repowering_op_year:
+        age = op_year - repowering_op_year + 1
+    start = soh_degradation.soh_at_op_year(soh_curve, age - 1)
+    end = soh_degradation.soh_at_op_year(soh_curve, age)
+    return (start + end) / 2
 
 
 def _tiered_fee(
@@ -566,20 +635,35 @@ def _tiered_fee(
     return rate_before * threshold_keur + rate_after * (base_keur - threshold_keur)
 
 
+def capacity_mechanism_series(
+    library: AuStoreLibrary, duree_h: int, calendar_years: list[int], power_mw: float
+) -> list[float]:
+    """Mecanisme de capacite (k€, positif) contenu dans le revenu de chaque annee -
+    zeros si la donnee manque pour cette duree. Jamais degrade (Aurora ne le degrade
+    pas)."""
+    by_year = library.capacity_mechanism_by_duration.get(duree_h, {})
+    return [by_year.get(year, 0.0) * power_mw for year in calendar_years]
+
+
 def aggregator_fee_series(
     revenue_keur: list[float],
     turpe_keur: list[float],
     power_mw: float,
     terms: AggregatorFeeTerms,
+    excluded_keur: list[float] | None = None,
 ) -> list[float]:
     """Serie de frais d'agregateur (negatifs), a ajouter au revenu. Mecanisme
     complet a paliers (pas un taux plat) : assiette = revenu (net du TURPE si
     `net_of_turpe`), taux `rate_before_threshold` jusqu'au seuil annuel puis
-    `rate_after_threshold` au-dela (voir I-Project!42-46 / CONTEXT.md)."""
+    `rate_after_threshold` au-dela (voir I-Project!42-46 / CONTEXT.md).
+    `excluded_keur` : part du revenu hors assiette - le mecanisme de capacite,
+    exclu des frais de trading comme chez Aurora (decision de l'utilisateur,
+    2026-10-02)."""
     threshold_keur = terms.yearly_threshold_keur_per_mw * power_mw
+    excluded = excluded_keur if excluded_keur is not None else [0.0] * len(revenue_keur)
     fees = []
-    for revenue, turpe in zip(revenue_keur, turpe_keur, strict=True):
-        base = revenue + turpe if terms.net_of_turpe else revenue
+    for revenue, turpe, out in zip(revenue_keur, turpe_keur, excluded, strict=True):
+        base = (revenue + turpe if terms.net_of_turpe else revenue) - out
         fees.append(
             _tiered_fee(
                 base, threshold_keur, terms.rate_before_threshold, terms.rate_after_threshold
@@ -675,6 +759,7 @@ def capex_and_opex_keur(
     distance_rte_km: float = 0.0,
     land_lease_opex_keur: float = 0.0,
     turpe_50pct_reduction: bool = False,
+    development_capex_keur: float | None = None,
 ) -> tuple[float, float]:
     """CAPEX/OPEX total - source primaire `config/copex_icp.xlsx` (couts
     unitaires QEF reels, "ICP", mis a jour mensuellement par l'utilisateur en
@@ -703,7 +788,12 @@ def capex_and_opex_keur(
     section 7, "zero zero silencieux") - `copex_icp`'s propres fonctions
     replient sur Aurora en silence pour les tensions qu'ICP ne couvre pas,
     donc ce garde-fou reste necessaire en amont pour le cas ou Aurora
-    lui-meme n'a rien non plus."""
+    lui-meme n'a rien non plus.
+
+    `development_capex_keur` : poste Development du CAPEX - le DSA du projet
+    quand l'appelant le fournit (`core/portfolio.py`, decision de l'utilisateur,
+    2026-10-02 : marge de dev cible + DEVEX, pas la ligne Aurora), sinon la
+    ligne Aurora."""
     key = voltage_duration_key(tension, duree_h)
     if key not in copex_library.capex_unit_costs or key not in copex_library.opex_unit_costs:
         raise AuroraConfigError(
@@ -719,6 +809,7 @@ def capex_and_opex_keur(
         power_mw=power_mw,
         icp_library=icp_library,
         aurora_library=copex_library,
+        development_keur=development_capex_keur,
     )
     if connection_capex_mode == "library":
         connection_keur, _ = copex_icp.icp_connection_capex_keur(
@@ -982,11 +1073,11 @@ def repowering_capex_keur_aurora_only(
     power_mw: float,
     copex_library: CopexLibrary,
 ) -> float:
-    """Cout de repowering avec les hypotheses Aurora SEULES (Battery system +
-    Inverter, `REPOWERING_CAPEX_LINE_ITEMS`) - pendant de
-    `capex_and_opex_keur_aurora_only` pour la tranche de repowering, jamais
-    ICP (contrairement a `repowering_capex_keur`, qui suit ICP par coherence
-    avec un CAPEX initial ICP)."""
+    """Cout de repowering avec les hypotheses Aurora SEULES - systeme batterie
+    uniquement (`AURORA_REPOWERING_CAPEX_LINE_ITEMS`, definition Aurora), value a
+    l'annee du repowering - pendant de `capex_and_opex_keur_aurora_only` pour la
+    tranche de repowering, jamais ICP (contrairement a `repowering_capex_keur`,
+    qui suit ICP par coherence avec un CAPEX initial ICP)."""
     key = voltage_duration_key(tension, duree_h)
     unit_costs = copex_library.capex_unit_costs.get(key, {})
     return sum(
@@ -996,7 +1087,7 @@ def repowering_capex_keur_aurora_only(
             repowering_year,
         )
         * power_mw
-        for label in REPOWERING_CAPEX_LINE_ITEMS
+        for label in AURORA_REPOWERING_CAPEX_LINE_ITEMS
     )
 
 
@@ -1048,6 +1139,7 @@ def build_project_inputs(
     land_lease_opex_keur: float = 0.0,
     capex_opex_source: str = "icp",
     turpe_50pct_reduction: bool = False,
+    development_capex_keur: float | None = None,
 ) -> ProjectInputs:
     """Construit un `ProjectInputs` pour une config Aurora - meme forme que
     `dev_case.build_project_inputs`, utilisable tel quel par
@@ -1071,7 +1163,10 @@ def build_project_inputs(
     cote revenu) ici-meme AVANT tout usage downstream (frais d'agregateur
     inclus), et la part fixe (poste OPEX 'Grid charges', cote `capex_opex_fn`
     - voir `_opex_with_turpe_50pct_reduction`) - jamais un scaling post-hoc de
-    `ProjectInputs` deja construit."""
+    `ProjectInputs` deja construit. `development_capex_keur` : poste Development
+    du CAPEX en mode ICP (le DSA du projet, fourni par `core/portfolio.py`) ;
+    ignore en mode "aurora", qui garde la ligne Aurora pour reproduire ses TRI.
+    Le montant retenu est expose dans `ProjectInputs.development_capex_keur`."""
     if turpe_50pct_reduction and config.tension not in ("HTB1", "HTB2", "HTB3"):
         raise AuroraConfigError(
             f"turpe_50pct_reduction requires a connection >=50kV (HTB1/HTB2/HTB3), "
@@ -1096,28 +1191,57 @@ def build_project_inputs(
     if turpe_50pct_reduction:
         turpe_series = [t * 0.5 for t in turpe_series]
     if aggregator_fee is not None:
-        fees = aggregator_fee_series(revenue_series, turpe_series, power_mw, aggregator_fee)
+        fees = aggregator_fee_series(
+            revenue_series,
+            turpe_series,
+            power_mw,
+            aggregator_fee,
+            capacity_mechanism_series(library, config.duree_h, calendar_years, power_mw),
+        )
         revenue_series = [r + f for r, f in zip(revenue_series, fees, strict=True)]
 
     if capex_opex_source not in ("icp", "aurora"):
         raise AuroraConfigError(
             f"Unknown capex_opex_source: '{capex_opex_source}' (expected 'icp' or 'aurora')."
         )
-    capex_opex_fn = (
-        capex_and_opex_keur_aurora_only if capex_opex_source == "aurora" else capex_and_opex_keur
+    # Mode "couts Aurora" = databook Aurora Q2 2026 pur, jamais fusionne avec le
+    # fixture COPEX_library (decision de l'utilisateur, 2026-10-02) : seule facon de
+    # reproduire les TRI publies par Aurora. Le mode ICP garde la bibliotheque
+    # passee par l'appelant (fixture en primaire) pour ses postes de repli.
+    cost_library = (
+        load_copex_library_q2_2026_cached() if capex_opex_source == "aurora" else copex_library
     )
-    capex_initial, opex_year1 = capex_opex_fn(
-        tension=config.tension,
-        duree_h=config.duree_h,
-        cod_year=cod_year,
-        power_mw=power_mw,
-        copex_library=copex_library,
-        connection_capex_mode=connection_capex_mode,
-        manual_connection_capex_keur=manual_connection_capex_keur,
-        distance_rte_km=distance_rte_km,
-        land_lease_opex_keur=land_lease_opex_keur,
-        turpe_50pct_reduction=turpe_50pct_reduction,
-    )
+    cost_kwargs = {
+        "tension": config.tension,
+        "duree_h": config.duree_h,
+        "power_mw": power_mw,
+        "copex_library": cost_library,
+        "connection_capex_mode": connection_capex_mode,
+        "manual_connection_capex_keur": manual_connection_capex_keur,
+        "distance_rte_km": distance_rte_km,
+        "land_lease_opex_keur": land_lease_opex_keur,
+        "turpe_50pct_reduction": turpe_50pct_reduction,
+    }
+    if capex_opex_source == "aurora":
+        # Convention Aurora : CAPEX paye ET valorise l'annee avant la COD ("for a
+        # battery entering the market in 2027, the 2026 CAPEX value is used"),
+        # OPEX fige a la valeur de l'annee d'entree.
+        capex_initial, _ = capex_and_opex_keur_aurora_only(cod_year=cod_year - 1, **cost_kwargs)
+        _, opex_year1 = capex_and_opex_keur_aurora_only(cod_year=cod_year, **cost_kwargs)
+        development_in_capex = _aurora_development_keur(
+            config.tension, config.duree_h, cod_year - 1, power_mw, cost_library
+        )
+    else:
+        capex_initial, opex_year1 = capex_and_opex_keur(
+            cod_year=cod_year, development_capex_keur=development_capex_keur, **cost_kwargs
+        )
+        development_in_capex = (
+            development_capex_keur
+            if development_capex_keur is not None
+            else _aurora_development_keur(
+                config.tension, config.duree_h, cod_year, power_mw, cost_library
+            )
+        )
 
     length = len(calendar_years) + 1  # +1 pour l'annee de construction (COD - 1)
     years = [cod_year - 1] + calendar_years
@@ -1126,17 +1250,17 @@ def build_project_inputs(
     revenues_keur = [0.0] + revenue_series
     turpe_keur = [0.0] + turpe_series
     end_of_life_keur = [0.0] * length
-    # Credit au DERNIER op-year (decommission finale) - meme base CAPEX qu'a
-    # la COD, repowering ou non (voir `end_of_life_value_keur` - le PDF Aurora
-    # source formule la valeur de fin de vie comme un % du cout de construction
-    # d'origine, pas un calcul reevalue sur l'equipement effectivement en place
-    # a la fin, donc jamais recalculee sur le cout de repowering ici).
+    # Credit au DERNIER op-year (decommission finale), value aux prix de cette
+    # derniere annee - definition Aurora : "The end of life value is calculated
+    # as a percentage of the CAPEX value in the last year of operation" (databook
+    # Q2 2026, onglet Inputs ; corrige le 2026-10-02, valorisait jusqu'ici aux prix
+    # de la COD). Jamais recalculee sur le cout de repowering.
     end_of_life_keur[-1] = end_of_life_value_keur(
         tension=config.tension,
         duree_h=config.duree_h,
-        cod_year=cod_year,
+        cod_year=calendar_years[-1],
         power_mw=power_mw,
-        copex_library=copex_library,
+        copex_library=cost_library,
         connection_capex_mode=connection_capex_mode,
         manual_connection_capex_keur=manual_connection_capex_keur,
         distance_rte_km=distance_rte_km,
@@ -1146,9 +1270,19 @@ def build_project_inputs(
     capex_repowering = 0.0
     repowering_op_year_used = None
     if with_repowering and operating_years >= effective_repowering_op_year:
-        # index dans capex_keur/years : la construction occupe l'index 0, donc
-        # l'op-year N est a l'index N (pas N-1) - voir revenue_and_turpe_series.
-        repowering_index = effective_repowering_op_year
+        # `effective_repowering_op_year` = annee ou la nouvelle batterie entre en
+        # service (reset de la degradation, voir revenue_and_turpe_series). Le
+        # CAPEX est paye l'annee d'AVANT (convention Aurora, comme le CAPEX initial
+        # paye l'annee avant la COD) et value aux prix de l'annee de mise en
+        # service - corrige le 2026-10-02 pour les 2 modes (ICP comme Aurora), il
+        # tombait jusqu'ici la meme annee que le reset. Index : construction = 0,
+        # op-year N a l'index N, donc paiement a l'index N - 1.
+        if effective_repowering_op_year < 2:
+            raise AuroraConfigError(
+                f"Repowering at op-year {effective_repowering_op_year} would be paid during "
+                "construction - the earliest meaningful repowering year is op-year 2."
+            )
+        payment_index = effective_repowering_op_year - 1
         repowering_calendar_year = calendar_years[effective_repowering_op_year - 1]
         repowering_fn = (
             repowering_capex_keur_aurora_only
@@ -1160,9 +1294,9 @@ def build_project_inputs(
             duree_h=config.duree_h,
             repowering_year=repowering_calendar_year,
             power_mw=power_mw,
-            copex_library=copex_library,
+            copex_library=cost_library,
         )
-        capex_keur[repowering_index] -= capex_repowering
+        capex_keur[payment_index] -= capex_repowering
         repowering_op_year_used = effective_repowering_op_year
 
     net_cashflow_keur = [
@@ -1194,4 +1328,20 @@ def build_project_inputs(
         revenues_keur=revenues_keur,
         turpe_keur=turpe_keur,
         net_cashflow_keur=net_cashflow_keur,
+        development_capex_keur=development_in_capex,
+    )
+
+
+def _aurora_development_keur(
+    tension: str, duree_h: int, cod_year: int, power_mw: float, copex_library: CopexLibrary
+) -> float:
+    return (
+        escalated_unit_cost(
+            copex_library.capex_unit_costs.get(voltage_duration_key(tension, duree_h), {}).get(
+                "Development", 0.0
+            ),
+            copex_library.capex_escalation.get("Development", {}),
+            cod_year,
+        )
+        * power_mw
     )

@@ -95,6 +95,15 @@ projets saisis par l'utilisateur dans le Configurateur — voir `docs/adr/0003` 
   `repowering_op_year`/`repowering_auto_optimized` (déjà présents sur `PortfolioRow`, juste pas
   remontés jusque-là) pour que l'année retenue soit visible dans la table, pas seulement son effet
   sur le TRI.
+- **Défauts alignés sur la méthode Aurora (2026-10-02, décision de l'utilisateur)** :
+  `DEFAULT_OPERATING_YEARS = 30` (durée de vie stockage des investment cases Aurora ; la plage de
+  COD balayée devient 2027-2031, la courbe s'arrêtant en 2060) et, sans `optimize_repowering`,
+  `repowering_year_mode="soh"` au lieu de `"manual"`/année 15 — repowering l'année où le SoH passe
+  sous le seuil Aurora (op-year 18 en 2h, 23 en 4h), sans balayage, donc sans surcoût de calcul.
+  `optimize_repowering=True` reste le mode `"auto"` (meilleur Equity IRR). Avec la case "Use
+  Aurora's own CAPEX/OPEX assumptions", c'est la configuration qui reproduit les TRI Aurora :
+  backtest du même jour sur les 34 cas standalone Central publiés, écart moyen +0,08 pt, de -0,29
+  à +0,33 pt (détail dans `docs/specs/aur_cases.md`, "Questions ouvertes").
 
 ## UI (`ui/global_sensitivity_tab.py`)
 

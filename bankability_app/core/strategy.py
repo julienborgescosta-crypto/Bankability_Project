@@ -73,8 +73,13 @@ def compute_dev_and_sell(
     toujours afficher les deux composantes separement, jamais seulement TSP.
     `devex_keur` (cout de developpement reel de QEF, optionnel) donne
     `net_margin_keur = TSP - DEVEX` - le profit reel de QEF, distinct du revenu
-    brut TSP."""
-    inputs_with_dsa = _inputs_with_extra_capex(inputs, dsa_keur)
+    brut TSP.
+
+    Le DSA REMPLACE le developpement deja compte dans le CAPEX initial
+    (`inputs.development_capex_keur`), il ne s'y ajoute pas : l'acheteur paie le
+    developpement une seule fois, via le DSA (corrige le 2026-10-02 - la ligne
+    Development d'Aurora s'additionnait jusqu'ici au DSA)."""
+    inputs_with_dsa = _inputs_with_extra_capex(inputs, dsa_keur - inputs.development_capex_keur)
     result = financial_engine.compute_results(inputs_with_dsa, **(financing_kwargs or {}))
     valuation = compute_acquisition_valuation(result, buyer_target_equity_irr)
     spa_keur = valuation.max_acquisition_premium_keur
@@ -100,14 +105,20 @@ def compute_hold_and_operate(
 
 def compute_cod_resale_value_keur(inputs: ProjectInputs, *, resale_target_irr: float) -> float:
     """Valeur de revente au COD (docs/adr/0002, version amendee) = PV des
-    cashflows non-levérisés post-COD (revenue+opex+turpe+eol des seules annees
-    d'exploitation, la construction est deja payee) actualises au TRI cible de
+    cashflows non-levérisés des annees d'exploitation (annees >= COD :
+    revenue+opex+turpe+eol, plus le CAPEX de repowering que l'acheteur paiera -
+    la construction, elle, est deja payee) actualises au TRI cible de
     l'acheteur a la revente. Pas de dette re-dimensionnee (voir l'ADR pour la
     raison : le mode "dscr" existant plafonne le principal par une assiette liee
     au CAPEX, qui vaut 0 une fois l'actif construit)."""
-    post_cod_cfads = [
-        revenue + opex + turpe + eol
-        for capex, revenue, opex, turpe, eol in zip(
+    try:
+        cod_year = int(inputs.cod[:4])
+    except ValueError as exc:
+        raise ValueError(f"Can't read the COD year from '{inputs.cod}'.") from exc
+    post_cod_cashflows = [
+        capex + revenue + opex + turpe + eol
+        for year, capex, revenue, opex, turpe, eol in zip(
+            inputs.years,
             inputs.capex_keur,
             inputs.revenues_keur,
             inputs.opex_keur,
@@ -115,9 +126,9 @@ def compute_cod_resale_value_keur(inputs: ProjectInputs, *, resale_target_irr: f
             inputs.end_of_life_keur,
             strict=True,
         )
-        if capex == 0.0
+        if year >= cod_year
     ]
-    return financial_engine.present_value(post_cod_cfads, resale_target_irr)
+    return financial_engine.present_value(post_cod_cashflows, resale_target_irr)
 
 
 @dataclass(frozen=True)
@@ -144,7 +155,9 @@ def compute_build_and_flip(
     construction, revend au COD. Rendement = valeur de revente - prix d'achat RtB
     - CAPEX construction - cout de portage (interets composes sur le capital
     immobilise entre l'achat RtB et le COD, `carry_months` = 18 par defaut - voir
-    docs/specs/aur_v2_methodology.md section 3.3/3.4)."""
+    docs/specs/aur_v2_methodology.md section 3.3/3.4). Le CAPEX de construction
+    exclut le developpement (`inputs.development_capex_keur`), deja paye via le
+    prix RtB."""
     dev_sell = compute_dev_and_sell(
         inputs,
         dsa_keur=dsa_keur,
@@ -152,7 +165,7 @@ def compute_build_and_flip(
         financing_kwargs=financing_kwargs,
     )
     rtb_price = dev_sell.tsp_keur
-    construction_capex = inputs.capex_initial_keur
+    construction_capex = inputs.capex_initial_keur - inputs.development_capex_keur
     carry_base = rtb_price + construction_capex
     carry_cost = carry_base * ((1 + carry_rate) ** (carry_months / 12) - 1)
     resale_value = compute_cod_resale_value_keur(inputs, resale_target_irr=resale_target_irr)

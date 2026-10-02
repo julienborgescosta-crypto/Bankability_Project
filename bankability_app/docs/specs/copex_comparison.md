@@ -180,7 +180,19 @@ miroir des fonctions ICP existantes, jamais un patch post-hoc sur un `ProjectInp
   memes totaux que `copex_comparison.compare_capex_opex()` calcule deja pour son tableau (verifie
   par test qu'ils correspondent exactement).
 - `aur_cases.repowering_capex_keur_aurora_only` - pendant pour la tranche de repowering
-  (`REPOWERING_CAPEX_LINE_ITEMS` = Battery system + Inverter, Aurora seul).
+  (`AURORA_REPOWERING_CAPEX_LINE_ITEMS` = Battery system seul depuis le 2026-10-02, definition
+  Aurora ; Battery system + Inverter avant).
+
+**Depuis le 2026-10-02, le mode "aurora" de `build_project_inputs` lit le databook Q2 2026 pur**
+(`dev_case.load_copex_library_q2_2026_cached()`), plus la bibliotheque fusionnee fixture + Q2 que
+lui passe l'appelant - voir `docs/specs/aur_cases.md`. **Le tableau de comparaison suit, meme
+jour** (decision de l'utilisateur) : `compare_capex_opex(aurora_reference_library=...)` alimente
+la colonne "Aurora" avec le databook Q2 2026 pur, la colonne "Ours" gardant la bibliotheque de
+repli que le moteur applique en mode ICP (`aurora_library`) - verifie par test que le TOTAL Aurora
+egale `capex_and_opex_keur_aurora_only` sur Q2 2026. Et `development_keur=...` met dans "Ours" le
+DSA du projet (marge de dev cible + DEVEX), que le moteur applique desormais comme poste
+Development (voir `docs/specs/strategy.md`) : la ligne Development devient une vraie comparaison
+(`comparable=True`), plus la meme valeur Aurora des 2 cotes.
 
 ## Back-test contre le TRI reel Aurora (2026-10-01) : le TRI Projet doit matcher exactement
 

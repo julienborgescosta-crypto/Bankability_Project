@@ -39,7 +39,11 @@ DEFAULT_POWER_MW_BY_TENSION: dict[str, float] = {
     "HTB2": 50.0,
     "HTB3": 50.0,  # jamais utilise en pratique (HTB3 exclu, pas de donnees CAPEX/OPEX)
 }
-DEFAULT_OPERATING_YEARS = 20
+# 30 ans = duree de vie des cas d'investissement Aurora ("Storage lifetime" de
+# l'onglet NPV calculation du databook Q2 2026) - 2026-10-02, au lieu de 20.
+# Contrepartie : la courbe AU_Store s'arretant en 2060, les COD balayees vont de
+# 2027 a 2031 (voir valid_cod_years_for_calendar).
+DEFAULT_OPERATING_YEARS = 30
 DEFAULT_CONTRACT_KINDS = [
     contract_overlay.FULL_MERCHANT,
     contract_overlay.FLOOR,
@@ -119,18 +123,13 @@ def enumerate_configs(
     Leve une erreur explicite si une tension rencontree dans `au_store` n'a
     pas d'entree (jamais un repli silencieux sur une valeur arbitraire).
 
-    `optimize_repowering` : `False` (defaut) = `ProjectConfig` par defaut
-    (`repowering_year_mode="manual"`, annee 15 fixe) - `True` = meme mode
-    "auto" que le formulaire interactif du Configurateur (`ui/configurateur_tab.py`),
-    qui balaie les annees candidates et retient celle maximisant l'Equity IRR
-    (`portfolio.find_best_repowering_op_year`). Retour utilisateur, 2026-10-01 :
-    sans ca, les 2 ecrans donnent des TRI tres differents sur la meme config
-    (repowering force a l'annee 15 ici vs optimise dans le Configurateur) -
-    voir docs/specs/global_sensitivity.md. Couteux : multiplie le temps de
-    calcul par le nombre de candidats de `portfolio.repowering_candidate_years`
-    (~9 a 20 ans d'exploitation, ~19 a 30 ans) - desactive par defaut pour ne
-    pas ralentir silencieusement le balayage complet (meme raison que le
-    defaut dataclass "manual", voir `core/portfolio.py`).
+    `optimize_repowering` : `False` (defaut) = methode Aurora
+    (`repowering_year_mode="soh"` : repowering l'annee ou le SoH passerait sous le
+    seuil Aurora, aucun si le projet s'arrete avant - defaut depuis le 2026-10-02,
+    remplace l'annee 15 fixe qui ne correspondait a aucune methode reelle) -
+    `True` = mode "auto" (`portfolio.find_best_repowering_op_year`, annee qui
+    maximise l'Equity IRR). Couteux : multiplie le temps de calcul par le nombre
+    de candidats de `portfolio.repowering_candidate_years` - desactive par defaut.
 
     `include_extrapolated` : `False` (defaut) = seules les 22 configs reelles
     d'`AU_Store` (comportement inchange). `True` = balaie EN PLUS tout
@@ -197,7 +196,7 @@ def enumerate_configs(
                     # meme courbe standard pour les 2 - 2 lignes identiques au
                     # lieu d'une ligne ORO distincte (voir docs/specs/aur_cases.md).
                     oro_requested=au_config.oro,
-                    repowering_year_mode="auto" if optimize_repowering else "manual",
+                    repowering_year_mode="auto" if optimize_repowering else "soh",
                 )
                 entries.append((au_config, kind, project_config))
 
@@ -274,7 +273,7 @@ def enumerate_configs(
                                         contract_structure=structure,
                                         oro_requested=oro,
                                         repowering_year_mode=(
-                                            "auto" if optimize_repowering else "manual"
+                                            "auto" if optimize_repowering else "soh"
                                         ),
                                     )
                                     entries.append((synthetic_config, kind, project_config))

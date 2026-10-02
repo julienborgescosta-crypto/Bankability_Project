@@ -94,6 +94,10 @@ class ProjectInputs:
     # reference, ou une valeur choisie/optimisee - voir core/portfolio.py
     # `find_best_repowering_op_year`). Purement informatif pour l'affichage.
     repowering_op_year: int | None = None
+    # Part du CAPEX initial (`capex_initial_keur`) qui correspond au developpement
+    # (moteur Aurora v2 uniquement) : core/strategy.py la remplace par le DSA paye
+    # par l'acheteur, pour ne jamais compter le developpement deux fois.
+    development_capex_keur: float = 0.0
 
     revenue_detail: RevenueBreakdown | None = None
 
