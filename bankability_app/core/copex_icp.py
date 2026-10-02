@@ -621,9 +621,10 @@ def capex_opex_source_notes(tension: str) -> list[str]:
         "CAPEX (Batteries+PCS, travaux electriques/civils, postes HV/MV, communication, "
         "raccordement, marge EPC, assurance construction) : source ICP "
         f"(config/copex_icp.xlsx, segment '{TENSION_TO_ICP_SEGMENT[tension]}').",
-        "CAPEX Development : source Aurora COPEX_library (absent d'ICP).",
+        "CAPEX Development : DSA du projet (marge de dev cible par MW selon la duree + DEVEX "
+        "selon la tension, ou l'override DSA) - absent d'ICP. Jamais en OPEX.",
         "OPEX O&M + garanties/maintenance preventive (15 ans, etalees) : source ICP.",
         "OPEX Insurance/Grid charges/Land lease(bibliotheque)/Accise/Other : source Aurora "
         "COPEX_library (absents d'ICP) - le loyer foncier saisi manuellement ci-dessous "
-        "s'ajoute par-dessus, comme avant.",
+        "remplace la ligne Land lease de la bibliotheque.",
     ]
