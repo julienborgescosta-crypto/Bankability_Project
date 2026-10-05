@@ -35,6 +35,7 @@ chaque commande par `.venv\Scripts\python.exe -m`.
 .venv\Scripts\python.exe -m ruff check core/ ui/ tests/ app.py --fix
 .venv\Scripts\python.exe -m black --line-length 100 core/ ui/ tests/ app.py
 .venv\Scripts\python.exe sample_data/build_sample_xlsx.py
+.venv\Scripts\python.exe sample_data/install_copex_library.py "<COPEX LIBRARY.xlsx>" --dso-grid-connection-keur 300
 ```
 
 **En activant le venv** (invite de commande prefixee par `(.venv)`, commandes plus courtes
@@ -315,9 +316,10 @@ Configuration (`config/`) :
   (`O-Financials` + `O-Control` + `I-Project` optionnel)
 - `risk_thresholds.yaml` — seuils du dashboard de risques (DSCR generique + pondere par mix de
   revenu, hurdle rate, marge WACC)
-- `copex_icp.xlsx` — couts unitaires CAPEX/OPEX BESS reels ("ICP"), source primaire du moteur
-  Aurora v2 depuis le 2026-09-24 — a remplacer (meme nom de fichier) a chaque mise a jour mensuelle,
-  voir `docs/specs/copex_icp.md`
+- `copex_icp.xlsx` — COPEX Library QEF (couts unitaires CAPEX/OPEX BESS reels), source primaire du
+  moteur Aurora v2 — version V1_20261001 depuis le 2026-10-05 (raccordement DSO corrige a 300 k€,
+  liens externes retires). Chaque nouvelle version s'installe avec
+  `sample_data/install_copex_library.py`, voir `docs/specs/copex_icp.md`
 - `aurora_degradation_and_cm.json` — degradation du revenu des 2h et mecanisme de capacite par
   duree, extraits du databook Aurora Q2 2026 par `sample_data/build_aurora_degradation_and_cm.py`
   (voir `docs/specs/aur_cases.md`)
@@ -369,9 +371,9 @@ positives** (valeurs d'info, pas des flux de cashflow) — ne pas les confondre 
   moyen +0,08 pt, de -0,29 a +0,33 pt. Le residu vient des courbes de degradation generiques par
   duree (Aurora degrade chaque cas selon ses cycles reels) — voir `docs/specs/aur_cases.md`,
   "Questions ouvertes".
-- **CAPEX/OPEX du moteur Aurora v2 : poste "OPEX Guarantees & preventive maint" (ICP, cout total
-  15 ans) etale comme addition constante a l'OPEX annuel**, pas limite aux 15 premieres annees
-  (le moteur financier n'a pas de notion d'OPEX variable dans le temps) — voir
+- **CAPEX/OPEX du moteur Aurora v2 : hypotheses OPEX de la COPEX Library a confirmer** (unite de
+  l'O&M, lecture "total 15 ans" des garanties, perimetre garanties/O&M) — la courbe des garanties
+  rend notre O&M fixe 1,25 a 3,4 fois celui d'Aurora, surtout sur les petits projets. Voir
   `docs/specs/copex_icp.md`, "Questions ouvertes".
 
 ## Donnees confidentielles

@@ -23,24 +23,29 @@ donne). Le fichier reste committe dans `config/` (option choisie par l'utilisate
 cadrage) sous un **nom stable** `copex_icp.xlsx` — remplacer son contenu chaque mois, pas son nom,
 pour qu'aucun changement de code ne soit necessaire a chaque mise a jour.
 
-## Structure du fichier source (`config/copex_icp.xlsx`, onglet `CAPEX_library`)
+## Structure du fichier source (`config/copex_icp.xlsx`, version V1_20261001)
 
-Table "Hypothesys CAPEX BP from ICP" — 1 ligne par poste, colonnes C-I (7 segments) :
-`Industrial-New trench`, `Industrial-Existing trench`, `TSO 63kV`, `TSO 90kV`, `TSO 225kV`, `DSO`,
-`Hybrid PV`. Colonnes K-P : multiplicateur d'escalade par annee (K = annee de base ~2026 = 1.0,
-L-P = 2027-2031), **le meme multiplicateur pour les 7 colonnes d'une ligne** (verifie sur le
-fichier reel — pas de dimension segment sur l'escalade).
+Depuis le 2026-10-05, `config/copex_icp.xlsx` est la COPEX Library QEF "LIVE" (fichier
+`LIVE_v1_20261001_COPEX LIBRARY.xlsx` fourni par l'utilisateur), qui remplace l'export ICP du
+22/05/2026. Onglet `COPEX_library` (l'ancien nom `CAPEX_library` reste accepte), table
+"Hypotheses CAPEX BP - BESS Standalone". Tout est lu **par libelle** (`load_icp_library`) :
 
-Postes CAPEX (lignes "a valeur plate", `_DIRECT_CAPEX_LABELS`) : `Electrical works and studies`,
-`Civil Works and miscellaneous`, `HV Transformer`, `HV substation`, `MV substation`,
-`Communication`, `Other BoP cost`, `Integration`. Poste OPEX plat : `OPEX - O&M (annual cost)`.
-Poste raccordement (gere separement, voir plus bas) : `Grid connection`.
+- **ligne d'en-tete "Case"** : les segments (`Industrial-New trench`, `Industrial-Existing trench`,
+  `TSO 63kV`, `TSO 90kV`, `TSO 225kV`, `DSO`, `DSO`) puis les annees du "Forecast price factor
+  (selon annee de NTP)" (2027-2032). Les 2 colonnes `DSO` (2h/4h dans la table de correspondance
+  R8:S15) sont identiques : fusionnees, et le chargement echoue si elles divergent un jour. La
+  colonne `Hybrid PV` de l'ancienne version a disparu.
+- **lignes reperees par leur libelle en colonne A** (la 1re occurrence : les blocs "CAPEX/OPEX
+  assumptions - AURORA (base 2028)" qui suivent dans le meme onglet reutilisent certains libelles ;
+  ils sont identiques au `COPEX_library` du fixture, verifie le 2026-10-05, et ne sont pas lus) :
+  `Batteries and PCS - 2h`/`- 4h` (valeurs €/MWh par segment : 123 200 en TSO "75MWh+", 125 600 en
+  DSO "[0-75MWh]" pour le 2h ; 106 100/108 200 en 4h), les 8 postes directs, `Grid connection`,
+  `OPEX - Guarantees & preventive maint - 2h (annual)`/`- 4h (annual)`, `OPEX - O&M (annual cost)`,
+  `Insurances during construction`, `EPC Margin`, `EPC Contingency` (nouveau, 7 %).
+- **unite lue dans le format de chaque cellule** (`_unit_from_number_format`, inchange).
 
-Postes en power-law (base × MWh^exposant, `IcpPowerLawCost`) : `Batteries and PCS` (2 lignes 2h/4h,
-**pas de dimension segment** — une seule formule nationale, colonnes C:G fusionnees en texte
-d'affichage) et `OPEX - Guarantees & preventive maint (15 years)` (idem, 2 lignes 2h/4h).
-
-Postes en % : `Insurances during construction (% of Total Capex)`, `EPC Margin`.
+Le bloc "OPEX legacy - Source OPEX Library (Jan 2024) - A METTRE A JOUR" (Telecom 2,4 k€/an,
+Asset Management 40 k€/an) n'est pas utilise.
 
 ## Decisions (confirmees par l'utilisateur, session de cadrage 2026-09-24)
 
@@ -49,19 +54,55 @@ Postes en % : `Insurances during construction (% of Total Capex)`, `EPC Margin`.
   valeur brute** : toujours lue depuis `cell.number_format` (suffixe entre guillemets), via
   `_unit_from_number_format()`. Garantit que l'unite suit automatiquement une mise a jour mensuelle
   du fichier, meme si une ligne change d'unite entre-temps.
-- **Base du power-law (`Batteries and PCS`/`OPEX Guarantees`) = MWh nominal du projet en cours**
+- **V1_20261001 (2026-10-05)** :
+  - **Batteries + PCS en valeurs par segment** (€/MWh), plus en loi de puissance : la V1 fixe 2 prix
+    selon la taille (TSO = projets de 75 MWh et plus, DSO = moins de 75 MWh).
+  - **Garanties : la loi de puissance est relue dans la formule** du fichier
+    (`=794.13*'[2]I-Project'!$G$28^(-0.61)*1000`, liee a la taille du BP 160926, 80 MWh en cache)
+    et re-evaluee a la taille de chaque projet (`IcpPowerLaw`, `_POWER_LAW_FORMULA`). La valeur est
+    un **total sur 15 ans** malgre le libelle "(annual)" (decision de l'utilisateur, 2026-10-05) :
+    lue comme annuelle, elle donnerait ~110 k€/MW/an, 10 fois Aurora et Greensolver. Etalee sur
+    15 ans et payee chaque annee de la vie du projet (decision du 2026-10-02).
+  - **O&M en "k€/y"** : lu en k€/MWh/an, comme la version precedente (meme valeur, 2) - 2 k€/an pour
+    tout un projet n'a pas de sens. A confirmer par l'equipe OPEX.
+  - **Communication** passe de €/MW a €/MWh dans le format de la cellule : suivi tel quel.
+  - **Raccordement DSO** : le fichier indique 0,3 k€, erreur de saisie - **300 k€** (confirme par
+    l'utilisateur, 2026-10-05), corrige a l'installation (`--dso-grid-connection-keur 300`, voir
+    ci-dessous). Le test `test_hta_grid_connection_is_300_keur` rattrapera la meme erreur dans une
+    prochaine version.
+  - **Aleas EPC (`EPC Contingency`, 7 %)** appliques comme la marge EPC : construction x (1 + marge)
+    x (1 + aleas) x (1 + assurance construction) (`construction_markup_factor`), jamais au
+    raccordement ni au developpement (decision de l'utilisateur, 2026-10-05).
+  - **Indexation sur l'annee de NTP = COD - 1** (`NTP_YEARS_BEFORE_COD`, decision du 2026-10-05),
+    meme convention que le paiement du CAPEX ; vaut pour toutes les lignes de la COPEX Library
+    (CAPEX, O&M, garanties, repowering valorise a son annee de NTP). Avant la 1re annee de la table
+    (2027), multiplicateur 1,0 ; au-dela de 2032, plafonne sur 2032.
+  - Le fichier source embarque des **liens externes** vers 3 classeurs du OneDrive de l'utilisateur
+    (BP Kerlo, BP 160926, Estimation_Projets_bess) avec quelques cellules en cache - l'ancienne
+    version commitee en avait deja. **Retires a l'installation** (decision de l'utilisateur,
+    2026-10-05) : `config/copex_icp.xlsx` est committe, jamais un BP reel.
+- **Installer une nouvelle version** : `.venv\Scripts\python.exe sample_data/install_copex_library.py
+  "<COPEX LIBRARY.xlsx>" [--dso-grid-connection-keur 300]`. Le script copie le classeur dans
+  `config/copex_icp.xlsx` en travaillant sur son XML (openpyxl effacerait les valeurs en cache des
+  formules) : il retire les liens externes et les noms definis qui en dependent, remplace chaque
+  reference externe d'une formule par sa valeur en cache (`=794.13*'[2]I-Project'!$G$28^(-0.61)*1000`
+  devient `=794.13*80^(-0.61)*1000`, que l'app relit comme loi de puissance), applique l'eventuelle
+  correction du raccordement DSO, puis affiche les valeurs cles relues par `core.copex_icp` (avec
+  une alerte si un raccordement est inferieur a 1 k€). Les metadonnees SharePoint du document
+  lui-meme (identifiant documentaire) restent, comme dans la version precedente.
+- **Base du power-law (`OPEX Guarantees`) = MWh nominal du projet en cours**
   (`power_mw x duree_h`, nameplate — pas l'energie utile apres pertes/DoD). Formule auto-referente :
   une loi de puissance `base x MWh^exposant` n'a de sens que si `MWh` est la taille du projet qu'on
   modelise (c'est ce qui produit l'economie d'echelle) — si `MWh` etait une constante de reference,
   le fichier aurait fige directement le `€/MWh` resultant plutot que de garder une formule.
   `cout_total_keur = (base x MWh^exposant) x MWh` — **`base` est en EUR/kWh, pas EUR/MWh malgre le
   libelle Excel** de la cellule (`"156,37*MWh^(-0,051) €/MWh"`) : voir "Bugs corriges" ci-dessous.
-- **`OPEX - Guarantees & preventive maint (15 years)` est un cout total pour 15 ans**, pas un taux
-  annuel — etale lineairement (`/15`) et ajoute comme une **addition constante** a l'OPEX annuel
-  (`opex_year1_keur`), pas une charge limitee aux 15 premieres annees. Simplification : le moteur
-  financier n'a pas de notion d'OPEX variable dans le temps aujourd'hui (`opex_keur` repete
-  `opex_year1_keur` identique chaque annee) — voir "Questions ouvertes".
-- **Agregation CAPEX = (somme des postes directs) x (1 + EPC Margin) x (1 + Insurance)**, dans cet
+- **`OPEX - Guarantees & preventive maint` est un cout total pour 15 ans**, pas un taux annuel —
+  etale lineairement (`/15`) et paye **chaque annee de la vie du projet** (`opex_year1_keur`
+  constant) : decision de l'utilisateur du 2026-10-02, apres essai d'une version limitee aux 15
+  premieres annees de chaque batterie (annulee).
+- **Agregation CAPEX = (somme des postes directs) x (1 + EPC Margin) x (1 + EPC Contingency depuis
+  la V1_20261001) x (1 + Insurance)**, dans cet
   ordre conceptuellement (meme si commutatif numeriquement, ecart <0.05% du CAPEX entre les 2
   ordres) : l'assurance "Insurances during construction (% of **Total Capex**)" porte sur le total
   incluant la marge EPC (convention assurance Construction All Risks classique — on assure la
@@ -135,12 +176,12 @@ Postes en % : `Insurances during construction (% of Total Capex)`, `EPC Margin`.
 
 ## Questions ouvertes
 
-- **`OPEX - Guarantees & preventive maint` etale comme addition constante, pas limitee a 15 ans** —
-  simplification liee a l'absence de notion d'OPEX variable dans le temps dans `financial_engine.py`
-  aujourd'hui. Sur un projet de 20 ans d'exploitation, ca ajoute ~5 ans d'OPEX de garantie qui ne
-  devraient pas etre la (le cout reel s'arrete a l'annee 15). Ecart limite (le poste est petit
-  relativement au CAPEX total) mais pas nul — a corriger si le moteur financier gagne un jour une
-  notion d'OPEX variable par annee.
+- **A confirmer avec l'equipe OPEX (2026-10-05)** : unite de l'O&M ("k€/y" lu en k€/MWh/an),
+  lecture "total 15 ans" de la ligne garanties malgre son libelle "(annual)", perimetre de cette
+  ligne (recoupement avec l'O&M - chez Greensolver, l'O&M inclut deja la garantie de performance du
+  fabricant), multiplicateur 2032 = 1,0 de la ligne Batteries 2h (rupture par rapport a 1,007 en
+  2031), raccordement DSO a corriger a 300 k€ dans le fichier source. Avec la courbe des garanties,
+  notre O&M fixe sort 1,25 a 3,4 fois celui d'Aurora, surtout sur les petits projets.
 - **Pas de ligne "Total" dans le fichier ICP pour verifier l'agregation EPC Margin/Insurance a
   l'euro pres** (contrairement au CAPEX ligne "Battery system"/etc. d'Aurora, valide exactement
   contre `Advise Dev` du BP reel) — la formule d'agregation est confirmee par l'utilisateur

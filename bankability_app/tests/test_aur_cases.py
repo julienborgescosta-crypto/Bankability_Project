@@ -433,7 +433,9 @@ def test_repowering_capex_keur_uses_icp_battery_pcs_formula(copex_library):
     from core import copex_icp
 
     icp_library = copex_icp.load_icp_library_cached()
-    expected = copex_icp.icp_battery_pcs_keur(icp_library, duree_h=2, power_mw=1.0, cod_year=2041)
+    expected = copex_icp.icp_battery_pcs_keur(
+        icp_library, segment="DSO", duree_h=2, power_mw=1.0, cod_year=2041
+    )
     result = aur_cases.repowering_capex_keur(
         tension="HTA", duree_h=2, repowering_year=2041, power_mw=1.0, copex_library=copex_library
     )

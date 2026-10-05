@@ -1,15 +1,19 @@
-"""Lit `config/copex_icp.xlsx` (onglet `CAPEX_library`, "Hypothesys CAPEX BP
-from ICP") - couts unitaires QEF reels (Internal Cost Pricing), mis a jour
-mensuellement par l'utilisateur en remplacant ce fichier (meme nom, nouveau
-contenu - pas de changement de code requis a chaque mise a jour). Devient la
-source primaire du CAPEX/OPEX BESS, a la place de la bibliotheque Aurora
-`COPEX_library` (qui reste utilisee comme repli pour les postes qu'ICP ne
-couvre pas). Voir docs/specs/copex_icp.md pour les decisions de mapping et
-d'agregation (confirmees par l'utilisateur, 2026-09-24)."""
+"""Lit `config/copex_icp.xlsx` (COPEX Library QEF, onglet `COPEX_library`, table
+"Hypotheses CAPEX BP - BESS Standalone") - couts unitaires QEF reels, mis a jour
+par l'utilisateur en remplacant ce fichier (meme nom, nouveau contenu - pas de
+changement de code requis a chaque mise a jour). Source primaire du CAPEX/OPEX
+BESS, a la place de la bibliotheque Aurora `COPEX_library` (qui reste utilisee
+comme repli pour les postes que la COPEX Library ne couvre pas). Voir
+docs/specs/copex_icp.md pour les decisions de mapping et d'agregation.
+
+Lecture par libelle, jamais par adresse fixe : ligne d'en-tete "Case" (segments
+puis annees du "Forecast price factor"), lignes reperees par leur libelle en
+colonne A, unite lue dans le format de chaque cellule."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import re
+from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -26,31 +30,18 @@ from .dev_case import (
 )
 
 DEFAULT_ICP_PATH = Path(__file__).resolve().parent.parent / "config" / "copex_icp.xlsx"
-ICP_SHEET = "CAPEX_library"
+ICP_SHEETS = ("COPEX_library", "CAPEX_library")
 
 # Mapping tension -> segment ICP, reprenant le mapping deja etabli ailleurs
 # dans l'app (DSO -> HTA, TSO 63kV/90kV -> HTB1, TSO 225kV -> HTB2 - voir
 # docs/specs/dev_case.md "Deux taxonomies de segment coexistent"). TSO 90kV
 # retenu comme representant HTB1 (63kV et 90kV ne different que sur HV
-# Transformer/HV substation, ecart <12% - voir docs/specs/copex_icp.md).
+# Transformer/HV substation/Grid connection - voir docs/specs/copex_icp.md).
 # HTB3 n'a pas de colonne ICP (le fichier n'en a jamais eu) - reste
-# entierement source par Aurora, comme avant ce changement.
+# entierement source par Aurora.
 TENSION_TO_ICP_SEGMENT = {"HTA": "DSO", "HTB1": "TSO 90kV", "HTB2": "TSO 225kV"}
 
-SEGMENT_COLUMNS = {
-    "Industrial-New trench": 3,
-    "Industrial-Existing trench": 4,
-    "TSO 63kV": 5,
-    "TSO 90kV": 6,
-    "TSO 225kV": 7,
-    "DSO": 8,
-    "Hybrid PV": 9,
-}
-
-_YEAR_ROW = 4
-_FIRST_YEAR_COL = 12
-_LAST_YEAR_COL = 16
-
+_HEADER_LABEL = "Case"
 _DIRECT_CAPEX_LABELS = [
     "Electrical works and studies",
     "Civil Works and miscellaneous",
@@ -65,48 +56,47 @@ _OM_LABEL = "OPEX - O&M (annual cost)"
 _GRID_CONNECTION_LABEL = "Grid connection"
 _INSURANCE_LABEL = "Insurances during construction"
 _EPC_MARGIN_LABEL = "EPC Margin"
+_EPC_CONTINGENCY_LABEL = "EPC Contingency"
 _BATTERY_LABEL = "Batteries and PCS"
 _GUARANTEES_LABEL = "OPEX - Guarantees"
-_GUARANTEES_AMORTIZATION_YEARS = 15
+_DURATIONS_H = (2, 4)
+GUARANTEES_DURATION_YEARS = 15
+# "Forecast price factor (selon annee de NTP)" : les couts sont indexes sur
+# l'annee de debut de construction, l'annee avant la mise en service (decision
+# de l'utilisateur, 2026-10-05 - meme convention que le paiement du CAPEX).
+NTP_YEARS_BEFORE_COD = 1
+
+# =794.13*'[2]I-Project'!$G$28^(-0.61)*1000 : coefficient en €/kWh x MWh^exposant,
+# x1000 pour passer en €/MWh. La reference (taille du BP lie) est ignoree - la
+# formule est re-evaluee a la taille de chaque projet.
+_POWER_LAW_FORMULA = re.compile(
+    r"^=\s*(?P<coef>\d+(?:\.\d+)?)\s*\*.+\^\s*\(\s*(?P<exp>-?\d+(?:\.\d+)?)\s*\)\s*\*\s*1000\s*$"
+)
+
+
+@dataclass(frozen=True)
+class IcpPowerLaw:
+    """cout unitaire (€/kWh) = coefficient x MWh**exposant, MWh = taille du projet."""
+
+    coefficient_eur_per_kwh: float
+    exponent: float
 
 
 @dataclass(frozen=True)
 class IcpCostCell:
     value: float
     unit: str  # 'eur_per_mwh' | 'eur_per_mw' | 'keur_flat' | 'percent' | 'keur_per_mwh_per_year'
-
-
-@dataclass(frozen=True)
-class IcpPowerLawCost:
-    """cout_unitaire_eur_per_kwh(mwh) = base * mwh**exponent ; cout_total_keur
-    = cout_unitaire * mwh, escalade par annee (multiplicateur, pas un delta -
-    voir `_icp_escalation_factor`).
-
-    `base` est en EUR/**kWh** malgre le libelle Excel "€/MWh" des 2 lignes
-    concernees (Batteries and PCS, OPEX - Guarantees) - bug de mislabeling
-    du fichier source, confirme par l'utilisateur le 2026-09-24 : lu comme
-    €/MWh, `base=156.37` donnait un cout Batteries+PCS de ~10 k€ pour 80 MWh
-    (40 MW/2h), soit ~0.12 €/kWh installe - physiquement impossible pour une
-    batterie (plage reelle : 100-300+ €/kWh). Lu comme €/kWh, ce meme
-    coefficient tombe a moins de 1% de la valeur Aurora HTA validee
-    (18 670 k€), qui sert de point de recoupement independant - voir
-    docs/specs/copex_icp.md."""
-
-    base: float
-    exponent: float
-    escalation: dict[int, float]
+    power_law: IcpPowerLaw | None = None
 
 
 @dataclass(frozen=True)
 class IcpCostLibrary:
-    update_date: Any
-    inflation_rate: float
+    version: Any
     line_items: dict[str, dict[str, IcpCostCell]]  # label -> segment -> cellule
-    escalation: dict[str, dict[int, float]]  # label -> annee -> multiplicateur
-    battery_pcs: dict[int, IcpPowerLawCost]  # duree_h -> formule
-    opex_guarantees: dict[int, IcpPowerLawCost]  # duree_h -> formule
+    escalation: dict[str, dict[int, float]]  # label -> annee de NTP -> multiplicateur
     insurance_construction_pct: dict[str, float]  # segment -> %
     epc_margin_pct: dict[str, float]  # segment -> %
+    epc_contingency_pct: dict[str, float] = field(default_factory=dict)  # segment -> %
 
 
 def _unit_from_number_format(fmt: str) -> str:
@@ -116,91 +106,169 @@ def _unit_from_number_format(fmt: str) -> str:
     l'utilisateur, 2026-09-24)."""
     if "%" in fmt:
         return "percent"
-    if "MWh" in fmt and "/an" in fmt:
+    if "MWh" in fmt and ("/an" in fmt or "/y" in fmt):
         return "keur_per_mwh_per_year"
     if "/MWh" in fmt:
         return "eur_per_mwh"
     if "/MW" in fmt:
         return "eur_per_mw"
+    if "/an" in fmt or "/y" in fmt:
+        return "keur_per_year"
     return "keur_flat"
 
 
-def _find_row(ws, label_substring: str, *, after_row: int = 1) -> int:
-    for row in range(after_row, ws.max_row + 1):
+def _sheet(wb):
+    for name in ICP_SHEETS:
+        if name in wb.sheetnames:
+            return wb[name]
+    raise ValueError(f"None of the sheets {ICP_SHEETS} found (available: {wb.sheetnames}).")
+
+
+def _find_row(ws, *label_parts: str) -> int:
+    """1re ligne dont le libelle (colonne A) contient tous les morceaux - le
+    bloc ICP precede les blocs Aurora de reference du meme onglet, qui
+    reutilisent certains libelles ('Grid connection')."""
+    for row in range(1, ws.max_row + 1):
         value = ws.cell(row=row, column=1).value
-        if isinstance(value, str) and label_substring in value:
+        if isinstance(value, str) and all(part in value for part in label_parts):
             return row
-    raise ValueError(f"Row '{label_substring}' not found in sheet {ICP_SHEET}.")
+    raise ValueError(f"Row {' + '.join(repr(p) for p in label_parts)} not found in {ws.title}.")
 
 
-def _read_escalation(ws, row: int) -> dict[int, float]:
-    escalation: dict[int, float] = {}
-    for col in range(_FIRST_YEAR_COL, _LAST_YEAR_COL + 1):
-        year = ws.cell(row=_YEAR_ROW, column=col).value
-        multiplier = ws.cell(row=row, column=col).value
-        if isinstance(year, (int, float)) and isinstance(multiplier, (int, float)):
-            escalation[int(year)] = float(multiplier)
-    return escalation
+def _header(ws) -> tuple[int, dict[int, str], dict[int, int]]:
+    """(ligne d'en-tete, {colonne: segment}, {colonne: annee}) - les segments
+    precedent la 1re annee du "Forecast price factor" sur la ligne "Case"."""
+    row = next(
+        (
+            r
+            for r in range(1, ws.max_row + 1)
+            if isinstance(ws.cell(r, 1).value, str) and ws.cell(r, 1).value.strip() == _HEADER_LABEL
+        ),
+        None,
+    )
+    if row is None:
+        raise ValueError(f"Header row '{_HEADER_LABEL}' not found in {ws.title}.")
+    segments: dict[int, str] = {}
+    years: dict[int, int] = {}
+    for col in range(2, ws.max_column + 1):
+        value = ws.cell(row, col).value
+        if isinstance(value, (int, float)) and 2000 <= value <= 2100:
+            years[col] = int(value)
+        elif isinstance(value, str) and value.strip() and not years:
+            segments[col] = value.strip()
+    return row, segments, years
 
 
-def _read_line_item_row(ws, row: int) -> dict[str, IcpCostCell]:
+def _read_escalation(ws, row: int, years: dict[int, int]) -> dict[int, float]:
+    return {
+        year: float(ws.cell(row, col).value)
+        for col, year in years.items()
+        if isinstance(ws.cell(row, col).value, (int, float))
+    }
+
+
+def _read_line_item_row(
+    ws_values, ws_formulas, row: int, segments: dict[int, str]
+) -> dict[str, IcpCostCell]:
+    """Une cellule par segment. 2 colonnes peuvent porter le meme segment
+    ('DSO' 2h/4h) : acceptees seulement si elles sont identiques, jamais un
+    choix silencieux entre 2 valeurs differentes."""
     by_segment: dict[str, IcpCostCell] = {}
-    for segment, col in SEGMENT_COLUMNS.items():
-        cell = ws.cell(row=row, column=col)
-        if not isinstance(cell.value, (int, float)):
-            continue  # ex. "= TSO 63/90/225" (texte de renvoi, pas une valeur exploitable)
-        by_segment[segment] = IcpCostCell(
-            value=float(cell.value), unit=_unit_from_number_format(cell.number_format)
-        )
+    for col, segment in segments.items():
+        cell = ws_values.cell(row, col)
+        formula = ws_formulas.cell(row, col).value
+        match = _POWER_LAW_FORMULA.match(formula) if isinstance(formula, str) else None
+        if match:
+            parsed = IcpCostCell(
+                value=float(cell.value) if isinstance(cell.value, (int, float)) else 0.0,
+                unit="eur_per_mwh",
+                power_law=IcpPowerLaw(float(match["coef"]), float(match["exp"])),
+            )
+        elif isinstance(cell.value, (int, float)):
+            parsed = IcpCostCell(
+                value=float(cell.value), unit=_unit_from_number_format(cell.number_format)
+            )
+        else:
+            continue  # texte de renvoi (ex. "= TSO 63/90/225"), pas une valeur exploitable
+        previous = by_segment.get(segment)
+        if previous is not None and (
+            previous.power_law != parsed.power_law
+            or (parsed.power_law is None and previous != parsed)
+        ):
+            raise ValueError(
+                f"{ws_values.title}!{cell.coordinate}: two '{segment}' columns with different "
+                f"values ({previous} vs {parsed}) - the app maps one column per segment."
+            )
+        by_segment.setdefault(segment, parsed)
     return by_segment
 
 
-def _read_power_law(ws, row: int) -> IcpPowerLawCost:
-    base = float(ws.cell(row=row, column=8).value)  # colonne H
-    exponent = float(ws.cell(row=row, column=10).value)  # colonne J
-    return IcpPowerLawCost(base=base, exponent=exponent, escalation=_read_escalation(ws, row))
+def _version(ws) -> Any:
+    """Version du fichier (ex. 'V1_20261001' en B1) ou date de mise a jour."""
+    for row in ws.iter_rows(min_row=1, max_row=3):
+        for cell in row:
+            if hasattr(cell.value, "year"):
+                return cell.value
+            if isinstance(cell.value, str) and re.match(r"^V\d", cell.value.strip()):
+                return cell.value.strip()
+    return None
 
 
 def load_icp_library(path: Path = DEFAULT_ICP_PATH) -> IcpCostLibrary:
-    wb = openpyxl.load_workbook(path, data_only=True, read_only=False, keep_links=False)
-    ws = wb[ICP_SHEET]
+    ws = _sheet(openpyxl.load_workbook(path, data_only=True, keep_links=False))
+    ws_formulas = _sheet(openpyxl.load_workbook(path, data_only=False, keep_links=False))
+    _, segments, years = _header(ws)
 
-    update_date = ws.cell(row=2, column=3).value
-    inflation_rate = float(ws.cell(row=2, column=15).value)
-
-    battery_row_2h = _find_row(ws, _BATTERY_LABEL)
-    battery_pcs = {
-        2: _read_power_law(ws, battery_row_2h),
-        4: _read_power_law(ws, battery_row_2h + 1),
+    rows = {
+        label: _find_row(ws, label) for label in [*_DIRECT_CAPEX_LABELS, _GRID_CONNECTION_LABEL]
     }
+    rows[_OM_LABEL] = _find_row(ws, _OM_LABEL)
+    for duree_h in _DURATIONS_H:
+        rows[battery_label(duree_h)] = _find_row(ws, _BATTERY_LABEL, f"- {duree_h}h")
+        rows[guarantees_label(duree_h)] = _find_row(ws, _GUARANTEES_LABEL, f"- {duree_h}h")
 
-    guarantees_row_2h = _find_row(ws, _GUARANTEES_LABEL)
-    opex_guarantees = {
-        2: _read_power_law(ws, guarantees_row_2h),
-        4: _read_power_law(ws, guarantees_row_2h + 1),
-    }
-
-    flat_labels = [*_DIRECT_CAPEX_LABELS, _OM_LABEL, _GRID_CONNECTION_LABEL]
     line_items: dict[str, dict[str, IcpCostCell]] = {}
     escalation: dict[str, dict[int, float]] = {}
-    for label in flat_labels:
-        row = _find_row(ws, label)
-        line_items[label] = _read_line_item_row(ws, row)
-        escalation[label] = _read_escalation(ws, row)
+    for label, row in rows.items():
+        line_items[label] = _read_line_item_row(ws, ws_formulas, row, segments)
+        escalation[label] = _read_escalation(ws, row, years)
+    # O&M en "k€/y" (V1_20261001) : 2 k€/an pour tout un projet n'a pas de sens - c'est
+    # la meme valeur que la version precedente, en k€/MWh/an (decision 2026-10-05, a
+    # confirmer par l'equipe OPEX - voir docs/specs/copex_icp.md).
+    line_items[_OM_LABEL] = {
+        segment: (
+            IcpCostCell(cell.value, "keur_per_mwh_per_year")
+            if cell.unit == "keur_per_year"
+            else cell
+        )
+        for segment, cell in line_items[_OM_LABEL].items()
+    }
 
-    insurance_by_segment = _read_line_item_row(ws, _find_row(ws, _INSURANCE_LABEL))
-    epc_by_segment = _read_line_item_row(ws, _find_row(ws, _EPC_MARGIN_LABEL))
+    def _pct(label: str) -> dict[str, float]:
+        try:
+            row = _find_row(ws, label)
+        except ValueError:
+            return {}
+        return {
+            seg: c.value for seg, c in _read_line_item_row(ws, ws_formulas, row, segments).items()
+        }
 
     return IcpCostLibrary(
-        update_date=update_date,
-        inflation_rate=inflation_rate,
+        version=_version(ws),
         line_items=line_items,
         escalation=escalation,
-        battery_pcs=battery_pcs,
-        opex_guarantees=opex_guarantees,
-        insurance_construction_pct={seg: c.value for seg, c in insurance_by_segment.items()},
-        epc_margin_pct={seg: c.value for seg, c in epc_by_segment.items()},
+        insurance_construction_pct=_pct(_INSURANCE_LABEL),
+        epc_margin_pct=_pct(_EPC_MARGIN_LABEL),
+        epc_contingency_pct=_pct(_EPC_CONTINGENCY_LABEL),
     )
+
+
+def battery_label(duree_h: int) -> str:
+    return f"{_BATTERY_LABEL} - {duree_h}h"
+
+
+def guarantees_label(duree_h: int) -> str:
+    return f"{_GUARANTEES_LABEL} - {duree_h}h"
 
 
 @lru_cache(maxsize=4)
@@ -216,45 +284,34 @@ def load_icp_library_cached(path: Path = DEFAULT_ICP_PATH) -> IcpCostLibrary:
     return _cached_icp_library(str(path))
 
 
-def _icp_escalation_factor(escalation: dict[int, float], cod_year: int) -> float:
-    """Meme philosophie de plafonnement que `dev_case.escalated_unit_cost`,
-    mais convention multiplicative (pas un delta) : le fichier ICP donne un
-    multiplicateur relatif a l'annee de base (colonne K, ~2026, valeur 1.0),
-    pas un pourcentage de variation."""
+def _icp_escalation_factor(escalation: dict[int, float], ntp_year: int) -> float:
+    """Multiplicateur du "Forecast price factor" pour cette annee de NTP - 1.0
+    avant la 1re annee de la table (annee de base), plafonne sur la derniere
+    annee connue au-dela (meme philosophie que `dev_case.escalated_unit_cost`)."""
     if not escalation:
         return 1.0
-    if cod_year in escalation:
-        return escalation[cod_year]
+    if ntp_year in escalation:
+        return escalation[ntp_year]
     years = sorted(escalation)
-    if cod_year > years[-1]:
+    if ntp_year > years[-1]:
         return escalation[years[-1]]
     return 1.0
 
 
 def _scaled_cost_keur(cell: IcpCostCell, *, power_mw: float, duree_h: int) -> float:
     mwh = power_mw * duree_h
+    if cell.power_law is not None:
+        # €/kWh x MWh = k€
+        return cell.power_law.coefficient_eur_per_kwh * mwh**cell.power_law.exponent * mwh
     if cell.unit == "eur_per_mwh":
         return cell.value * mwh / 1000.0
     if cell.unit == "eur_per_mw":
         return cell.value * power_mw / 1000.0
-    if cell.unit == "keur_flat":
+    if cell.unit in ("keur_flat", "keur_per_year"):
         return cell.value
     if cell.unit == "keur_per_mwh_per_year":
         return cell.value * mwh
     raise ValueError(f"Unknown ICP unit: '{cell.unit}'.")
-
-
-def _power_law_cost_keur(
-    formula: IcpPowerLawCost, *, power_mw: float, duree_h: int, cod_year: int
-) -> float:
-    """`formula.base` est en EUR/kWh (voir `IcpPowerLawCost`) : cout total EUR
-    = unit_cost(EUR/kWh) x kWh_total(mwh x 1000) ; cout total k€ = /1000 de ce
-    montant, donc numeriquement `unit_cost x mwh` (le x1000/1000 s'annule) -
-    PAS de division supplementaire par 1000."""
-    mwh = power_mw * duree_h
-    unit_cost_eur_per_kwh = formula.base * mwh**formula.exponent
-    escalation = _icp_escalation_factor(formula.escalation, cod_year)
-    return unit_cost_eur_per_kwh * escalation * mwh
 
 
 def _icp_line_item_keur(
@@ -266,42 +323,58 @@ def _icp_line_item_keur(
     duree_h: int,
     cod_year: int,
 ) -> float | None:
+    """Cout k€ d'une ligne pour une mise en service en `cod_year`, indexe sur
+    l'annee de NTP (`cod_year - NTP_YEARS_BEFORE_COD`). `None` si la ligne n'a
+    pas de valeur pour ce segment."""
     cell = icp_library.line_items[label].get(segment)
     if cell is None:
         return None
-    # `escalation[label]` est {annee: multiplicateur}, le meme pour les 7
-    # colonnes d'une ligne (verifie sur le fichier reel) - pas de dimension
-    # segment ici, voir `_read_escalation`.
-    escalation = _icp_escalation_factor(icp_library.escalation[label], cod_year)
+    escalation = _icp_escalation_factor(
+        icp_library.escalation[label], cod_year - NTP_YEARS_BEFORE_COD
+    )
     return _scaled_cost_keur(cell, power_mw=power_mw, duree_h=duree_h) * escalation
 
 
 def icp_battery_pcs_keur(
-    icp_library: IcpCostLibrary, *, duree_h: int, power_mw: float, cod_year: int
+    icp_library: IcpCostLibrary, *, segment: str, duree_h: int, power_mw: float, cod_year: int
 ) -> float:
-    if duree_h not in icp_library.battery_pcs:
-        raise ValueError(f"No ICP Batteries and PCS formula for {duree_h}h.")
-    return _power_law_cost_keur(
-        icp_library.battery_pcs[duree_h], power_mw=power_mw, duree_h=duree_h, cod_year=cod_year
+    label = battery_label(duree_h)
+    if label not in icp_library.line_items:
+        raise ValueError(f"No ICP Batteries and PCS line for {duree_h}h.")
+    cost = _icp_line_item_keur(
+        icp_library, label, segment, power_mw=power_mw, duree_h=duree_h, cod_year=cod_year
     )
+    if cost is None:
+        raise ValueError(f"No ICP Batteries and PCS value for {duree_h}h / {segment}.")
+    return cost
 
 
 def icp_opex_guarantees_annualized_keur(
-    icp_library: IcpCostLibrary, *, duree_h: int, power_mw: float, cod_year: int
+    icp_library: IcpCostLibrary, *, segment: str, duree_h: int, power_mw: float, cod_year: int
 ) -> float:
-    """Cout total de garantie/maintenance preventive sur 15 ans (confirme par
-    l'utilisateur, 2026-09-24), etale lineairement sur ces 15 ans - le moteur
-    financier n'a pas de notion d'OPEX variable dans le temps aujourd'hui
-    (`opex_year1_keur` est repete identique chaque annee), donc cet etalement
-    devient une addition CONSTANTE a l'OPEX annuel plutot qu'une charge
-    limitee aux 15 premieres annees - simplification documentee, voir
-    docs/specs/copex_icp.md "Questions ouvertes"."""
-    if duree_h not in icp_library.opex_guarantees:
-        raise ValueError(f"No ICP OPEX Guarantees formula for {duree_h}h.")
-    total_15y = _power_law_cost_keur(
-        icp_library.opex_guarantees[duree_h], power_mw=power_mw, duree_h=duree_h, cod_year=cod_year
+    """Garanties & maintenance preventive : la valeur du fichier est un cout total
+    sur 15 ans (decision de l'utilisateur, 2026-10-05, malgre le libelle
+    "(annual)" de la V1_20261001), etale sur 15 ans et paye chaque annee de la vie
+    du projet (decision du 2026-10-02)."""
+    label = guarantees_label(duree_h)
+    if label not in icp_library.line_items:
+        raise ValueError(f"No ICP OPEX Guarantees line for {duree_h}h.")
+    total_15y = _icp_line_item_keur(
+        icp_library, label, segment, power_mw=power_mw, duree_h=duree_h, cod_year=cod_year
     )
-    return total_15y / _GUARANTEES_AMORTIZATION_YEARS
+    if total_15y is None:
+        raise ValueError(f"No ICP OPEX Guarantees value for {duree_h}h / {segment}.")
+    return total_15y / GUARANTEES_DURATION_YEARS
+
+
+def construction_markup_factor(icp_library: IcpCostLibrary, segment: str) -> float:
+    """(1 + marge EPC) x (1 + aleas EPC) x (1 + assurance construction) - appliques
+    aux postes directs de construction, jamais au raccordement ni au developpement."""
+    return (
+        (1 + icp_library.epc_margin_pct.get(segment, 0.0))
+        * (1 + icp_library.epc_contingency_pct.get(segment, 0.0))
+        * (1 + icp_library.insurance_construction_pct.get(segment, 0.0))
+    )
 
 
 def icp_capex_total_keur(
@@ -319,8 +392,8 @@ def icp_capex_total_keur(
 
     (somme des postes directs ICP : Batteries+PCS, Electrical works, Civil
     works, HV Transformer, HV/MV substation, Communication, Other BoP,
-    Integration) x (1 + EPC Margin) x (1 + Insurance during construction)
-    + Development (additif, hors perimetre EPC/assurance construction - couts
+    Integration) x (1 + EPC Margin) x (1 + EPC Contingency) x (1 + Insurance
+    during construction) - voir `construction_markup_factor` - + Development (additif, hors perimetre EPC/assurance construction - couts
     de developpement/origination, pas de construction - voir
     docs/specs/copex_icp.md) : `development_keur` si fourni (le DSA du projet,
     voir `portfolio.resolved_devex_and_dsa_keur`), sinon la ligne Aurora.
@@ -368,12 +441,10 @@ def icp_capex_total_keur(
             continue
         direct_keur += item_cost
     direct_keur += icp_battery_pcs_keur(
-        icp_library, duree_h=duree_h, power_mw=power_mw, cod_year=cod_year
+        icp_library, segment=segment, duree_h=duree_h, power_mw=power_mw, cod_year=cod_year
     )
 
-    epc_margin = icp_library.epc_margin_pct.get(segment, 0.0)
-    insurance_pct = icp_library.insurance_construction_pct.get(segment, 0.0)
-    construction_keur = direct_keur * (1 + epc_margin) * (1 + insurance_pct)
+    construction_keur = direct_keur * construction_markup_factor(icp_library, segment)
 
     if development_keur is None:
         key = voltage_duration_key(tension, duree_h)
@@ -439,7 +510,7 @@ def icp_eol_eligible_capex_keur(
         is not None
     )
     direct_keur += icp_battery_pcs_keur(
-        icp_library, duree_h=duree_h, power_mw=power_mw, cod_year=cod_year
+        icp_library, segment=segment, duree_h=duree_h, power_mw=power_mw, cod_year=cod_year
     )
     return direct_keur
 
@@ -545,7 +616,7 @@ def icp_opex_year1_keur(
         )
 
     guarantees_cost = icp_opex_guarantees_annualized_keur(
-        icp_library, duree_h=duree_h, power_mw=power_mw, cod_year=cod_year
+        icp_library, segment=segment, duree_h=duree_h, power_mw=power_mw, cod_year=cod_year
     )
 
     fallback_labels = ["Insurance", "Grid charges", "Land lease", "Accise", "Other"]
@@ -585,7 +656,11 @@ def icp_repowering_capex_keur(
     segment = TENSION_TO_ICP_SEGMENT.get(tension)
     if segment is not None:
         cost = icp_battery_pcs_keur(
-            icp_library, duree_h=duree_h, power_mw=power_mw, cod_year=repowering_year
+            icp_library,
+            segment=segment,
+            duree_h=duree_h,
+            power_mw=power_mw,
+            cod_year=repowering_year,
         )
         return cost, []
     key = voltage_duration_key(tension, duree_h)
@@ -619,8 +694,9 @@ def capex_opex_source_notes(tension: str) -> list[str]:
         ]
     return [
         "CAPEX (Batteries+PCS, travaux electriques/civils, postes HV/MV, communication, "
-        "raccordement, marge EPC, assurance construction) : source ICP "
-        f"(config/copex_icp.xlsx, segment '{TENSION_TO_ICP_SEGMENT[tension]}').",
+        "raccordement, marge et aleas EPC, assurance construction) : source COPEX Library "
+        f"(config/copex_icp.xlsx, segment '{TENSION_TO_ICP_SEGMENT[tension]}'), indexe sur "
+        "l'annee de NTP (COD - 1).",
         "CAPEX Development : DSA du projet (marge de dev cible par MW selon la duree + DEVEX "
         "selon la tension, ou l'override DSA) - absent d'ICP. Jamais en OPEX.",
         "OPEX O&M + garanties/maintenance preventive (15 ans, etalees) : source ICP.",

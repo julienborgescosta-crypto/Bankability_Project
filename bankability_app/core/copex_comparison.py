@@ -84,6 +84,7 @@ from .copex_icp import (
     TENSION_TO_ICP_SEGMENT,
     IcpCostLibrary,
     _icp_line_item_keur,
+    construction_markup_factor,
     icp_battery_pcs_keur,
     icp_connection_capex_keur,
     icp_opex_guarantees_annualized_keur,
@@ -206,13 +207,11 @@ def _icp_core_and_substation_keur(
         return total
 
     core_direct_keur = _sum(_ICP_CORE_LABELS) + icp_battery_pcs_keur(
-        icp_library, duree_h=duree_h, power_mw=power_mw, cod_year=cod_year
+        icp_library, segment=segment, duree_h=duree_h, power_mw=power_mw, cod_year=cod_year
     )
     substation_direct_keur = _sum(_ICP_SUBSTATION_LABELS)
 
-    epc_margin = icp_library.epc_margin_pct.get(segment, 0.0)
-    insurance_pct = icp_library.insurance_construction_pct.get(segment, 0.0)
-    factor = (1 + epc_margin) * (1 + insurance_pct)
+    factor = construction_markup_factor(icp_library, segment)
     return core_direct_keur * factor, substation_direct_keur * factor, missing
 
 
@@ -399,7 +398,7 @@ def compare_capex_opex(
     )
     guarantees_keur = (
         icp_opex_guarantees_annualized_keur(
-            icp_library, duree_h=duree_h, power_mw=power_mw, cod_year=cod_year
+            icp_library, segment=segment, duree_h=duree_h, power_mw=power_mw, cod_year=cod_year
         )
         if segment is not None
         else 0.0
