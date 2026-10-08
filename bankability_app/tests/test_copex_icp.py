@@ -201,19 +201,45 @@ def test_icp_opex_guarantees_order_of_magnitude_is_realistic(icp_library):
 
 
 def test_icp_opex_guarantees_formula_is_reevaluated_at_project_size(icp_library):
-    """La V1_20261001 calcule la garantie avec une formule liee a la taille d'un BP
-    (=794.13*'[2]I-Project'!$G$28^(-0.61)*1000, 80 MWh en cache) : on garde la loi
-    de puissance, re-evaluee a la taille de chaque projet, et la valeur est un total
-    sur 15 ans etale sur 15 ans (decision du 2026-10-05)."""
+    """La V1_20261001 calculait la garantie avec une formule Excel liee a la taille
+    d'un BP (=794.13*'[2]I-Project'!$G$28^(-0.61)*1000, 80 MWh en cache) ; depuis le
+    2026-10-08 (2e revision), reecrite en texte descriptif du meme calcul ("794,13 ×
+    MWh^(-0,61) k€/MWh", plus de valeur en cache puisque ce n'est plus une formule
+    Excel executable - voir `_TEXT_POWER_LAW_FORMULA`) : meme coefficient/exposant,
+    on garde la loi de puissance, re-evaluee a la taille de chaque projet, et la
+    valeur est un total sur 15 ans etale sur 15 ans (decision du 2026-10-05)."""
     cell = icp_library.line_items[copex_icp.guarantees_label(2)]["DSO"]
     assert cell.power_law is not None
     assert cell.power_law.coefficient_eur_per_kwh == pytest.approx(794.13)
     assert cell.power_law.exponent == pytest.approx(-0.61)
-    assert cell.value == pytest.approx(794.13 * 80**-0.61 * 1000)  # valeur en cache, 80 MWh
     annualized = copex_icp.icp_opex_guarantees_annualized_keur(
         icp_library, segment="DSO", duree_h=2, power_mw=10.0, cod_year=2027
     )
     assert annualized == pytest.approx(794.13 * 20.0**-0.61 * 20.0 / 15)
+
+
+def test_icp_opex_guarantees_prorates_over_longer_project_life(icp_library):
+    """Demande de l'utilisateur, 2026-10-08 : la garantie couvre 15 ans - pour un
+    projet de 20 ans, payer au prorata (total x 20/15, soit une periode complete +
+    le prorata des 5 annees restantes) ; pour 30 ans, exactement x2 (2 periodes
+    completes). Le moteur applique deja ce comportement par construction : le taux
+    annualise (total_15y / 15) est paye identiquement chaque annee de la vie du
+    projet (aur_cases.opex_series_keur, OPEX plat), donc le total sur N annees vaut
+    automatiquement total_15y x N/15 - verifie ici arithmetiquement."""
+    total_15y = copex_icp._icp_line_item_keur(
+        icp_library,
+        copex_icp.guarantees_label(2),
+        "DSO",
+        power_mw=40.0,
+        duree_h=2,
+        cod_year=2028,
+    )
+    annualized = copex_icp.icp_opex_guarantees_annualized_keur(
+        icp_library, segment="DSO", duree_h=2, power_mw=40.0, cod_year=2028
+    )
+    assert annualized == pytest.approx(total_15y / copex_icp.GUARANTEES_DURATION_YEARS)
+    assert annualized * 20 == pytest.approx(total_15y * 20 / 15)
+    assert annualized * 30 == pytest.approx(total_15y * 2)
 
 
 def test_icp_costs_are_indexed_on_ntp_year(icp_library):

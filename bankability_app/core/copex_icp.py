@@ -92,6 +92,19 @@ _POWER_LAW_FORMULA = re.compile(
     r"^=\s*(?P<coef>\d+(?:\.\d+)?)\s*\*.+\^\s*\(\s*(?P<exp>-?\d+(?:\.\d+)?)\s*\)\s*\*\s*1000\s*$"
 )
 
+# Depuis le 2026-10-08 (2e revision), "OPEX - Guarantees & prev maint" n'est
+# plus une formule Excel executable (lien externe vers I-Project retire a
+# chaque installation, voir ci-dessus) mais un TEXTE descriptif du meme calcul
+# ("794,13 × MWh^(-0,61) k€/MWh") - demande de l'utilisateur ("j'ai remis les
+# formules"). Meme coefficient/exposant que l'ancienne formule Excel (verifie :
+# 794.13/-0.61 pour le 2h) -> meme interpretation (`coefficient_eur_per_kwh`,
+# voir IcpPowerLaw) malgre le suffixe "k€/MWh" du texte, qui ne change pas
+# cette convention deja validee (cf. "Bugs corriges" - le libelle Excel a deja
+# ete mislabeled une fois sans que la convention change).
+_TEXT_POWER_LAW_FORMULA = re.compile(
+    r"^(?P<coef>[\d  ]+(?:,\d+)?)\s*×\s*MWh\^\(\s*(?P<exp>-?\d+(?:,\d+)?)\s*\)\s*k€/MWh$"
+)
+
 # Les 2 nouvelles lignes ICP "Asset Management operation"/"Insurances operation"
 # (V2, 2026-10-08) ne sont pas des nombres mais du texte compose ("400€/MWh +
 # 18k€", "0,45% + 1y income") - jamais interprete par approximation : si le
@@ -104,7 +117,7 @@ _PCT_PLUS_1Y_INCOME_FORMULA = re.compile(r"^(?P<pct>\d+(?:[.,]\d+)?)% \+ 1y inco
 
 
 def _fr_float(text: str) -> float:
-    return float(text.replace(",", "."))
+    return float(text.replace(" ", "").replace(" ", "").replace(",", "."))
 
 
 @dataclass(frozen=True)
@@ -255,11 +268,22 @@ def _read_line_item_row(
         cell = ws_values.cell(row, col)
         formula = ws_formulas.cell(row, col).value
         match = _POWER_LAW_FORMULA.match(formula) if isinstance(formula, str) else None
+        text_match = (
+            _TEXT_POWER_LAW_FORMULA.match(cell.value.strip())
+            if match is None and isinstance(cell.value, str)
+            else None
+        )
         if match:
             parsed = IcpCostCell(
                 value=float(cell.value) if isinstance(cell.value, (int, float)) else 0.0,
                 unit="eur_per_mwh",
                 power_law=IcpPowerLaw(float(match["coef"]), float(match["exp"])),
+            )
+        elif text_match:
+            parsed = IcpCostCell(
+                value=0.0,
+                unit="eur_per_mwh",
+                power_law=IcpPowerLaw(_fr_float(text_match["coef"]), _fr_float(text_match["exp"])),
             )
         elif isinstance(cell.value, (int, float)):
             parsed = IcpCostCell(

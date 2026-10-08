@@ -149,6 +149,33 @@ Asset Management 40 k€/an) n'est pas utilise.
     charges`/`Accise` restent "Info only" = Aurora des 2 cotes (le calcul precis
     `opex_grid_charges` n'est pas encore reflete dans cet ecran de comparaison poste par poste -
     limite documentee, voir `docs/specs/opex_grid_charges.md`).
+- **V2 ter - formule de "OPEX - Guarantees & prev maint" restauree en texte (2026-10-08, 3e revision
+  du meme jour)** : l'utilisateur a "remis les formules" sur cette ligne (perdue lors de
+  l'aplatissement en valeurs fixes des revisions precedentes - 54 828,54/28 375,89 €/MWh pour
+  2h/4h). Contrairement a l'ancienne formule Excel (`=794.13*'[2]I-Project'!$G$28^(-0.61)*1000`,
+  avec une reference externe retiree a chaque installation), la loi de puissance est maintenant du
+  **texte descriptif**, pas une formule Excel executable : `"794,13 × MWh^(-0,61) k€/MWh"` (2h),
+  `"1 408 × MWh^(-0,891) k€/MWh"` (4h) - memes libelles de ligne suffixes d'un "(15 y)" explicite,
+  pour clarifier que la valeur est un total sur 15 ans (confirme par l'utilisateur, deja la
+  convention du moteur depuis le 2026-10-02, voir plus bas). Meme coefficient/exposant que l'ancienne
+  formule (verifie : 794.13/-0.61 reproduit l'ordre de grandeur historiquement valide, "170-300 k€/an
+  pour 40 MW 2h") → meme interpretation du coefficient (`eur_per_kwh`, voir "Bugs corriges"),
+  malgre le suffixe de texte "k€/MWh" qui suggererait une autre unite - meme precedent que le
+  mislabeling Excel deja rencontre, pas une raison de changer la convention deja validee. Nouveau
+  parseur `_TEXT_POWER_LAW_FORMULA` (sur `cell.value`, pas `ws_formulas` puisque ce n'est plus une
+  formule) en complement de `_POWER_LAW_FORMULA` (garde la compatibilite si une future version
+  revient a une vraie formule Excel).
+  - **Confirmation explicite de l'utilisateur sur le prorata au-dela de 15 ans** : "si projet 20 ans
+    faire pro-rata pour l'instant et si 30 ans x 2". Deja le comportement du moteur PAR CONSTRUCTION,
+    sans changement de code necessaire : le taux annualise (`total_15y / GUARANTEES_DURATION_YEARS`)
+    est applique identiquement **chaque annee de la vie du projet** quelle que soit sa duree
+    (`aur_cases.opex_series_keur`, convention OPEX plat) - le total paye sur N annees vaut donc
+    automatiquement `total_15y x N/15` : 20/15 = 1,33x (prorata d'une periode partielle), 30/15 = 2x
+    (2 periodes completes). Verrouille par
+    `tests/test_copex_icp.py::test_icp_opex_guarantees_prorates_over_longer_project_life`. Limite
+    assumee (deja documentee) : pas de vrai "saut" a l'annee 15/30 (rachat explicite d'un 2e
+    contrat) - juste un lissage continu, different d'un vrai echeancier d'achat mais
+    mathematiquement equivalent au total.
 - **Installer une nouvelle version** : `.venv\Scripts\python.exe sample_data/install_copex_library.py
   "<COPEX LIBRARY.xlsx>" [--dso-grid-connection-keur 300]`. Le script copie le classeur dans
   `config/copex_icp.xlsx` en travaillant sur son XML (openpyxl effacerait les valeurs en cache des
