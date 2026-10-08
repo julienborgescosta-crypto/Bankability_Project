@@ -23,8 +23,14 @@ def test_total_capex_row_sums_construction_development_and_grid(icp_library, cop
     grid_combined = next(
         r for r in comparison.capex_rows if r.label.startswith("Grid connection &")
     )
+    asset_mgmt_construction = next(
+        r for r in comparison.capex_rows if r.label.startswith("Asset Management (construction)")
+    )
     assert total.ours_keur == pytest.approx(
-        core.ours_keur + development.ours_keur + grid_combined.ours_keur
+        core.ours_keur
+        + development.ours_keur
+        + grid_combined.ours_keur
+        + asset_mgmt_construction.ours_keur
     )
     assert total.aurora_keur == pytest.approx(
         core.aurora_keur + development.aurora_keur + grid_combined.aurora_keur
@@ -131,7 +137,12 @@ def test_opex_info_only_row_identical_both_sides(icp_library, copex_library):
         icp_library=icp_library,
         aurora_library=copex_library,
     )
-    info_row = next(r for r in comparison.opex_rows if not r.comparable and "TOTAL" not in r.label)
+    # "Grid charges"/"Accise" restent lus identiquement des 2 cotes (meme
+    # bibliotheque Aurora par defaut) - "Asset Management (operation)" est
+    # aussi non comparable mais n'a pas d'equivalent Aurora (toujours 0 cote
+    # "aurora"), donc exclu ici.
+    info_row = next(r for r in comparison.opex_rows if "Grid charges" in r.label)
+    assert not info_row.comparable
     assert info_row.ours_keur == pytest.approx(info_row.aurora_keur)
     assert info_row.status == "Info only"
 

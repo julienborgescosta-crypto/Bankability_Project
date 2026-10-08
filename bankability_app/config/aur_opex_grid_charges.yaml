@@ -1,0 +1,56 @@
+# TURPE Power (frais reseau fixe+variable par tension), CTA (% de TURPE Power)
+# et Accise sur l'electricite (taxe, base auxiliaires + pertes de stockage) -
+# postes "Autres OPEX" du BP reel non couverts par la COPEX Library (ICP) ni
+# par Aurora COPEX_library (demande de l'utilisateur, 2026-10-08). Source :
+# 081026_BP_Stockage_Standalone__.xlsm, onglets I-Fixed (tables de taux) et
+# C-SPV (formules de composition) - voir docs/specs/opex_grid_charges.md.
+
+# I-Fixed!E74:E77 (Charges - Variable) et E79:E82 (Charges - Fixed, "CAG/CAC").
+turpe_power_fixed_fee_keur:
+  HTA: 0.88
+  HTB1: 12.35
+  HTB2: 12.35
+  HTB3: 12.35
+turpe_power_variable_fee_keur_per_mw:
+  HTA: 14.51
+  HTB1: 11.76
+  HTB2: 3.48
+  HTB3: 0.0
+
+# I-Fixed!G86:G87 - "CTA rate - TSO / GRT (HTB)" (0.15) / "- DSO / GRD (HTA/BT)"
+# (0.05). CTA = taux x TURPE Power TOTAL (fixe + variable), pas juste la part
+# fixe au sens strict - verifie exactement contre C-SPV (0.05 x 14 123.575 k€
+# = 706.179 k€, valeur source du BP).
+cta_rate_pct:
+  HTA: 0.05
+  HTB1: 0.15
+  HTB2: 0.15
+  HTB3: 0.15
+
+# I-Fixed!E71/E70 - tarif reel (euros constants), base = auxiliaires + pertes
+# reseau (charge x (1 - rendement aller-retour)) si "Applicable on lost energy
+# from the grid?" est vrai.
+accise_tariff_eur_per_mwh: 26.35
+accise_includes_losses: true
+# Rendement aller-retour utilise pour la base Accise (valeur donnee par
+# l'utilisateur, 2026-10-08) - la recalculer depuis un cas BP reel donne
+# ~85.0% (82 300.69 MWh pertes / 547 923.89 MWh charges = 1 - 0.8498), proche
+# mais pas identique a 86% (arrondis differents selon le cas) : on retient la
+# valeur donnee par l'utilisateur, pas le recalcul cas-par-cas.
+round_trip_efficiency_pct: 0.86
+
+# I-Project!E105 / C-SPV!E352 - "Auxiliaries consumption" = -0.025 MWh par MWh
+# AC (nameplate = power_mw x duree_h) et par an. Sert uniquement de volume
+# d'entree pour l'assiette Accise - le cout direct d'achat de cette energie
+# (C-SPV!E358, au prix moyen DA) n'est pas modelise ici (hors perimetre de la
+# demande du 2026-10-08, qui ne porte que sur la taxe Accise).
+auxiliaries_consumption_ratio_mwh_per_mwh_ac_per_year: 0.025
+
+# Escalade : le BP indexe TURPE Power/CTA/Accise sur l'IPC (une serie annuelle
+# propre, non fournie comme table plate exploitable - voir "Questions
+# ouvertes" de docs/specs/opex_grid_charges.md). A la place, ces 3 postes
+# reutilisent la meme table d'escalade "Forecast price factor" que le reste de
+# la COPEX Library (ligne "OPEX - O&M (annual cost)", la plus generique/pas
+# liee a une techno specifique) - approximation documentee, pas la vraie serie
+# IPC du BP source.
+escalation_reference_label: "OPEX - O&M (annual cost)"

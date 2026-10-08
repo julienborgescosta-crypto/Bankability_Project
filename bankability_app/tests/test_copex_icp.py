@@ -9,7 +9,7 @@ def icp_library():
 
 
 def test_load_icp_library_reads_version(icp_library):
-    assert icp_library.version == "V1_20261001"
+    assert icp_library.version == "V2 - JFE - 08/10/2026"
 
 
 def test_load_icp_library_reads_segments_from_header(icp_library):
@@ -29,6 +29,96 @@ def test_load_icp_library_reads_epc_margin_contingency_and_insurance(icp_library
     assert icp_library.epc_margin_pct["DSO"] == pytest.approx(0.05)
     assert icp_library.epc_contingency_pct["DSO"] == pytest.approx(0.07)
     assert icp_library.insurance_construction_pct["DSO"] == pytest.approx(0.009)
+
+
+def test_load_icp_library_reads_insurance_operation_pct(icp_library):
+    """ "Insurances operation (% Capex + 1y incomes)" = "0,45% + 1y income" -
+    texte compose, pas un nombre - voir _read_formula_row."""
+    assert icp_library.insurance_operation_pct["DSO"] == pytest.approx(0.0045)
+
+
+def test_load_icp_library_reads_asset_management_operation_formula(icp_library):
+    """ "Asset Management operation (annual cost)" = "400€/MWh + 18k€"."""
+    per_mwh_eur, flat_keur = icp_library.asset_management_operation["DSO"]
+    assert per_mwh_eur == pytest.approx(400.0)
+    assert flat_keur == pytest.approx(18.0)
+
+
+def test_icp_asset_management_operation_keur_matches_formula(icp_library):
+    cost = copex_icp.icp_asset_management_operation_keur(
+        icp_library, segment="DSO", duree_h=2, power_mw=10.0, cod_year=2027
+    )
+    escalation = copex_icp.icp_escalation_factor(
+        icp_library.escalation[copex_icp._ASSET_MGMT_OPERATION_LABEL], 2026
+    )
+    assert cost == pytest.approx((400.0 * 10.0 * 2.0 / 1000.0 + 18.0) * escalation)
+
+
+def test_icp_opex_year1_keur_insurance_operation_uses_capex_and_revenue(
+    icp_library, aurora_library
+):
+    """0,45% x (CAPEX total + revenu annee 1) - demande de l'utilisateur,
+    2026-10-08 ("je ne veux plus reprendre aucune hypothese Aurora")."""
+    opex_without_revenue, _ = copex_icp.icp_opex_year1_keur(
+        tension="HTA",
+        duree_h=2,
+        cod_year=2027,
+        power_mw=10.0,
+        icp_library=icp_library,
+        aurora_library=aurora_library,
+        capex_total_keur=1000.0,
+    )
+    opex_with_revenue, _ = copex_icp.icp_opex_year1_keur(
+        tension="HTA",
+        duree_h=2,
+        cod_year=2027,
+        power_mw=10.0,
+        icp_library=icp_library,
+        aurora_library=aurora_library,
+        capex_total_keur=1000.0,
+        revenue_year1_keur=500.0,
+    )
+    assert opex_with_revenue - opex_without_revenue == pytest.approx(0.0045 * 500.0)
+
+
+def test_icp_opex_year1_keur_other_admin_sourced_from_icp_not_aurora(icp_library, aurora_library):
+    """ "Other (Admin/Accounting/Communication)" remplace le repli Aurora
+    "Other" depuis le 2026-10-08 (plat, non escalade dans le fichier)."""
+    other_icp = copex_icp._icp_line_item_keur(
+        icp_library, copex_icp._OTHER_ADMIN_LABEL, "DSO", power_mw=10.0, duree_h=2, cod_year=2027
+    )
+    assert other_icp == pytest.approx(8.0)
+    _, notes = copex_icp.icp_opex_year1_keur(
+        tension="HTA",
+        duree_h=2,
+        cod_year=2027,
+        power_mw=10.0,
+        icp_library=icp_library,
+        aurora_library=aurora_library,
+    )
+    assert any("Other (Admin" in note for note in notes)
+    assert not any(note.startswith("OPEX Other :") for note in notes)
+
+
+def test_icp_capex_total_keur_includes_asset_management_construction(icp_library, aurora_library):
+    with_asset_mgmt, _ = copex_icp.icp_capex_total_keur(
+        tension="HTA",
+        duree_h=2,
+        cod_year=2027,
+        power_mw=10.0,
+        icp_library=icp_library,
+        aurora_library=aurora_library,
+    )
+    asset_mgmt_construction = copex_icp._icp_line_item_keur(
+        icp_library,
+        copex_icp._ASSET_MGMT_CONSTRUCTION_LABEL,
+        "DSO",
+        power_mw=10.0,
+        duree_h=2,
+        cod_year=2027,
+    )
+    assert asset_mgmt_construction == pytest.approx(70.0)
+    assert asset_mgmt_construction > 0.0
 
 
 def test_hta_grid_connection_is_300_keur(icp_library, aurora_library):
@@ -156,8 +246,8 @@ def test_duplicate_segment_columns_must_be_identical():
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "COPEX_library"
-    ws.append(["Case", "DSO", "DSO", None, 2027])
-    ws.append(["Communication", 2000, 2500, None, 1.02])
+    ws.append(["Case", "DSO", "DSO", None, 2027, 2028, 2029])
+    ws.append(["Communication", 2000, 2500, None, 1.02, 1.03, 1.04])
     with pytest.raises(ValueError, match="two 'DSO' columns"):
         copex_icp._read_line_item_row(ws, ws, 2, copex_icp._header(ws)[1])
 
@@ -184,7 +274,16 @@ def test_icp_capex_total_keur_includes_epc_margin_and_insurance(icp_library, aur
         aurora_library=aurora_library,
     )
     expected_construction = direct_only * 1.05 * 1.07 * 1.009
-    # capex inclut aussi Development (Aurora, additif hors marquage EPC/assurance).
+    asset_mgmt_construction = copex_icp._icp_line_item_keur(
+        icp_library,
+        copex_icp._ASSET_MGMT_CONSTRUCTION_LABEL,
+        "DSO",
+        power_mw=10.0,
+        duree_h=2,
+        cod_year=2027,
+    )
+    # capex inclut aussi Development (Aurora, additif hors marquage EPC/assurance)
+    # et Asset Management construction (ICP, additif, meme logique que Development).
     assert capex > expected_construction
     assert capex == pytest.approx(
         expected_construction
@@ -194,6 +293,7 @@ def test_icp_capex_total_keur_includes_epc_margin_and_insurance(icp_library, aur
             2027,
         )
         * 10.0
+        + asset_mgmt_construction
     )
     assert any("Development" in note for note in notes)
 
@@ -346,7 +446,7 @@ def aurora_library():
     path = (
         Path(__file__).resolve().parent.parent
         / "sample_data"
-        / "160926_BP_Stockage_Standalone__.xlsx"
+        / "081026_BP_Stockage_Standalone__.xlsx"
     )
     _, copex_grid, _ = dev_case_parser.load_dev_case_grids(path)
     return dev_case_parser.parse_copex_library(copex_grid)

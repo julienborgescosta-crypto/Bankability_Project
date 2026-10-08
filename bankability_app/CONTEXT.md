@@ -1,7 +1,7 @@
 # Bankability_Project — Aurora multi-projets (v2)
 
 Extension multi-projets de l'outil de bancabilité BESS, pilotée par les Business Cases Aurora
-(fichier échantillon `sample_data/160926_BP_Stockage_Standalone__.xlsx`). Ce contexte couvre le
+(fichier échantillon `sample_data/081026_BP_Stockage_Standalone__.xlsx`). Ce contexte couvre le
 vocabulaire propre à cette extension — pour le vocabulaire du moteur financier existant (couches
 1-6, cas de développement), voir `README.md` et `docs/specs/`.
 

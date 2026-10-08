@@ -50,10 +50,15 @@ cote a cote** pour le raccordement, et laisse l'utilisateur juger :
 - **TOTAL CAPEX / TOTAL OPEX** : la ligne a regarder en priorite - les postes eclates expliquent
   le POURQUOI, pas l'inverse. Le total ne depend pas de la repartition core/grid/substation.
 
-Development (CAPEX) et Insurance/Grid charges/Land lease(bibliotheque)/Accise/Other (OPEX) restent
-**toujours** = Aurora (ICP ne les couvre pas) - affiches en `comparable=False` ("Info only"),
-jamais comme un ecart a interpreter : un ecart de 0% n'est pas un signal ici, c'est la meme donnee
-des 2 cotes par construction.
+**Depuis le 2026-10-08** ("je ne veux plus reprendre aucune hypothese Aurora, tous nos couts
+viennent de la COPEX Library maintenant") : Development/Asset Management (construction) cote
+CAPEX, et Insurance (operation)/Other (Admin/Accounting/Communication)/Asset Management
+(operation) cote OPEX, ont chacun leur propre ligne ICP ("ours"), affichee a cote de l'estimation
+Aurora generique ("aurora") - plus "toujours = Aurora" comme avant. Seuls Land lease(bibliotheque,
+quand non renseigne) et Grid charges/Accise restent `comparable=False` ("Info only") - les 2
+premiers faute d'alternative ICP, les 2 derniers parce que le calcul precis qui les remplace cote
+moteur (`core/opex_grid_charges.py`) n'est pas encore reflete dans cet ecran de comparaison poste
+par poste (limite documentee, voir `docs/specs/opex_grid_charges.md`).
 
 ## Mise en garde TURPE (meme esprit que la macro VBA source)
 
@@ -132,7 +137,7 @@ additif, voir docs/specs/portfolio.md "Questions ouvertes" : ce chemin reproduit
 l'euro pres (valide), impossible de re-verifier sans le fichier confidentiel si son addition est
 elle-meme un bug ou un comportement intentionnel du fichier source.
 
-## Verification faite (donnees reelles, `sample_data/160926_BP_Stockage_Standalone__.xlsx`)
+## Verification faite (donnees reelles, `sample_data/081026_BP_Stockage_Standalone__.xlsx`)
 
 Execution manuelle sur HTA/HTB1/HTB2/HTB3 x 2h/4h, COD 2028, 40 MW :
 
@@ -206,7 +211,7 @@ d'Aurora des lors que revenu ET CAPEX/OPEX sont identiques.
 Back-test initial (8 cas reels, non extrapoles, `capex_opex_source="aurora"` avec le
 `COPEX_library` fixture) : ecart systematique de -1.4 a -7.2 pts vs le TRI reel rapporte par
 Aurora (pire en HTA qu'en HTB2). Root-cause identifiee : le `COPEX_library` utilise (lu depuis
-`sample_data/160926_BP_Stockage_Standalone__.xlsx`, donnees d'un BP client a une date figee)
+`sample_data/081026_BP_Stockage_Standalone__.xlsx`, donnees d'un BP client a une date figee)
 n'est PAS le meme millesime que le databook Aurora Q2 2026 fourni par l'utilisateur - un
 "Grid connection" different, une pente d'escalade differente sur Battery system/Fixed O&M, etc.
 Verifie en rejouant 2 cas avec les chiffres du Q2 26 : l'ecart tombe de -2.2/-7.2 pts a -0.8/-1.6

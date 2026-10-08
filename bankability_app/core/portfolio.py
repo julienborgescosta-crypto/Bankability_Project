@@ -49,6 +49,16 @@ class ProjectConfig:
     # renseigne (!=0) - voir aur_cases._opex_with_land_lease_override, corrige le
     # 2026-10-01 (un loyer manuel ne doit pas s'empiler sur l'estimation generique).
     land_lease_opex_keur: float = 0.0
+    # Indexation annuelle du loyer foncier (fraction, 0.02 = 2 %/an) - demande de
+    # l'utilisateur, 2026-10-07. 0 = loyer plat. Voir aur_cases.opex_series_keur.
+    land_lease_indexation_pct: float = 0.0
+    # Taxes locales (TFPB/CFE/taxe d'amenagement) - specifiques a la commune du
+    # projet, sans formule generique possible (ni ICP ni Aurora n'en ont une :
+    # le BP reel les calcule depuis des taux communaux saisis a la main, tous a
+    # 0 dans l'exemple fourni - voir docs/specs/opex_grid_charges.md). Purement
+    # additif (pas de ligne bibliotheque a remplacer, contrairement au loyer
+    # foncier) - demande de l'utilisateur, 2026-10-08.
+    local_taxes_opex_keur: float = 0.0
     # Limitation non-firm 3000h/an (Offre de Raccordement Optimise) - demande de
     # l'utilisateur, 2026-09-23 (les 6 cas ORO du databook Aurora partageaient la
     # cle de la variante standard et etaient ecartes en silence, voir
@@ -425,6 +435,7 @@ def build_project_inputs(
         manual_connection_capex_keur=config.manual_connection_capex_keur,
         distance_rte_km=config.distance_rte_km,
         land_lease_opex_keur=config.land_lease_opex_keur,
+        land_lease_indexation_pct=config.land_lease_indexation_pct,
         capex_opex_source=capex_opex_source,
         turpe_50pct_reduction=config.turpe_50pct_reduction,
         development_capex_keur=dsa_keur,
@@ -452,34 +463,58 @@ def build_project_inputs(
     final_operating_revenue = [a + f for a, f in zip(adjusted_revenue, fees, strict=True)]
     revenues_keur = [0.0] + final_operating_revenue
 
+    # Taxes locales (TFPB/CFE/amenagement) : purement additives, aucune ligne
+    # bibliotheque a remplacer (voir ProjectConfig.local_taxes_opex_keur) -
+    # l'annee de construction (indice 0) n'est pas concernee.
+    opex_keur = [
+        v - config.local_taxes_opex_keur if i > 0 else v
+        for i, v in enumerate(base_inputs.opex_keur)
+    ]
+
     net_cashflow_keur = [
         c + o + t + r + e
         for c, o, t, r, e in zip(
             base_inputs.capex_keur,
-            base_inputs.opex_keur,
+            opex_keur,
             base_inputs.turpe_keur,
             revenues_keur,
             base_inputs.end_of_life_keur,
             strict=True,
         )
     ]
-    inputs = replace(base_inputs, revenues_keur=revenues_keur, net_cashflow_keur=net_cashflow_keur)
+    inputs = replace(
+        base_inputs,
+        revenues_keur=revenues_keur,
+        opex_keur=opex_keur,
+        net_cashflow_keur=net_cashflow_keur,
+    )
     return inputs, secured_revenue, resolved
 
 
 def _financing_kwargs(
     config: ProjectConfig, secured_revenue: list[float], operating_revenue: list[float], terms: dict
 ) -> dict:
-    target_dscr = contract_overlay.blended_target_dscr(
-        secured_revenue,
-        operating_revenue,
-        target_dscr_secured=terms["target_dscr_secured"],
-        target_dscr_merchant=terms["target_dscr_merchant"],
-    )
     tenor = contract_overlay.debt_maturity_years(
         config.contract_structure,
         maturity_full_merchant_years=terms["maturity_full_merchant_years"],
         maturity_years_added_after_ppa=terms["maturity_years_added_after_ppa"],
+    )
+    # Pondere le mix securise/merchant sur la duree de la dette, pas sur toute
+    # la duree d'exploitation (confirme par l'utilisateur, 2026-10-08) : le
+    # DSCR cible sert a dimensionner la dette pour les annees ou le preteur
+    # est reellement expose (1 a tenor) - ponderer sur tout le projet dilue la
+    # part securisee avec des annees merchant posterieures au remboursement de
+    # la dette, qui ne pesent sur aucun risque de defaut reel. `tenor` ne
+    # depend pas de `target_dscr` (seulement de la structure contractuelle) -
+    # pas de circularite a trancher avant de ponderer. Ne s'applique qu'ici :
+    # `blended_buyer_target_equity_irr` (TRI cible acheteur RtB) garde la
+    # serie complete, structure de financement differente de celle de ce
+    # projet.
+    target_dscr = contract_overlay.blended_target_dscr(
+        secured_revenue[:tenor],
+        operating_revenue[:tenor],
+        target_dscr_secured=terms["target_dscr_secured"],
+        target_dscr_merchant=terms["target_dscr_merchant"],
     )
     gearing_pct = config.gearing_pct_override if config.gearing_pct_override is not None else 0.70
     interest_rate = (

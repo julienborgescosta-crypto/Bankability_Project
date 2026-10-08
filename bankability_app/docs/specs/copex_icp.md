@@ -8,10 +8,19 @@ Depuis le 2026-09-24, le CAPEX/OPEX BESS de l'app (Configurateur/Portfolio/Sensi
 vient en priorite de `config/copex_icp.xlsx` ("ICP" — Internal Cost Pricing, couts unitaires reels
 maintenus par l'utilisateur, mis a jour mensuellement en remplacant ce fichier), plutot que de la
 bibliotheque Aurora `COPEX_library` (qui reste une estimation generique, moins a jour). Aurora
-`COPEX_library` reste utilisee comme **repli** pour les postes qu'ICP ne couvre pas : `Development`
-cote CAPEX, `Insurance`/`Grid charges`/`Land lease`(ligne bibliotheque)/`Accise`/`Other` cote OPEX,
-et **HTB3 entierement** (ICP n'a jamais eu de colonne pour cette tension). Voir `core/aur_cases.py`
+`COPEX_library` reste utilisee comme **repli** pour les postes qu'ICP ne couvre toujours pas :
+`Land lease`(ligne bibliotheque, quand non renseigne par l'utilisateur) cote OPEX, et **HTB3
+entierement** (ICP n'a jamais eu de colonne pour cette tension). Voir `core/aur_cases.py`
 `capex_and_opex_keur()`/`repowering_capex_keur()` pour le point d'integration.
+
+Depuis le 2026-10-08 ("je ne veux plus reprendre aucune hypothese Aurora, tous nos couts viennent
+de la COPEX Library maintenant" — demande explicite de l'utilisateur), les derniers postes qui
+repliaient encore sur Aurora ont chacun une ligne ICP dediee : `Development`/`Asset Management
+(construction)` cote CAPEX, `Insurance (operation)`/`Other (Admin/Accounting/Communication)`/
+`Asset Management (operation)` cote OPEX. Seuls `Land lease` (quand non renseigne) et HTB3 restent
+un repli Aurora, faute d'alternative ICP. `Grid charges`/`Accise` ne sont plus un repli Aurora non
+plus, mais pas davantage une ligne ICP : ils sont calcules precisement par
+`core/opex_grid_charges.py` (voir `docs/specs/opex_grid_charges.md`).
 
 ## Pourquoi ce changement
 
@@ -81,6 +90,65 @@ Asset Management 40 k€/an) n'est pas utilise.
     (BP Kerlo, BP 160926, Estimation_Projets_bess) avec quelques cellules en cache - l'ancienne
     version commitee en avait deja. **Retires a l'installation** (decision de l'utilisateur,
     2026-10-05) : `config/copex_icp.xlsx` est committe, jamais un BP reel.
+- **V2 - JFE - 08/10/2026 (installee le 2026-10-08)** :
+  - Raccordement DSO deja correct a 300 k€ dans le fichier source - pas besoin de
+    `--dso-grid-connection-keur` cette fois (verifie a l'installation).
+  - Mapping segment -> tension redevenu coherent avec notre table figee
+    (`TENSION_TO_ICP_SEGMENT`) : `TSO 225kV -> HTB2` (une version intermediaire du meme jour
+    l'avait brievement libelle `HTB3`, traite comme une erreur de saisie, voir plus bas - le
+    fichier final confirme `HTB2`).
+  - Libelle "Insurances during construction..." devenu "Insurances construction..." (mot
+    "during" retire) - `_pct()` cherche desormais 2 morceaux ("Insurances", "construction")
+    au lieu d'une chaine complete, pour matcher les deux sans ambiguite avec la nouvelle ligne
+    "Insurances operation (% Capex + 1y incomes)" (non utilisee).
+  - 4 nouvelles lignes ICP, toutes activees le meme jour (voir bullet "V2 bis" ci-dessous) :
+    "Asset Management construction (incl. Cout fixe ISA)", "Asset Management operation (annual
+    cost)" (valeur en formule texte, "400€/MWh + 18k€"), "Insurances operation (% Capex + 1y
+    incomes)" (idem, "0,45% + 1y income"), "Other (Admin/Accounting/Communication)". La ligne
+    "Telecom (annual)" du bloc legacy a ete retiree du fichier source par l'utilisateur le
+    2026-10-08 (jamais lue par le code, deja incluse dans "Asset Management operation" selon
+    l'utilisateur - aucun impact).
+- **V2 bis - "plus aucune hypothese Aurora" (2026-10-08, meme jour)** : l'utilisateur a demande que
+  les 4 nouvelles lignes ci-dessus remplacent les derniers replis Aurora generiques, plutot que de
+  rester inutilisees :
+  - **"Asset Management construction"** (70 k€, format Excel `k€` plat comme "Other BoP cost" -
+    jamais scale par MW) : ajoute au CAPEX **apres** la marge EPC/assurance construction, comme
+    `Development` (`icp_capex_total_keur`) - "Cost Owner : ASSET", pas "Cost Owner : EPC", donc hors
+    perimetre de ce markup. Decision de l'utilisateur (option recommandee).
+  - **"Other (Admin/Accounting/Communication)"** (8 k€ plat, pas d'escalade dans le fichier) :
+    remplace la ligne de repli Aurora "Other" dans `icp_opex_year1_keur`.
+  - **"Insurances operation (% Capex + 1y incomes)"** : remplace la ligne de repli Aurora
+    "Insurance". Formule confirmee par l'utilisateur apres relecture du libelle (qui dit "+", pas
+    "x") : `0,45% x (CAPEX total + revenu annee 1)`, PAS `0,45% x CAPEX x revenu` (ordre de
+    grandeur incoherent - une prime d'assurance a plusieurs dizaines de M€ n'a pas de sens). "CAPEX
+    total" = le CAPEX complet du projet (construction + Development + Asset Management + Grid
+    connection, le meme total que `capex_initial_keur`) ; "revenu annee 1" = le revenu de la 1re
+    annee d'exploitation du projet, sur la base des scenarios Aurora ("tu prends les revenus sur 1
+    annee sur la base des scenarios Aurora"). Pas d'escalade (la ligne n'a pas de "Forecast price
+    factor" dans le fichier, et CAPEX/revenu sont deja des montants de l'annee consideree).
+    Nouveau parametre `revenue_year1_keur` sur `icp_opex_year1_keur`/`aur_cases.capex_and_opex_keur`
+    (0.0 par defaut si l'appelant ne le fournit pas - sous-estime ce seul poste, jamais une erreur
+    silencieuse ailleurs). Consequence notable : l'OPEX d'un projet n'est plus totalement
+    independant de son CAPEX (ex. changer `connection_capex_mode` change aussi legerement l'OPEX
+    via ce poste) - voir `tests/test_portfolio.py
+    test_build_project_inputs_connection_capex_manual_overrides_library`.
+  - **"Asset Management operation (annual cost)"** = "400€/MWh + 18k€" (energie utile du projet,
+    `power_mw x duree_h`) : nouveau poste purement additif, aucun equivalent Aurora a remplacer.
+    Escalade sur l'annee de NTP comme le reste de l'OPEX (`icp_asset_management_operation_keur`).
+  - **Portee du changement, confirmee par l'utilisateur** : uniquement le chemin ICP
+    (`aur_cases.capex_and_opex_keur`) - `capex_and_opex_keur_aurora_only` (option "Use Aurora's own
+    CAPEX/OPEX assumptions" du Configurateur) garde les lignes Aurora brutes pour rester une base de
+    comparaison "100% Aurora" pure ("sauf quand on coche l'option de reprendre TOUTES les
+    hypotheses AURORA pour comparer"). `core/dev_case.py` (onglet "Cas de developpement", lecture
+    BP single-project, utilise la section Aurora "base 2028" du propre onglet `COPEX_library` du
+    BP) est un chemin independant, non concerne par ce changement.
+  - **`core/copex_comparison.py` mis a jour en consequence** : "Asset Management (construction)"
+    compte desormais dans `TOTAL CAPEX`, "Insurance (operation)"/"Other"/"Asset Management
+    (operation)" ont chacun leur propre ligne OPEX (ours = ICP, aurora = l'estimation Aurora
+    generique pour comparaison) au lieu d'etre noyes dans le groupe "Info only". Seuls `Grid
+    charges`/`Accise` restent "Info only" = Aurora des 2 cotes (le calcul precis
+    `opex_grid_charges` n'est pas encore reflete dans cet ecran de comparaison poste par poste -
+    limite documentee, voir `docs/specs/opex_grid_charges.md`).
 - **Installer une nouvelle version** : `.venv\Scripts\python.exe sample_data/install_copex_library.py
   "<COPEX LIBRARY.xlsx>" [--dso-grid-connection-keur 300]`. Le script copie le classeur dans
   `config/copex_icp.xlsx` en travaillant sur son XML (openpyxl effacerait les valeurs en cache des
@@ -173,6 +241,30 @@ Asset Management 40 k€/an) n'est pas utilise.
   mise a jour mensuelle du fichier ICP) : `tests/test_copex_icp.py`
   `test_icp_battery_pcs_keur_order_of_magnitude_is_realistic` /
   `test_icp_opex_guarantees_order_of_magnitude_is_realistic`.
+
+- **`_header()` dependait du libelle exact de la cellule de tete de la ligne d'en-tete
+  ("Case" en V1_20261001) - casse des la V2 du 2026-10-08, qui renomme cette cellule
+  "Cost Owner : EPC" (meme ligne, meme structure, juste un changement cosmetique de
+  libelle). Plutot que d'ajouter un 2e libelle en dur (fragile a la prochaine
+  renomination), `_header()` reconnait desormais la ligne d'en-tete **structurellement** :
+  elle cherche un run d'au moins 3 annees consecutives 2000-2100 (le bloc "Forecast price
+  factor"), puis remonte en arriere pour collecter les libelles de segment contigus juste
+  avant (en sautant un eventuel trou) - independant de ce qu'il y a dans la toute premiere
+  cellule de la ligne. `_find_row()` (recherche des lignes de postes par libelle) reste
+  inchangee, elle n'a jamais depende de cette cellule de tete.
+
+- **`_header()` incluait la colonne de libelle de ligne ("Cost Owner : EPC") comme un faux
+  "segment" supplementaire** - decouvert le 2026-10-08 en ajoutant `_read_formula_row` (lecture des
+  2 nouvelles lignes texte "Asset Management operation"/"Insurances operation") : le balayage
+  arriere depuis le bloc d'annees collecte toute cellule texte contigue, y compris la colonne de
+  libelle elle-meme (adjacente aux vrais segments, sans trou pour la distinguer). Invisible
+  jusqu'ici : les lecteurs numeriques (`_read_line_item_row`) ignorent silencieusement cette
+  pseudo-colonne (son contenu - le libelle de CHAQUE ligne - n'est jamais un nombre), mais
+  `_read_formula_row` (qui accepte tout texte) la traitait comme une vraie valeur a parser et
+  levait une erreur. Corrige en filtrant les colonnes candidates sur un critere structurel plutot
+  qu'une position : une colonne n'est retenue comme segment que si elle contient AU MOINS une
+  valeur numerique sur les lignes de donnees suivantes (`_column_has_numeric_value_below`) - la
+  colonne de libelle ne contient jamais que du texte, sur aucune ligne.
 
 ## Questions ouvertes
 

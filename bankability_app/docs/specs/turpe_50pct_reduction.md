@@ -94,7 +94,7 @@ disponibles cote session (produit "Flexplorer" : `flexplorer_list_datasets`/`get
 de **revenu** batterie - previsions, backcasts, performance observee - aucun ne porte sur la
 structure CAPEX/OPEX/TURPE d'un cas). Pas de decomposition TURPE accessible par ce biais.
 
-A la place, verifie l'onglet `I-Fixed` du fixture `sample_data/160926_BP_Stockage_Standalone__.xlsx`
+A la place, verifie l'onglet `I-Fixed` du fixture `sample_data/081026_BP_Stockage_Standalone__.xlsx`
 (ligne 72, "TURPE (Power)", comme demande) - confirme la structure reelle du TURPE "part fixe" :
 
 - **Charges - Variable (par MW)** : -14.51 (HTA) / -11.76 (HTB1) / -3.48 (HTB2) / 0 (HTB3) k€/MW -

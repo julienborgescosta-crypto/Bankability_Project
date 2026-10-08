@@ -10,6 +10,7 @@ ui/configurateur_tab.py)."""
 
 from pathlib import Path
 
+import pytest
 from streamlit.testing.v1 import AppTest
 
 from core import portfolio_import
@@ -369,6 +370,38 @@ def test_configurateur_renaming_project_after_setting_overrides_keeps_them():
     markdown_text = "".join(w.value for w in at.markdown)
     assert "Mansle" in markdown_text
     assert "manual connection 250 k€" in markdown_text
+
+
+def test_configurateur_land_lease_indexation_option():
+    """Demande de l'utilisateur, 2026-10-07 : option d'indexation du loyer au
+    taux choisi - champ du taux visible seulement une fois la case cochee,
+    puis repris dans la liste des projets et pre-rempli en edition."""
+    at = AppTest.from_file(APP_PATH)
+    at.run(timeout=_TIMEOUT)
+    at.sidebar.radio[0].set_value("Aurora Configurator (multi-project)")
+    at.run(timeout=_TIMEOUT)
+
+    assert not any(ni.label == "Land lease indexation (%/yr)" for ni in at.number_input)
+    next(ni for ni in at.number_input if ni.label == "Land lease OPEX (k€/yr)").set_value(200.0)
+    at.run(timeout=_TIMEOUT)
+    next(cb for cb in at.checkbox if cb.label == "Index land lease").set_value(True)
+    at.run(timeout=_TIMEOUT)
+    next(ni for ni in at.number_input if ni.label == "Land lease indexation (%/yr)").set_value(2.5)
+    at.run(timeout=_TIMEOUT)
+    assert not at.exception
+
+    next(b for b in at.button if b.label == "Add the project").click()
+    at.run(timeout=_TIMEOUT)
+    assert not at.exception
+    assert "land lease indexed 2.5%/yr" in "".join(w.value for w in at.markdown)
+
+    next(b for b in at.button if b.label == "Edit").click()
+    at.run(timeout=_TIMEOUT)
+    assert not at.exception
+    assert next(cb for cb in at.checkbox if cb.label == "Index land lease").value is True
+    assert next(
+        ni for ni in at.number_input if ni.label == "Land lease indexation (%/yr)"
+    ).value == pytest.approx(2.5)
 
 
 def test_configurateur_edit_project_updates_it_in_place():

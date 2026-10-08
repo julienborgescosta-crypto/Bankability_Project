@@ -20,6 +20,18 @@ section 4.
   DSCR mordant sur les configs à faible revenu) via son propre plafond de gearing interne
   (`_size_tranche_by_dscr`) — pas besoin de choisir entre les deux modes au niveau du portefeuille,
   contrairement au flux mono-projet (BP réel) qui, lui, expose ce choix à l'utilisateur.
+- **Le mix sécurisé/merchant qui fixe `target_dscr` est pondéré sur la durée de la dette (tenor),
+  pas sur toute la durée d'exploitation** (corrigé le 2026-10-08, suite à une question de
+  l'utilisateur confirmant cette lecture) : `_financing_kwargs` calcule d'abord `tenor`
+  (`contract_overlay.debt_maturity_years`, indépendant du DSCR — pas de circularité), puis tronque
+  `secured_revenue`/`operating_revenue` à `[:tenor]` avant `blended_target_dscr`. Avant ce correctif,
+  la pondération portait sur toute la série (`inputs.revenues_keur[1:]`, longueur
+  `operating_years`) : les années merchant *après* le remboursement de la dette diluaient
+  artificiellement la part sécurisée, donc sous-estimaient `target_dscr` — un biais optimiste sur
+  le dimensionnement de dette pour tout projet où `operating_years > tenor` (le cas normal dès
+  qu'un floor/tolling ne couvre pas toute la durée du projet). `blended_buyer_target_equity_irr`
+  (TRI cible acheteur RtB, stratégie "Racheter RtB & vendre au COD") garde volontairement la série
+  complète — structure de financement distincte de celle de ce projet, pas liée à son tenor.
 - **`interest_rate` reste un défaut fixe (5 %) ou un override par projet**, pas encore composé
   depuis `senior_debt_margin_pct`/`swap_margin_pct` de `aur_financing_terms.yaml` : ces deux
   bps sont des marges de crédit, pas un taux complet — il manque un taux de base (swap rate) qui
@@ -207,6 +219,16 @@ développement", donc alignés sur le BP réel) :
   l'euro près (validé), et on ne peut pas re-vérifier sans ce fichier confidentiel si son addition
   est elle-même correcte ou souffre du même bug ; question ouverte avec l'utilisateur plutôt qu'un
   alignement silencieux des 2 chemins.
+- **Indexation du loyer foncier** (`ProjectConfig.land_lease_indexation_pct`, fraction, défaut
+  `0.0` = loyer plat ; ajoutée le 2026-10-07 à la demande de l'utilisateur, case "Index land
+  lease" du Configurateur + colonne `Land lease indexation (%/yr)` de l'import Excel). Le loyer
+  saisi est celui de l'op-year 1 (année de COD), indexé à partir de l'op-year 2 :
+  `loyer_N = loyer_1 x (1 + taux)^(N-1)`. S'applique au loyer effectivement retenu — le manuel
+  s'il est renseigné, sinon la ligne "Land lease" générique de la bibliothèque — et dans les 2
+  modes `capex_opex_source` (comme le loyer manuel, c'est une donnée projet, pas une hypothèse
+  Aurora vs ICP). Les autres postes OPEX restent plats à leur valeur d'op-year 1 (convention
+  Aurora) — voir `aur_cases.opex_series_keur`. Seule la série `ProjectInputs.opex_keur` change ;
+  `opex_year1_keur` et l'export "Aurora COPEX Comparison" (valeurs d'op-year 1) sont inchangés.
 
 Les deux sont passés jusqu'à `aur_cases.build_project_inputs`/`capex_and_opex_keur`, qui les
 transmet à la construction interne du `DevCaseParams` (au lieu du `connection_capex_mode="library"`

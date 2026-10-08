@@ -8,7 +8,7 @@ rétrospective dans `docs/specs/` (même convention que le reste du projet) qui 
 détails d'implémentation — ce document reste la référence sur l'**intention** et les **formules
 de principe**.
 
-Fichier source des faits ci-dessous : `sample_data/160926_BP_Stockage_Standalone__.xlsx`
+Fichier source des faits ci-dessous : `sample_data/081026_BP_Stockage_Standalone__.xlsx`
 (données fictives, format complet + onglets Aurora).
 
 ---

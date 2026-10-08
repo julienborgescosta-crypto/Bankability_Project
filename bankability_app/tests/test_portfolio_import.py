@@ -41,6 +41,9 @@ def test_template_round_trips_into_valid_project_configs():
     assert site_b.interest_rate_override == pytest.approx(0.05)
     assert site_a.turpe_50pct_reduction is False
     assert site_b.turpe_50pct_reduction is True
+    assert site_a.land_lease_indexation_pct == 0.0
+    assert site_b.land_lease_opex_keur == pytest.approx(250.0)
+    assert site_b.land_lease_indexation_pct == pytest.approx(0.02)
 
 
 def test_minimal_file_with_only_required_columns_uses_defaults(tmp_path):
@@ -66,6 +69,7 @@ def test_minimal_file_with_only_required_columns_uses_defaults(tmp_path):
     assert config.repowering_enabled is True
     assert config.repowering_year_mode == "manual"
     assert config.gearing_pct_override is None
+    assert config.land_lease_indexation_pct == 0.0
 
 
 def test_missing_required_column_raises_clear_error(tmp_path):

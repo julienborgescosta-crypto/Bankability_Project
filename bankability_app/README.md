@@ -68,7 +68,7 @@ L'app supporte deux formats de classeur Excel, detectes automatiquement
   (genere par `sample_data/build_sample_xlsx.py`).
 - **Format complet** — classeur reel multi-onglets, reconnu a la presence des onglets
   `O-Financials` (P&L + cashflows annuels) et `O-Control` (hypotheses + resultats deja calcules).
-  Illustre par `sample_data/160926_BP_Stockage_Standalone__.xlsx` (donnees fictives, inclut aussi
+  Illustre par `sample_data/081026_BP_Stockage_Standalone__.xlsx` (donnees fictives, inclut aussi
   les onglets du cas de developpement : `Inputs Dev`, `COPEX_library`, `CF Aurora`).
   Un 3e onglet, `I-Project` (hypotheses source les plus detaillees : CAPEX poste par poste,
   termes de financement complets, dette de repowering separee), est lu s'il est present -
@@ -304,7 +304,8 @@ Modules (`core/`) :
 | `risk_rules.py` | Regles de seuils -> flags rouge/orange/vert | 5 |
 | `acquisition.py` | Prime d'acquisition maximale (M&A) + sensibilite | extension hors 6 couches |
 | `dev_case.py` / `dev_case_parser.py` | Construit un `ProjectInputs` depuis des hypotheses de developpement (COD, puissance, duree, segment, TURPE) + bibliotheques CAPEX/revenu (`COPEX_library`/`CF Aurora`) | extension hors 6 couches, en amont |
-| `copex_icp.py` | CAPEX/OPEX BESS depuis `config/copex_icp.xlsx` (couts unitaires QEF reels, "ICP", mis a jour mensuellement) - source primaire pour le moteur Aurora v2, Aurora `COPEX_library` en repli pour les postes non couverts (Insurance/Grid charges/Land lease/Accise/Other, HTB3). Le poste Development est le DSA du projet (marge de dev cible + DEVEX, voir `docs/specs/strategy.md`) | 5bis (CAPEX/OPEX du moteur Aurora v2) |
+| `copex_icp.py` | CAPEX/OPEX BESS depuis `config/copex_icp.xlsx` (couts unitaires QEF reels, "ICP", mis a jour mensuellement) - source primaire pour le moteur Aurora v2. Depuis le 2026-10-08, Aurora `COPEX_library` ne reste en repli que pour Land lease (quand non renseigne) et HTB3 entierement ; Development/Asset Management/Insurance (operation)/Other sont tous ICP. Le poste Development est le DSA du projet (marge de dev cible + DEVEX, voir `docs/specs/strategy.md`) | 5bis (CAPEX/OPEX du moteur Aurora v2) |
+| `opex_grid_charges.py` | TURPE Power (frais reseau fixe+variable par tension) + CTA (% de TURPE Power) + Accise sur l'electricite (taxe, base auxiliaires + pertes de stockage) - calcul precis du BP reel, remplace le repli Aurora generique "Grid charges"/"Accise" (voir `docs/specs/opex_grid_charges.md`) | 5bis (CAPEX/OPEX du moteur Aurora v2) |
 | `portfolio_import.py` | Import/export en masse du portefeuille Configurateur via Excel (`ProjectConfig` par ligne, template telechargeable) - l'app n'ayant pas de memoire entre sessions, voir `docs/specs/portfolio_import.md` | extension hors 6 couches (Configurateur Aurora v2) |
 | `copex_comparison.py` | Compare notre CAPEX/OPEX (ICP + repli Aurora + DSA en Development, applique par le moteur) aux hypotheses Aurora seules (databook Q2 2026), poste par poste et au total (option "Aurora COPEX Comparison" du Configurateur) - voir `docs/specs/copex_comparison.md` | extension hors 6 couches (Configurateur Aurora v2) |
 | `soh_degradation.py` | Vraie courbe SoH (State of Health) depuis `config/soh_degradation.xlsx`, par duree (2h/4h), extrapolee lineairement au-dela de l'annee 15 - force un repowering quand le SoH passerait sous le seuil Aurora (66%/68.67%), independamment de ce que l'optimisation Equity IRR seule choisirait (voir `docs/specs/soh_degradation.md`) | extension hors 6 couches (Configurateur Aurora v2) |
@@ -317,9 +318,12 @@ Configuration (`config/`) :
 - `risk_thresholds.yaml` — seuils du dashboard de risques (DSCR generique + pondere par mix de
   revenu, hurdle rate, marge WACC)
 - `copex_icp.xlsx` — COPEX Library QEF (couts unitaires CAPEX/OPEX BESS reels), source primaire du
-  moteur Aurora v2 — version V1_20261001 depuis le 2026-10-05 (raccordement DSO corrige a 300 k€,
-  liens externes retires). Chaque nouvelle version s'installe avec
-  `sample_data/install_copex_library.py`, voir `docs/specs/copex_icp.md`
+  moteur Aurora v2 — version "V2 - JFE - 08/10/2026" depuis le 2026-10-08 (liens externes retires).
+  Chaque nouvelle version s'installe avec `sample_data/install_copex_library.py`, voir
+  `docs/specs/copex_icp.md`
+- `aur_opex_grid_charges.yaml` / `aur_charge_volume.yaml` — TURPE Power/CTA/Accise (tarifs du BP
+  reel) et courbes de volume charge depuis le reseau (Aurora Flexplorer), voir
+  `docs/specs/opex_grid_charges.md`
 - `aurora_degradation_and_cm.json` — degradation du revenu des 2h et mecanisme de capacite par
   duree, extraits du databook Aurora Q2 2026 par `sample_data/build_aurora_degradation_and_cm.py`
   (voir `docs/specs/aur_cases.md`)
@@ -381,7 +385,7 @@ positives** (valeurs d'info, pas des flux de cashflow) — ne pas les confondre 
 Les vrais Business Plans (`.xlsm`) et le dossier `fichier_excel/` a la racine du repo sont
 exclus de git (`.gitignore`). Seuls les fixtures illustratifs fabriques
 (`sample_data/260612_BP_Stockage_Standalone__Claude.xlsx` pour le format resume,
-`sample_data/160926_BP_Stockage_Standalone__.xlsx` pour le format complet) sont commites, pour
+`sample_data/081026_BP_Stockage_Standalone__.xlsx` pour le format complet) sont commites, pour
 que les tests tournent sans donnee reelle. Le fixture format complet est converti en `.xlsx`
 (valeurs figees, sans macro) avant d'etre commite, pour ne pas etre bloque par la regle
 `.gitignore` `*.xlsm` qui protege les vrais BP.

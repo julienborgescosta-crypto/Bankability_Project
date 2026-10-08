@@ -202,10 +202,14 @@ def test_dsa_default_keur_raises_for_unsupported_duree_h():
 def test_capex_and_opex_keur_sources_from_icp_library(au_store, copex_library):
     """Depuis 2026-09-24, CAPEX/OPEX viennent en priorite d'ICP
     (`config/copex_icp.xlsx`, mis a jour mensuellement) - Aurora
-    `COPEX_library` ne reste que le repli pour les postes qu'ICP ne couvre pas
-    (Development cote CAPEX ; Insurance/Grid charges/Land lease-bibliotheque/
-    Accise/Other cote OPEX) - voir `core/copex_icp.py`."""
-    from core import copex_icp
+    `COPEX_library` ne reste que le repli pour Land lease-bibliotheque cote
+    OPEX (quand non renseigne) et HTB3 entierement - voir `core/copex_icp.py`.
+    Depuis le 2026-10-08, Development/Asset Management/Insurance
+    (operation)/Other sont tous ICP, et 'Grid charges'/'Accise' sont remplaces
+    par le calcul precis `opex_grid_charges` (voir
+    `test_capex_and_opex_keur_grid_charges_replace_aurora_fallback`), donc
+    exclus ici du recoupement direct avec `icp_opex_year1_keur`."""
+    from core import copex_icp, opex_grid_charges
 
     icp_library = copex_icp.load_icp_library_cached()
     expected_capex_generic, _ = copex_icp.icp_capex_total_keur(
@@ -224,13 +228,31 @@ def test_capex_and_opex_keur_sources_from_icp_library(au_store, copex_library):
         icp_library=icp_library,
         aurora_library=copex_library,
     )
-    expected_opex, _ = copex_icp.icp_opex_year1_keur(
+    expected_opex_generic, _ = copex_icp.icp_opex_year1_keur(
         tension="HTA",
         duree_h=2,
         cod_year=2027,
         power_mw=1.0,
         icp_library=icp_library,
         aurora_library=copex_library,
+        capex_total_keur=expected_capex_generic + expected_connection,
+    )
+    aurora_grid_charges = aur_cases._library_opex_line_keur(
+        "Grid charges",
+        tension="HTA",
+        duree_h=2,
+        cod_year=2027,
+        power_mw=1.0,
+        copex_library=copex_library,
+    )
+    aurora_accise = aur_cases._library_opex_line_keur(
+        "Accise", tension="HTA", duree_h=2, cod_year=2027, power_mw=1.0, copex_library=copex_library
+    )
+    precise_grid_charges, _ = opex_grid_charges.grid_charges_opex_keur(
+        tension="HTA", duree_h=2, power_mw=1.0, cod_year=2027
+    )
+    expected_opex = (
+        expected_opex_generic - aurora_grid_charges - aurora_accise + precise_grid_charges
     )
 
     capex, opex = aur_cases.capex_and_opex_keur(
@@ -309,6 +331,73 @@ def test_capex_and_opex_keur_land_lease_opex_replaces_aurora_estimate(au_store, 
     assert opex_with == pytest.approx(opex_without - aurora_land_lease + 20.0)
     # Sans override, l'estimation Aurora reste utilisee telle quelle (comportement inchange).
     assert opex_without > 0.0
+
+
+def test_build_project_inputs_land_lease_indexation_escalates_rent_only(au_store, copex_library):
+    """Demande de l'utilisateur, 2026-10-07 : loyer indexe au taux choisi a partir
+    de l'op-year 2 (loyer_N = loyer_1 x (1 + taux)^(N-1)), le reste de l'OPEX
+    reste plat."""
+    config = au_store.config_by_drop_key("2h HTA Classique g0")
+    kwargs = {"cod_year": 2027, "power_mw": 10.0, "operating_years": 10}
+    flat = aur_cases.build_project_inputs(
+        au_store, config, copex_library, land_lease_opex_keur=200.0, **kwargs
+    )
+    indexed = aur_cases.build_project_inputs(
+        au_store,
+        config,
+        copex_library,
+        land_lease_opex_keur=200.0,
+        land_lease_indexation_pct=0.02,
+        **kwargs,
+    )
+    assert indexed.opex_keur[0] == 0.0
+    assert indexed.opex_year1_keur == pytest.approx(flat.opex_year1_keur)
+    for op_year in range(1, 11):
+        expected_extra_rent = 200.0 * (1.02 ** (op_year - 1) - 1)
+        assert indexed.opex_keur[op_year] == pytest.approx(
+            flat.opex_keur[op_year] - expected_extra_rent
+        )
+    assert indexed.capex_keur == pytest.approx(flat.capex_keur)
+    assert indexed.revenues_keur == pytest.approx(flat.revenues_keur)
+    assert indexed.net_cashflow_keur[-1] < flat.net_cashflow_keur[-1]
+
+
+def test_build_project_inputs_land_lease_indexation_applies_to_library_estimate(
+    au_store, copex_library
+):
+    """Sans loyer manuel, l'indexation porte sur la ligne 'Land lease' generique
+    de la bibliotheque - c'est elle le loyer du projet."""
+    config = au_store.config_by_drop_key("2h HTA Classique g0")
+    kwargs = {"cod_year": 2027, "power_mw": 10.0, "operating_years": 10}
+    flat = aur_cases.build_project_inputs(au_store, config, copex_library, **kwargs)
+    indexed = aur_cases.build_project_inputs(
+        au_store, config, copex_library, land_lease_indexation_pct=0.03, **kwargs
+    )
+    key = aur_cases.voltage_duration_key("HTA", 2)
+    library_rent = (
+        aur_cases.escalated_unit_cost(
+            copex_library.opex_unit_costs[key]["Land lease"],
+            copex_library.opex_escalation.get("Land lease", {}),
+            2027,
+        )
+        * 10.0
+    )
+    assert library_rent > 0.0
+    assert indexed.opex_keur[10] == pytest.approx(flat.opex_keur[10] - library_rent * (1.03**9 - 1))
+
+
+def test_build_project_inputs_zero_land_lease_indexation_keeps_flat_opex(au_store, copex_library):
+    config = au_store.config_by_drop_key("2h HTA Classique g0")
+    inputs = aur_cases.build_project_inputs(
+        au_store,
+        config,
+        copex_library,
+        cod_year=2027,
+        power_mw=10.0,
+        operating_years=10,
+        land_lease_opex_keur=200.0,
+    )
+    assert inputs.opex_keur[1:] == [-inputs.opex_year1_keur] * 10
 
 
 def test_capex_and_opex_keur_raises_for_tension_missing_from_copex_library(au_store, copex_library):
@@ -637,17 +726,18 @@ def test_build_project_inputs_turpe_50pct_reduction_also_halves_grid_charges_ope
         operating_years=10,
         turpe_50pct_reduction=True,
     )
-    key = aur_cases.voltage_duration_key("HTB2", 2)
-    aurora_grid_charges = (
-        aur_cases.escalated_unit_cost(
-            copex_library.opex_unit_costs[key]["Grid charges"],
-            copex_library.opex_escalation.get("Grid charges", {}),
-            2027,
-        )
-        * 10.0
+    from core import copex_icp, opex_grid_charges
+
+    terms = opex_grid_charges.grid_charges_terms_cached()
+    icp_escalation = copex_icp.load_icp_library_cached().escalation
+    precise_turpe_power = opex_grid_charges.turpe_power_keur(
+        tension="HTB2", power_mw=10.0, cod_year=2027, terms=terms, icp_escalation=icp_escalation
+    )
+    precise_cta = opex_grid_charges.cta_keur(
+        tension="HTB2", turpe_power_value_keur=precise_turpe_power, terms=terms
     )
     assert baseline.opex_year1_keur - reduced.opex_year1_keur == pytest.approx(
-        aurora_grid_charges * 0.5
+        (precise_turpe_power + precise_cta) * 0.5
     )
     # Le reste de l'OPEX (O&M, Insurance, Land lease, Accise, Other) est inchange.
     assert reduced.opex_year1_keur > 0.0

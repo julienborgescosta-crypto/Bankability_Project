@@ -133,6 +133,48 @@ def test_run_portfolio_tolling_uses_secured_dscr_and_ppa_plus_3_maturity(
     assert row.debt_tenor_years == expected_maturity
 
 
+def test_run_portfolio_dscr_weighting_uses_debt_tenor_not_full_project_life(
+    au_store, copex_library, default_financing_terms
+):
+    """Confirme par l'utilisateur, 2026-10-08 : le mix securise/merchant qui
+    fixe le DSCR cible doit etre pondere sur la duree de la dette (tenor), pas
+    sur toute la duree d'exploitation - les annees merchant posterieures au
+    remboursement de la dette ne pesent sur aucun risque reel du preteur et ne
+    doivent pas diluer la part securisee. Le tenor d'un tolling ne depend que
+    de `duration_years` (pas de `operating_years`) - donc si la ponderation
+    est bien tronquee au tenor, `target_dscr_used` doit etre identique quelle
+    que soit la duree d'exploitation au-dela du tenor."""
+    tolling_duration_years = 10
+    structure = contract_overlay.ContractStructure(
+        kind=contract_overlay.TOLLING,
+        price_keur_per_mw_per_year=80.0,
+        duration_years=tolling_duration_years,
+    )
+    tenor = tolling_duration_years + default_financing_terms["maturity_years_added_after_ppa"]
+
+    rows_at_tenor = portfolio.run_portfolio(
+        [_config(operating_years=tenor, contract_structure=structure)],
+        au_store,
+        copex_library,
+        default_financing_terms,
+    )
+    rows_beyond_tenor = portfolio.run_portfolio(
+        [_config(operating_years=tenor + 15, contract_structure=structure)],
+        au_store,
+        copex_library,
+        default_financing_terms,
+    )
+    assert rows_beyond_tenor[0].debt_tenor_years == tenor
+    assert rows_beyond_tenor[0].target_dscr_used == pytest.approx(rows_at_tenor[0].target_dscr_used)
+    # Doit rester strictement entre les deux ancres (pas 100% securise : le
+    # tenor depasse le contrat de 3 ans, donc une part merchant subsiste).
+    assert (
+        default_financing_terms["target_dscr_secured"]
+        < rows_at_tenor[0].target_dscr_used
+        < default_financing_terms["target_dscr_merchant"]
+    )
+
+
 def test_run_portfolio_dsa_defaults_to_margin_plus_devex(
     au_store, copex_library, default_financing_terms
 ):
@@ -245,8 +287,20 @@ def test_build_project_inputs_connection_capex_manual_overrides_library(
         default_financing_terms,
     )
     assert manual.capex_initial_keur != pytest.approx(baseline.capex_initial_keur)
-    # OPEX non touche par le mode de CAPEX raccordement.
-    assert manual.opex_keur[1] == pytest.approx(baseline.opex_keur[1])
+    # OPEX differe desormais du montant de CAPEX raccordement via "Insurance
+    # (operation)" (ICP, 0,45% x (CAPEX total + revenu an 1), depuis le
+    # 2026-10-08) - ce n'etait pas le cas avant ce poste (CAPEX et OPEX
+    # independants). L'ecart est exactement 0,45% x le delta de CAPEX total.
+    from core import copex_icp
+
+    icp_library = copex_icp.load_icp_library_cached()
+    insurance_operation_pct = icp_library.insurance_operation_pct["DSO"]
+    expected_extra_cost = insurance_operation_pct * (
+        manual.capex_initial_keur - baseline.capex_initial_keur
+    )
+    # opex_keur stocke le NEGATIF du cout (convention de signe du moteur) -
+    # un cout en plus rend la valeur plus negative, donc on soustrait ici.
+    assert manual.opex_keur[1] == pytest.approx(baseline.opex_keur[1] - expected_extra_cost)
 
 
 def test_build_project_inputs_connection_capex_distance_rte_matches_formula(
@@ -268,6 +322,28 @@ def test_build_project_inputs_connection_capex_distance_rte_matches_formula(
     assert with_distance.capex_initial_keur == pytest.approx(
         without_connection.capex_initial_keur + expected_connection_cost, abs=0.05
     )
+
+
+def test_build_project_inputs_local_taxes_opex_is_purely_additive(
+    au_store, copex_library, default_financing_terms
+):
+    """Contrairement au loyer foncier, les taxes locales (TFPB/CFE/amenagement)
+    n'ont aucune ligne bibliotheque a remplacer - purement additives (demande
+    de l'utilisateur, 2026-10-08)."""
+    config = _config()
+    baseline, _, _ = portfolio.build_project_inputs(
+        config, au_store, copex_library, default_financing_terms
+    )
+    with_taxes, _, _ = portfolio.build_project_inputs(
+        _config(local_taxes_opex_keur=50.0), au_store, copex_library, default_financing_terms
+    )
+    # Annee de construction (indice 0) non concernee.
+    assert with_taxes.opex_keur[0] == pytest.approx(baseline.opex_keur[0])
+    for i in range(1, len(baseline.opex_keur)):
+        assert with_taxes.opex_keur[i] == pytest.approx(baseline.opex_keur[i] - 50.0)
+    # CAPEX/revenu non touches.
+    assert with_taxes.capex_keur == pytest.approx(baseline.capex_keur)
+    assert with_taxes.revenues_keur == pytest.approx(baseline.revenues_keur)
 
 
 def test_build_project_inputs_land_lease_opex_replaces_aurora_estimate(
@@ -299,6 +375,29 @@ def test_build_project_inputs_land_lease_opex_replaces_aurora_estimate(
     assert with_land_lease.opex_year1_keur != pytest.approx(baseline.opex_year1_keur + 200.0)
     # CAPEX non touche par le loyer foncier.
     assert with_land_lease.capex_keur[0] == pytest.approx(baseline.capex_keur[0])
+
+
+def test_land_lease_indexation_raises_opex_and_lowers_irr(
+    au_store, copex_library, default_financing_terms
+):
+    flat_config = _config(land_lease_opex_keur=200.0)
+    indexed_config = _config(land_lease_opex_keur=200.0, land_lease_indexation_pct=0.02)
+    flat, _, _ = portfolio.build_project_inputs(
+        flat_config, au_store, copex_library, default_financing_terms
+    )
+    indexed, _, _ = portfolio.build_project_inputs(
+        indexed_config, au_store, copex_library, default_financing_terms
+    )
+    assert indexed.opex_keur[1] == pytest.approx(flat.opex_keur[1])
+    assert indexed.opex_keur[-1] == pytest.approx(
+        flat.opex_keur[-1] - 200.0 * (1.02 ** (flat_config.operating_years - 1) - 1)
+    )
+
+    flat_row, indexed_row = portfolio.run_portfolio(
+        [flat_config, indexed_config], au_store, copex_library, default_financing_terms
+    )
+    assert indexed_row.opex_total_keur > flat_row.opex_total_keur
+    assert indexed_row.project_irr < flat_row.project_irr
 
 
 def test_build_project_inputs_turpe_50pct_reduction_halves_turpe_series(

@@ -58,9 +58,17 @@ son cas plutot que de faire confiance a une hypothese non confirmee :
 CAPEX Development : notre valeur est le DSA du projet (marge de dev cible +
 DEVEX, decision de l'utilisateur du 2026-10-02), comparee a la ligne Aurora.
 
-Les postes OPEX Insurance/Grid charges/Land lease bibliotheque/Accise/Other
-restent **toujours** = Aurora (ICP ne les couvre pas) - affiches pour
-information (`comparable=False`), jamais comme un ecart a interpreter.
+Depuis le 2026-10-08 ("je ne veux plus reprendre aucune hypothese Aurora,
+tous nos couts viennent de la COPEX Library maintenant"), CAPEX Asset
+Management (construction) et OPEX Insurance (operation)/Other (Admin/
+Accounting/Communication)/Asset Management (operation) ont chacun leur
+propre ligne ICP ("ours"), affichee a cote de l'estimation Aurora generique
+("aurora") pour comparaison - ce ne sont plus des postes "info only"
+systematiquement egaux des 2 cotes. Seuls Grid charges et Accise restent
+"info only" = Aurora des 2 cotes (`comparable=False`) : ICP ne les couvre
+toujours pas, et le calcul precis qui les remplace cote moteur
+(`core/opex_grid_charges.py`, voir `docs/specs/opex_grid_charges.md`) n'est
+pas encore reflete ici - limite connue, voir "Questions ouvertes" du spec.
 
 Attention (meme mise en garde que la macro VBA source) : "Grid charges" ne
 represente que la part FIXE du TURPE (+ CTA) - le TURPE VARIABLE (charge
@@ -79,12 +87,15 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from .copex_icp import (
+    _ASSET_MGMT_CONSTRUCTION_LABEL,
     _DIRECT_CAPEX_LABELS,
     _OM_LABEL,
+    _OTHER_ADMIN_LABEL,
     TENSION_TO_ICP_SEGMENT,
     IcpCostLibrary,
     _icp_line_item_keur,
     construction_markup_factor,
+    icp_asset_management_operation_keur,
     icp_battery_pcs_keur,
     icp_connection_capex_keur,
     icp_opex_guarantees_annualized_keur,
@@ -110,10 +121,16 @@ _ICP_SUBSTATION_LABELS = ["HV Transformer", "HV substation", "MV substation"]
 _ICP_CORE_LABELS = [label for label in _DIRECT_CAPEX_LABELS if label not in _ICP_SUBSTATION_LABELS]
 _OPEX_FIXED_OM_LABEL = "Fixed O&M"
 _OPEX_LAND_LEASE_LABEL = "Land lease"
+_OPEX_INSURANCE_LABEL = "Insurance"
+_OPEX_OTHER_LABEL = "Other"
 # "Land lease" sorti de cette liste (2026-10-01) : seul poste OPEX challengeable
 # individuellement (`land_lease_opex_keur`), il a sa propre ligne comparable -
-# voir compare_capex_opex.
-_OPEX_INFO_ONLY_LABELS = ["Insurance", "Grid charges", "Accise", "Other"]
+# voir compare_capex_opex. "Insurance"/"Other" sortis a leur tour le 2026-10-08
+# (ont chacun desormais une ligne ICP, voir docs/specs/copex_icp.md) - reste
+# seulement Grid charges/Accise, jamais couverts par ICP (remplaces en aval par
+# un calcul precis cote moteur, voir docs/specs/opex_grid_charges.md, mais pas
+# encore reflete ici - limite documentee, module docstring).
+_OPEX_INFO_ONLY_LABELS = ["Grid charges", "Accise"]
 
 # Seuils de statut - meme esprit que la macro VBA source (OK / Vigilance /
 # Ecart fort), pas une constante Aurora documentee ailleurs : choisis par
@@ -229,6 +246,7 @@ def compare_capex_opex(
     land_lease_opex_keur: float = 0.0,
     aurora_reference_library: CopexLibrary | None = None,
     development_keur: float | None = None,
+    revenue_year1_keur: float = 0.0,
 ) -> CopexComparison:
     """CAPEX/OPEX initial (hors repowering, voir module docstring) : nos
     valeurs (ICP + repli Aurora, mode raccordement "library") vs les memes
@@ -263,8 +281,13 @@ def compare_capex_opex(
     ne s'ajoute plus, corrige un 2e bug le meme jour dans
     `aur_cases.capex_and_opex_keur` ou l'override s'ajoutait a l'estimation
     Aurora au lieu de la remplacer, voir `_opex_with_land_lease_override`),
-    sortie du groupe "Info only" (Insurance/Grid charges/Accise/Other, eux
-    toujours non challengeables individuellement, restent groupes)."""
+    sortie du groupe "Info only" (desormais Grid charges/Accise seuls, les
+    autres postes "info only" historiques - Insurance/Other - ont chacun une
+    ligne ICP depuis le 2026-10-08).
+
+    `revenue_year1_keur` : revenu annee 1 du projet, pour la ligne "Insurance
+    (operation)" (formule ICP "% Capex + 1y incomes" - 0,45% x (CAPEX total +
+    revenu annee 1)) - 0.0 par defaut (sous-estime ce seul poste)."""
     key = voltage_duration_key(tension, duree_h)
     notes: list[str] = []
     segment = TENSION_TO_ICP_SEGMENT.get(tension)
@@ -314,6 +337,17 @@ def compare_capex_opex(
                 f"ICP items missing for {segment} (Aurora fallback folded into the totals only): "
                 f"{', '.join(missing)}."
             )
+        ours_asset_mgmt_construction_keur = (
+            _icp_line_item_keur(
+                icp_library,
+                _ASSET_MGMT_CONSTRUCTION_LABEL,
+                segment,
+                power_mw=power_mw,
+                duree_h=duree_h,
+                cod_year=cod_year,
+            )
+            or 0.0
+        )
     else:
         # HTB3 : aucune colonne ICP - tout retombe sur la bibliotheque de repli,
         # comme dans le moteur (voir icp_capex_total_keur).
@@ -322,7 +356,14 @@ def compare_capex_opex(
             for label in _CAPEX_CORE_LABELS
         )
         substation_keur = 0.0
+        ours_asset_mgmt_construction_keur = 0.0
     ours_grid_and_substation_keur = ours_grid_only_keur + substation_keur
+    ours_total_capex_keur = (
+        ours_core_keur
+        + development_keur
+        + ours_grid_and_substation_keur
+        + ours_asset_mgmt_construction_keur
+    )
 
     grid_comparable = connection_capex_mode == "library"
     if not grid_comparable:
@@ -370,6 +411,12 @@ def compare_capex_opex(
             False,
         ),
         CopexComparisonRow(
+            "Asset Management (construction) - ICP only, no separate Aurora line",
+            ours_asset_mgmt_construction_keur,
+            0.0,
+            False,
+        ),
+        CopexComparisonRow(
             "Grid connection & substations (combined - assumes Aurora's scope includes it)",
             ours_grid_and_substation_keur,
             aurora_grid_keur,
@@ -377,7 +424,7 @@ def compare_capex_opex(
         ),
         CopexComparisonRow(
             "TOTAL CAPEX",
-            ours_core_keur + development_keur + ours_grid_and_substation_keur,
+            ours_total_capex_keur,
             aurora_core_keur + aurora_development_keur + aurora_grid_keur,
             True,
         ),
@@ -434,8 +481,61 @@ def compare_capex_opex(
         _aurora_opex_item_keur(reference, key, label, cod_year, power_mw)
         for label in _OPEX_INFO_ONLY_LABELS
     )
-    ours_total_opex = ours_om_keur + ours_land_lease_keur + info_total_keur
-    aurora_total_opex = aurora_om_keur + aurora_land_lease_keur + aurora_info_total_keur
+
+    insurance_operation_pct = icp_library.insurance_operation_pct.get(segment) if segment else None
+    if insurance_operation_pct is not None:
+        ours_insurance_keur = insurance_operation_pct * (ours_total_capex_keur + revenue_year1_keur)
+    else:
+        ours_insurance_keur = _aurora_opex_item_keur(
+            aurora_library, key, _OPEX_INSURANCE_LABEL, cod_year, power_mw
+        )
+    aurora_insurance_keur = _aurora_opex_item_keur(
+        reference, key, _OPEX_INSURANCE_LABEL, cod_year, power_mw
+    )
+
+    ours_other_keur = (
+        _icp_line_item_keur(
+            icp_library,
+            _OTHER_ADMIN_LABEL,
+            segment,
+            power_mw=power_mw,
+            duree_h=duree_h,
+            cod_year=cod_year,
+        )
+        if segment is not None
+        else None
+    )
+    if ours_other_keur is None:
+        ours_other_keur = _aurora_opex_item_keur(
+            aurora_library, key, _OPEX_OTHER_LABEL, cod_year, power_mw
+        )
+    aurora_other_keur = _aurora_opex_item_keur(
+        reference, key, _OPEX_OTHER_LABEL, cod_year, power_mw
+    )
+
+    ours_asset_mgmt_operation_keur = (
+        icp_asset_management_operation_keur(
+            icp_library, segment=segment, duree_h=duree_h, power_mw=power_mw, cod_year=cod_year
+        )
+        if segment is not None
+        else None
+    ) or 0.0
+
+    ours_total_opex = (
+        ours_om_keur
+        + ours_land_lease_keur
+        + info_total_keur
+        + ours_insurance_keur
+        + ours_other_keur
+        + ours_asset_mgmt_operation_keur
+    )
+    aurora_total_opex = (
+        aurora_om_keur
+        + aurora_land_lease_keur
+        + aurora_info_total_keur
+        + aurora_insurance_keur
+        + aurora_other_keur
+    )
 
     opex_rows = [
         CopexComparisonRow("Fixed O&M (+ ICP Guarantees)", ours_om_keur, aurora_om_keur, True),
@@ -443,7 +543,19 @@ def compare_capex_opex(
             "Land lease (+ manual override)", ours_land_lease_keur, aurora_land_lease_keur, True
         ),
         CopexComparisonRow(
-            "Insurance + Grid charges (TURPE fixed part + CTA) + Accise + Other",
+            "Insurance (operation)", ours_insurance_keur, aurora_insurance_keur, True
+        ),
+        CopexComparisonRow(
+            "Other (Admin/Accounting/Communication)", ours_other_keur, aurora_other_keur, True
+        ),
+        CopexComparisonRow(
+            "Asset Management (operation) - ICP only, no separate Aurora line",
+            ours_asset_mgmt_operation_keur,
+            0.0,
+            False,
+        ),
+        CopexComparisonRow(
+            "Grid charges (TURPE fixed part + CTA) + Accise",
             info_total_keur,
             aurora_info_total_keur,
             False,

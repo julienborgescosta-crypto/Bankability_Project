@@ -93,6 +93,12 @@ _COLUMN_SPECS: list[tuple[str, str, str]] = [
         "Optional, default 0 (uses Aurora's generic estimate) - REPLACES it when set",
         "e.g. 0",
     ),
+    (
+        "Land lease indexation (%/yr)",
+        "Optional, default 0 (flat rent) - indexes the land lease from op-year 2: "
+        "rent year N = rent year 1 x (1 + rate)^(N-1)",
+        "e.g. 2",
+    ),
     ("Gearing override (%)", "Optional, blank = model default", "e.g. 70"),
     ("Interest rate override (%)", "Optional, blank = model default", "e.g. 5"),
     ("DSA override (k€)", "Optional, blank = model default", "e.g. 500"),
@@ -269,6 +275,9 @@ def parse_portfolio_excel(file_or_path) -> list[ProjectConfig]:
                     land_lease_opex_keur=_to_float(
                         _cell(row, index, "Land lease OPEX (k€/yr)"), default=0.0
                     ),
+                    land_lease_indexation_pct=_to_pct(
+                        _cell(row, index, "Land lease indexation (%/yr)"), default=0.0
+                    ),
                     oro_requested=oro_requested,
                     curtailment_hours=_to_int(
                         _cell(row, index, "ORO curtailment hours"), default=None
@@ -332,6 +341,7 @@ def build_template_workbook() -> openpyxl.Workbook:
             None,
             None,
             None,
+            None,
             "No",
         ]
     )
@@ -357,7 +367,8 @@ def build_template_workbook() -> openpyxl.Workbook:
             "distance_rte",
             None,
             5,
-            0,
+            250,
+            2,
             70,
             5,
             None,

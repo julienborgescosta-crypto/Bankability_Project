@@ -41,7 +41,7 @@ from core import (
 from ui import chart_theme
 
 SAMPLE_AURORA_BP_PATH = (
-    Path(__file__).resolve().parent.parent / "sample_data" / "160926_BP_Stockage_Standalone__.xlsx"
+    Path(__file__).resolve().parent.parent / "sample_data" / "081026_BP_Stockage_Standalone__.xlsx"
 )
 
 _CONTRACT_LABELS = {
@@ -575,6 +575,38 @@ def _render_add_project_form(
                 help="Replaces (not added to) Aurora's generic COPEX_library 'Land lease' "
                 "estimate when set - leave at 0 to keep using that generic estimate.",
             )
+            existing_indexation = _default("land_lease_indexation_pct", 0.0)
+            index_land_lease = st.checkbox(
+                "Index land lease",
+                value=existing_indexation != 0.0,
+                key=f"ll_index_{form_id}",
+                help="The rent entered above is the op-year 1 (COD) rent; it then grows every "
+                "year by the chosen rate: rent in op-year N = rent year 1 × (1 + rate)^(N−1). "
+                "Applies to the manual land lease, or to Aurora's generic estimate if left at "
+                "0. The other OPEX line items stay flat (Aurora convention).",
+            )
+            land_lease_indexation_pct = (
+                st.number_input(
+                    "Land lease indexation (%/yr)",
+                    value=existing_indexation * 100 if existing_indexation else 2.0,
+                    min_value=0.0,
+                    max_value=20.0,
+                    step=0.1,
+                    key=f"ll_index_val_{form_id}",
+                )
+                / 100
+                if index_land_lease
+                else 0.0
+            )
+            local_taxes_opex_keur = st.number_input(
+                "Local taxes OPEX (k€/yr)",
+                value=_default("local_taxes_opex_keur", 0.0),
+                min_value=0.0,
+                key=f"local_taxes_{form_id}",
+                help="TFPB/CFE/taxe d'aménagement - spécifiques à la commune du projet, "
+                "aucune estimation générique possible (ni ICP ni Aurora n'en ont une). "
+                "Purement additif, laisser à 0 si inconnu.",
+            )
 
         turpe_50pct_reduction = False
         if tension in ("HTB1", "HTB2", "HTB3"):
@@ -630,6 +662,8 @@ def _render_add_project_form(
             manual_connection_capex_keur=float(manual_connection_capex_keur),
             distance_rte_km=float(distance_rte_km),
             land_lease_opex_keur=float(land_lease_opex_keur),
+            land_lease_indexation_pct=float(land_lease_indexation_pct),
+            local_taxes_opex_keur=float(local_taxes_opex_keur),
             turpe_50pct_reduction=bool(turpe_50pct_reduction),
             oro_requested=bool(oro_requested),
             curtailment_hours=int(curtailment_hours) if curtailment_hours is not None else None,
@@ -671,6 +705,10 @@ def _render_project_list() -> None:
                 adjustments.append(f"connection {project.distance_rte_km:.0f} km")
             if project.land_lease_opex_keur != 0.0:
                 adjustments.append(f"land lease {_fmt_keur(project.land_lease_opex_keur)}")
+            if project.land_lease_indexation_pct != 0.0:
+                adjustments.append(f"land lease indexed {project.land_lease_indexation_pct:.1%}/yr")
+            if project.local_taxes_opex_keur != 0.0:
+                adjustments.append(f"local taxes {_fmt_keur(project.local_taxes_opex_keur)}")
             if project.turpe_50pct_reduction:
                 adjustments.append("TURPE 50%")
             if not project.repowering_enabled:

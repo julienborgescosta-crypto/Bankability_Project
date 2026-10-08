@@ -41,7 +41,13 @@ ICP_SHEETS = ("COPEX_library", "CAPEX_library")
 # entierement source par Aurora.
 TENSION_TO_ICP_SEGMENT = {"HTA": "DSO", "HTB1": "TSO 90kV", "HTB2": "TSO 225kV"}
 
-_HEADER_LABEL = "Case"
+# Les libelles de lignes (pas la ligne d'en-tete, voir `_header`) ont deja
+# derive de colonne entre versions (colonne A en V1_20261001, colonne B
+# ensuite) - `_find_row` cherche sur une petite plage de colonnes, jamais une
+# position fixe (meme discipline que le reste du repo), pour resister a un
+# nouveau decalage dans une future version du fichier sans casser le
+# chargement.
+_LABEL_SEARCH_MAX_COL = 5
 _DIRECT_CAPEX_LABELS = [
     "Electrical works and studies",
     "Civil Works and miscellaneous",
@@ -54,7 +60,20 @@ _DIRECT_CAPEX_LABELS = [
 ]
 _OM_LABEL = "OPEX - O&M (annual cost)"
 _GRID_CONNECTION_LABEL = "Grid connection"
-_INSURANCE_LABEL = "Insurances during construction"
+# Libelle different entre versions ("Insurances during construction..." en
+# V1_20261001, "Insurances construction..." en V2) - 2 morceaux requis plutot
+# qu'une chaine complete, pour matcher les deux sans ambiguite avec la
+# nouvelle ligne "Insurances operation (% Capex + 1y incomes)" de la V2.
+_INSURANCE_LABEL_PARTS = ("Insurances", "construction")
+# Nouveaux postes ICP V2 (section "Cost Owner : ASSET"/"Cost Owner : XXX",
+# ajoutes le 2026-10-08) - remplacent le repli Aurora "Insurance"/"Other" dans
+# `icp_opex_year1_keur` ; decision de l'utilisateur, 2026-10-08 : "je ne veux
+# plus reprendre aucune hypothese Aurora, tous nos couts viennent de la COPEX
+# Library maintenant" (voir docs/specs/copex_icp.md).
+_INSURANCE_OPERATION_LABEL_PARTS = ("Insurances", "operation")
+_ASSET_MGMT_CONSTRUCTION_LABEL = "Asset Management construction"
+_ASSET_MGMT_OPERATION_LABEL = "Asset Management operation"
+_OTHER_ADMIN_LABEL = "Other (Admin/Accounting/Communication)"
 _EPC_MARGIN_LABEL = "EPC Margin"
 _EPC_CONTINGENCY_LABEL = "EPC Contingency"
 _BATTERY_LABEL = "Batteries and PCS"
@@ -72,6 +91,20 @@ NTP_YEARS_BEFORE_COD = 1
 _POWER_LAW_FORMULA = re.compile(
     r"^=\s*(?P<coef>\d+(?:\.\d+)?)\s*\*.+\^\s*\(\s*(?P<exp>-?\d+(?:\.\d+)?)\s*\)\s*\*\s*1000\s*$"
 )
+
+# Les 2 nouvelles lignes ICP "Asset Management operation"/"Insurances operation"
+# (V2, 2026-10-08) ne sont pas des nombres mais du texte compose ("400€/MWh +
+# 18k€", "0,45% + 1y income") - jamais interprete par approximation : si le
+# texte ne correspond pas exactement a ce motif, `_read_formula_row` leve plutot
+# que de deviner (meme discipline "zero zero silencieux" que le reste du repo).
+_PER_MWH_PLUS_FLAT_FORMULA = re.compile(
+    r"^(?P<per_mwh>\d+(?:[.,]\d+)?)€/MWh \+ (?P<flat>\d+(?:[.,]\d+)?)k€$"
+)
+_PCT_PLUS_1Y_INCOME_FORMULA = re.compile(r"^(?P<pct>\d+(?:[.,]\d+)?)% \+ 1y income$")
+
+
+def _fr_float(text: str) -> float:
+    return float(text.replace(",", "."))
 
 
 @dataclass(frozen=True)
@@ -97,6 +130,10 @@ class IcpCostLibrary:
     insurance_construction_pct: dict[str, float]  # segment -> %
     epc_margin_pct: dict[str, float]  # segment -> %
     epc_contingency_pct: dict[str, float] = field(default_factory=dict)  # segment -> %
+    insurance_operation_pct: dict[str, float] = field(default_factory=dict)  # segment -> %
+    # segment -> (eur par MWh d'energie utile, k€ forfait) - formule ICP "Asset
+    # Management operation (annual cost)" = "400€/MWh + 18k€".
+    asset_management_operation: dict[str, tuple[float, float]] = field(default_factory=dict)
 
 
 def _unit_from_number_format(fmt: str) -> str:
@@ -125,38 +162,78 @@ def _sheet(wb):
 
 
 def _find_row(ws, *label_parts: str) -> int:
-    """1re ligne dont le libelle (colonne A) contient tous les morceaux - le
-    bloc ICP precede les blocs Aurora de reference du meme onglet, qui
-    reutilisent certains libelles ('Grid connection')."""
+    """1re ligne dont le libelle (colonnes A..E, voir `_LABEL_SEARCH_MAX_COL`)
+    contient tous les morceaux - le bloc ICP precede les blocs Aurora de
+    reference du meme onglet, qui reutilisent certains libelles ('Grid
+    connection')."""
     for row in range(1, ws.max_row + 1):
-        value = ws.cell(row=row, column=1).value
-        if isinstance(value, str) and all(part in value for part in label_parts):
-            return row
+        for col in range(1, _LABEL_SEARCH_MAX_COL + 1):
+            value = ws.cell(row=row, column=col).value
+            if isinstance(value, str) and all(part in value for part in label_parts):
+                return row
     raise ValueError(f"Row {' + '.join(repr(p) for p in label_parts)} not found in {ws.title}.")
 
 
-def _header(ws) -> tuple[int, dict[int, str], dict[int, int]]:
-    """(ligne d'en-tete, {colonne: segment}, {colonne: annee}) - les segments
-    precedent la 1re annee du "Forecast price factor" sur la ligne "Case"."""
-    row = next(
-        (
-            r
-            for r in range(1, ws.max_row + 1)
-            if isinstance(ws.cell(r, 1).value, str) and ws.cell(r, 1).value.strip() == _HEADER_LABEL
-        ),
-        None,
+_MIN_YEAR_RUN = 3  # au moins 3 annees consecutives pour eviter un faux positif isole
+
+
+def _column_has_numeric_value_below(ws, header_row: int, col: int, max_rows: int = 40) -> bool:
+    last_row = min(ws.max_row, header_row + max_rows)
+    return any(
+        isinstance(ws.cell(row, col).value, (int, float))
+        for row in range(header_row + 1, last_row + 1)
     )
-    if row is None:
-        raise ValueError(f"Header row '{_HEADER_LABEL}' not found in {ws.title}.")
-    segments: dict[int, str] = {}
-    years: dict[int, int] = {}
-    for col in range(2, ws.max_column + 1):
-        value = ws.cell(row, col).value
-        if isinstance(value, (int, float)) and 2000 <= value <= 2100:
-            years[col] = int(value)
-        elif isinstance(value, str) and value.strip() and not years:
-            segments[col] = value.strip()
-    return row, segments, years
+
+
+def _header(ws) -> tuple[int, dict[int, str], dict[int, int]]:
+    """(ligne d'en-tete, {colonne: segment}, {colonne: annee}) - ancre sur le
+    bloc d'annees "Forecast price factor" (>= `_MIN_YEAR_RUN` annees 2000-2100
+    consecutives), PAS sur le libelle de la cellule de tete de ligne : celui-ci
+    a deja change 2 fois sans changement de sens ("Case" en V1_20261001,
+    "Cost Owner : EPC" en V2 revisee le 2026-10-08) - plus robuste de reperer
+    la structure (segments puis annees) que de suivre un libelle cosmetique."""
+    for row in range(1, ws.max_row + 1):
+        for col in range(1, ws.max_column + 1):
+            value = ws.cell(row, col).value
+            if not (isinstance(value, (int, float)) and 2000 <= value <= 2100):
+                continue
+            run_end = col
+            while run_end <= ws.max_column:
+                v = ws.cell(row, run_end).value
+                if isinstance(v, (int, float)) and 2000 <= v <= 2100:
+                    run_end += 1
+                else:
+                    break
+            if run_end - col < _MIN_YEAR_RUN:
+                continue
+            years = {c: int(ws.cell(row, c).value) for c in range(col, run_end)}
+            segments: dict[int, str] = {}
+            c = col - 1
+            while c >= 1 and ws.cell(row, c).value is None:
+                c -= 1  # saute un eventuel trou entre les segments et les annees
+            while c >= 1:
+                v = ws.cell(row, c).value
+                if isinstance(v, str) and v.strip():
+                    segments[c] = v.strip()
+                    c -= 1
+                else:
+                    break
+            # La colonne de libelle de ligne ('Case' en V1, 'Cost Owner : EPC'
+            # en V2) est immediatement adjacente aux vrais segments et contient
+            # aussi du texte sur la ligne d'en-tete - indiscernable d'un segment
+            # par le seul balayage ci-dessus. Mais contrairement a un vrai
+            # segment, elle ne contient JAMAIS de nombre sur les lignes de
+            # donnees (toujours le libelle de la ligne, en texte) - on l'exclut
+            # sur ce critere plutot que de deviner une position de colonne.
+            segments = {
+                c: s for c, s in segments.items() if _column_has_numeric_value_below(ws, row, c)
+            }
+            if segments:
+                return row, segments, years
+    raise ValueError(
+        f"Bloc d'annees 'Forecast price factor' (>= {_MIN_YEAR_RUN} annees consecutives "
+        f"2000-2100) introuvable dans {ws.title}."
+    )
 
 
 def _read_escalation(ws, row: int, years: dict[int, int]) -> dict[int, float]:
@@ -203,9 +280,41 @@ def _read_line_item_row(
     return by_segment
 
 
+def _read_formula_row(
+    ws_values, row: int, segments: dict[int, str], pattern: re.Pattern[str]
+) -> dict[str, re.Match[str]]:
+    """Comme `_read_line_item_row`, pour les lignes ICP dont la valeur est du
+    texte compose (ex. '400€/MWh + 18k€') plutot qu'un nombre. Leve si le texte
+    ne correspond pas exactement au motif attendu, plutot que de l'ignorer
+    silencieusement - un futur changement de redaction de la cellule doit
+    casser bruyamment, pas se traduire par un poste a 0."""
+    by_segment: dict[str, re.Match[str]] = {}
+    for col, segment in segments.items():
+        cell = ws_values.cell(row, col)
+        if not isinstance(cell.value, str):
+            continue
+        match = pattern.match(cell.value.strip())
+        if match is None:
+            raise ValueError(
+                f"{ws_values.title}!{cell.coordinate}: unexpected text {cell.value!r} "
+                f"(expected to match {pattern.pattern!r})."
+            )
+        previous = by_segment.get(segment)
+        if previous is not None and previous.groupdict() != match.groupdict():
+            raise ValueError(
+                f"{ws_values.title}!{cell.coordinate}: two '{segment}' columns with different "
+                f"values ({previous.groupdict()} vs {match.groupdict()})."
+            )
+        by_segment.setdefault(segment, match)
+    return by_segment
+
+
 def _version(ws) -> Any:
-    """Version du fichier (ex. 'V1_20261001' en B1) ou date de mise a jour."""
-    for row in ws.iter_rows(min_row=1, max_row=3):
+    """Version du fichier (ex. 'V1_20261001' en B1, ou 'V2 - JFE - 20261008' sur
+    la ligne de mapping segment->tension en V2) ou date de mise a jour. Plage de
+    lignes elargie a 15 (pas juste 1-3) depuis le decalage de la V2 (5 lignes
+    vides en tete de l'onglet)."""
+    for row in ws.iter_rows(min_row=1, max_row=15):
         for cell in row:
             if hasattr(cell.value, "year"):
                 return cell.value
@@ -223,6 +332,8 @@ def load_icp_library(path: Path = DEFAULT_ICP_PATH) -> IcpCostLibrary:
         label: _find_row(ws, label) for label in [*_DIRECT_CAPEX_LABELS, _GRID_CONNECTION_LABEL]
     }
     rows[_OM_LABEL] = _find_row(ws, _OM_LABEL)
+    rows[_ASSET_MGMT_CONSTRUCTION_LABEL] = _find_row(ws, _ASSET_MGMT_CONSTRUCTION_LABEL)
+    rows[_OTHER_ADMIN_LABEL] = _find_row(ws, _OTHER_ADMIN_LABEL)
     for duree_h in _DURATIONS_H:
         rows[battery_label(duree_h)] = _find_row(ws, _BATTERY_LABEL, f"- {duree_h}h")
         rows[guarantees_label(duree_h)] = _find_row(ws, _GUARANTEES_LABEL, f"- {duree_h}h")
@@ -244,22 +355,41 @@ def load_icp_library(path: Path = DEFAULT_ICP_PATH) -> IcpCostLibrary:
         for segment, cell in line_items[_OM_LABEL].items()
     }
 
-    def _pct(label: str) -> dict[str, float]:
+    def _pct(*label_parts: str) -> dict[str, float]:
         try:
-            row = _find_row(ws, label)
+            row = _find_row(ws, *label_parts)
         except ValueError:
             return {}
         return {
             seg: c.value for seg, c in _read_line_item_row(ws, ws_formulas, row, segments).items()
         }
 
+    asset_mgmt_operation_row = _find_row(ws, _ASSET_MGMT_OPERATION_LABEL)
+    asset_management_operation = {
+        seg: (_fr_float(m["per_mwh"]), _fr_float(m["flat"]))
+        for seg, m in _read_formula_row(
+            ws, asset_mgmt_operation_row, segments, _PER_MWH_PLUS_FLAT_FORMULA
+        ).items()
+    }
+    escalation[_ASSET_MGMT_OPERATION_LABEL] = _read_escalation(ws, asset_mgmt_operation_row, years)
+
+    insurance_operation_row = _find_row(ws, *_INSURANCE_OPERATION_LABEL_PARTS)
+    insurance_operation_pct = {
+        seg: _fr_float(m["pct"]) / 100.0
+        for seg, m in _read_formula_row(
+            ws, insurance_operation_row, segments, _PCT_PLUS_1Y_INCOME_FORMULA
+        ).items()
+    }
+
     return IcpCostLibrary(
         version=_version(ws),
         line_items=line_items,
         escalation=escalation,
-        insurance_construction_pct=_pct(_INSURANCE_LABEL),
+        insurance_construction_pct=_pct(*_INSURANCE_LABEL_PARTS),
         epc_margin_pct=_pct(_EPC_MARGIN_LABEL),
         epc_contingency_pct=_pct(_EPC_CONTINGENCY_LABEL),
+        insurance_operation_pct=insurance_operation_pct,
+        asset_management_operation=asset_management_operation,
     )
 
 
@@ -284,7 +414,7 @@ def load_icp_library_cached(path: Path = DEFAULT_ICP_PATH) -> IcpCostLibrary:
     return _cached_icp_library(str(path))
 
 
-def _icp_escalation_factor(escalation: dict[int, float], ntp_year: int) -> float:
+def icp_escalation_factor(escalation: dict[int, float], ntp_year: int) -> float:
     """Multiplicateur du "Forecast price factor" pour cette annee de NTP - 1.0
     avant la 1re annee de la table (annee de base), plafonne sur la derniere
     annee connue au-dela (meme philosophie que `dev_case.escalated_unit_cost`)."""
@@ -329,7 +459,7 @@ def _icp_line_item_keur(
     cell = icp_library.line_items[label].get(segment)
     if cell is None:
         return None
-    escalation = _icp_escalation_factor(
+    escalation = icp_escalation_factor(
         icp_library.escalation[label], cod_year - NTP_YEARS_BEFORE_COD
     )
     return _scaled_cost_keur(cell, power_mw=power_mw, duree_h=duree_h) * escalation
@@ -367,6 +497,27 @@ def icp_opex_guarantees_annualized_keur(
     return total_15y / GUARANTEES_DURATION_YEARS
 
 
+def icp_asset_management_operation_keur(
+    icp_library: IcpCostLibrary, *, segment: str, duree_h: int, power_mw: float, cod_year: int
+) -> float | None:
+    """400€/MWh d'energie utile + 18k€ forfait (formule ICP "Asset Management
+    operation (annual cost)"), escaladee sur l'annee de NTP comme les autres
+    postes OPEX. Nouveau poste ICP, 2026-10-08, sans equivalent Aurora -
+    purement additif (pas de ligne a remplacer dans `icp_opex_year1_keur`).
+    `None` si le segment n'a pas cette ligne (jamais pour les segments ICP
+    couverts en pratique)."""
+    terms = icp_library.asset_management_operation.get(segment)
+    if terms is None:
+        return None
+    per_mwh_eur, flat_keur = terms
+    escalation = icp_escalation_factor(
+        icp_library.escalation.get(_ASSET_MGMT_OPERATION_LABEL, {}),
+        cod_year - NTP_YEARS_BEFORE_COD,
+    )
+    mwh = power_mw * duree_h
+    return (per_mwh_eur * mwh / 1000.0 + flat_keur) * escalation
+
+
 def construction_markup_factor(icp_library: IcpCostLibrary, segment: str) -> float:
     """(1 + marge EPC) x (1 + aleas EPC) x (1 + assurance construction) - appliques
     aux postes directs de construction, jamais au raccordement ni au developpement."""
@@ -393,10 +544,13 @@ def icp_capex_total_keur(
     (somme des postes directs ICP : Batteries+PCS, Electrical works, Civil
     works, HV Transformer, HV/MV substation, Communication, Other BoP,
     Integration) x (1 + EPC Margin) x (1 + EPC Contingency) x (1 + Insurance
-    during construction) - voir `construction_markup_factor` - + Development (additif, hors perimetre EPC/assurance construction - couts
-    de developpement/origination, pas de construction - voir
-    docs/specs/copex_icp.md) : `development_keur` si fourni (le DSA du projet,
-    voir `portfolio.resolved_devex_and_dsa_keur`), sinon la ligne Aurora.
+    during construction) - voir `construction_markup_factor` - + Development
+    + Asset Management construction (tous deux additifs, hors perimetre
+    EPC/assurance construction - "Cost Owner : ASSET", pas "Cost Owner : EPC" -
+    voir docs/specs/copex_icp.md) : `development_keur` si fourni (le DSA du
+    projet, voir `portfolio.resolved_devex_and_dsa_keur`), sinon la ligne
+    Aurora ; Asset Management construction toujours depuis ICP (poste 2026-10-08,
+    pas d'equivalent Aurora).
 
     Assurance appliquee sur le total incluant la marge EPC (convention
     "Total Capex" = travaux + marge EPC, assurance Construction All Risks
@@ -446,6 +600,18 @@ def icp_capex_total_keur(
 
     construction_keur = direct_keur * construction_markup_factor(icp_library, segment)
 
+    asset_mgmt_construction_keur = _icp_line_item_keur(
+        icp_library,
+        _ASSET_MGMT_CONSTRUCTION_LABEL,
+        segment,
+        power_mw=power_mw,
+        duree_h=duree_h,
+        cod_year=cod_year,
+    )
+    if asset_mgmt_construction_keur is None:
+        asset_mgmt_construction_keur = 0.0
+        missing.append(_ASSET_MGMT_CONSTRUCTION_LABEL)
+
     if development_keur is None:
         key = voltage_duration_key(tension, duree_h)
         development_keur = (
@@ -462,7 +628,7 @@ def icp_capex_total_keur(
     if missing:
         notes.append(f"Postes ICP absents pour {segment} (repli Aurora) : {', '.join(missing)}.")
 
-    return construction_keur + development_keur, notes
+    return construction_keur + development_keur + asset_mgmt_construction_keur, notes
 
 
 def icp_eol_eligible_capex_keur(
@@ -571,13 +737,37 @@ def icp_opex_year1_keur(
     power_mw: float,
     icp_library: IcpCostLibrary,
     aurora_library: CopexLibrary,
+    capex_total_keur: float = 0.0,
+    revenue_year1_keur: float = 0.0,
 ) -> tuple[float, list[str]]:
     """OPEX annuel (hors loyer foncier utilisateur, ajoute a part comme avant) :
 
-    ICP O&M (remplace le 'Fixed O&M' Aurora) + ICP Guarantees/15 ans (nouveau
-    poste, pas d'equivalent Aurora) + Aurora Insurance/Grid charges/Land
-    lease(ligne bibliotheque)/Accise/Other (ICP ne couvre aucun de ces 5
-    postes - voir docs/specs/copex_icp.md)."""
+    ICP O&M (remplace le 'Fixed O&M' Aurora) + ICP Guarantees/15 ans + ICP
+    Insurances operation + ICP Other (Admin/Accounting/Communication) + ICP
+    Asset Management operation (ces 3 derniers remplacent le repli Aurora
+    "Insurance"/"Other" depuis le 2026-10-08 - plus de poste OPEX generique
+    Aurora en dehors de Grid charges/Land lease/Accise, voir ci-dessous) +
+    Aurora Grid charges/Land lease(ligne bibliotheque)/Accise (ICP ne couvre
+    toujours pas ces 3 postes - voir docs/specs/copex_icp.md).
+
+    - "Insurances operation (% Capex + 1y incomes)" = `insurance_operation_pct`
+      x (`capex_total_keur` + `revenue_year1_keur`) - demande de l'utilisateur,
+      2026-10-08 ("je ne veux plus reprendre aucune hypothese Aurora, tous nos
+      couts viennent de la COPEX Library") ; pas d'escalade (le CAPEX et le
+      revenu passes sont deja les montants reels de l'annee consideree, la
+      ligne n'a d'ailleurs pas de "Forecast price factor" dans le fichier).
+      `capex_total_keur`/`revenue_year1_keur` a 0.0 (defaut) quand l'appelant
+      ne les fournit pas (ex. tests unitaires isoles, `copex_comparison.py`) -
+      le cout est alors sous-estime (CAPEX seul), jamais sur-estime.
+    - "Asset Management operation" = 400€/MWh d'energie utile + 18k€, escalade
+      - voir `icp_asset_management_operation_keur`. Nouveau poste, purement
+      additif (pas d'equivalent Aurora a remplacer).
+
+    Note : Grid charges et Accise, tels que renvoyes ici, sont ensuite
+    remplaces par `aur_cases._opex_with_grid_charges` (calcul precis TURPE
+    Power/CTA/Accise, voir docs/specs/opex_grid_charges.md) dans le chemin
+    par defaut (`aur_cases.capex_and_opex_keur`) - cette fonction-ci reste le
+    repli Aurora brut utilise tel quel par `capex_and_opex_keur_aurora_only`."""
     segment = TENSION_TO_ICP_SEGMENT.get(tension)
     key = voltage_duration_key(tension, duree_h)
     aurora_unit_costs = aurora_library.opex_unit_costs.get(key, {})
@@ -619,7 +809,7 @@ def icp_opex_year1_keur(
         icp_library, segment=segment, duree_h=duree_h, power_mw=power_mw, cod_year=cod_year
     )
 
-    fallback_labels = ["Insurance", "Grid charges", "Land lease", "Accise", "Other"]
+    fallback_labels = ["Grid charges", "Land lease", "Accise"]
     fallback_cost = (
         sum(
             escalated_unit_cost(
@@ -632,11 +822,66 @@ def icp_opex_year1_keur(
         * power_mw
     )
     notes.append(
-        "Insurance/Grid charges/Land lease(bibliotheque)/Accise/Other : source Aurora "
-        "COPEX_library (absents d'ICP)."
+        "Grid charges/Land lease(bibliotheque)/Accise : source Aurora COPEX_library "
+        "(absents d'ICP - Grid charges/Accise remplaces en aval par un calcul precis, "
+        "voir core/opex_grid_charges.py ; Land lease remplace par land_lease_opex_keur "
+        "si renseigne)."
     )
 
-    return om_cost + guarantees_cost + fallback_cost, notes
+    insurance_operation_pct = icp_library.insurance_operation_pct.get(segment)
+    if insurance_operation_pct is not None:
+        insurance_operation_cost = insurance_operation_pct * (capex_total_keur + revenue_year1_keur)
+        notes.append("OPEX Insurance (operation) : ICP, 0,45% x (CAPEX total + revenu annee 1).")
+    else:
+        insurance_operation_cost = (
+            escalated_unit_cost(
+                aurora_unit_costs.get("Insurance", 0.0),
+                aurora_library.opex_escalation.get("Insurance", {}),
+                cod_year,
+            )
+            * power_mw
+        )
+        notes.append("OPEX Insurance (operation) : source Aurora COPEX_library (poste ICP absent).")
+
+    other_admin_cost = _icp_line_item_keur(
+        icp_library,
+        _OTHER_ADMIN_LABEL,
+        segment,
+        power_mw=power_mw,
+        duree_h=duree_h,
+        cod_year=cod_year,
+    )
+    if other_admin_cost is None:
+        other_admin_cost = (
+            escalated_unit_cost(
+                aurora_unit_costs.get("Other", 0.0),
+                aurora_library.opex_escalation.get("Other", {}),
+                cod_year,
+            )
+            * power_mw
+        )
+        notes.append("OPEX Other : source Aurora COPEX_library (poste ICP absent).")
+    else:
+        notes.append("OPEX Other (Admin/Accounting/Communication) : ICP.")
+
+    asset_management_operation_cost = icp_asset_management_operation_keur(
+        icp_library, segment=segment, duree_h=duree_h, power_mw=power_mw, cod_year=cod_year
+    )
+    if asset_management_operation_cost is None:
+        asset_management_operation_cost = 0.0
+    else:
+        notes.append(
+            "OPEX Asset Management (operation) : ICP, nouveau poste (pas d'equivalent Aurora)."
+        )
+
+    return (
+        om_cost
+        + guarantees_cost
+        + fallback_cost
+        + insurance_operation_cost
+        + other_admin_cost
+        + asset_management_operation_cost
+    ), notes
 
 
 def icp_repowering_capex_keur(
@@ -699,8 +944,14 @@ def capex_opex_source_notes(tension: str) -> list[str]:
         "l'annee de NTP (COD - 1).",
         "CAPEX Development : DSA du projet (marge de dev cible par MW selon la duree + DEVEX "
         "selon la tension, ou l'override DSA) - absent d'ICP. Jamais en OPEX.",
-        "OPEX O&M + garanties/maintenance preventive (15 ans, etalees) : source ICP.",
-        "OPEX Insurance/Grid charges/Land lease(bibliotheque)/Accise/Other : source Aurora "
-        "COPEX_library (absents d'ICP) - le loyer foncier saisi manuellement ci-dessous "
-        "remplace la ligne Land lease de la bibliotheque.",
+        "CAPEX Asset Management (construction) : source ICP, ajoute apres la marge EPC "
+        "(hors perimetre EPC/assurance construction).",
+        "OPEX O&M + garanties/maintenance preventive (15 ans, etalees) + Insurance (operation, "
+        "0,45% x (CAPEX + revenu an 1)) + Other (Admin/Accounting/Communication) + Asset "
+        "Management (operation) : source ICP.",
+        "OPEX Land lease(bibliotheque) : source Aurora COPEX_library (absent d'ICP) - le "
+        "loyer foncier saisi manuellement ci-dessous remplace cette ligne.",
+        "OPEX Grid charges (TURPE Power + CTA) et Accise (auxiliaires + pertes) : calcul "
+        "precis depuis les tarifs/volumes reels (docs/specs/opex_grid_charges.md), pas la "
+        "ligne generique Aurora.",
     ]

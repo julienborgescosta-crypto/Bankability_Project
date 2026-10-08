@@ -215,7 +215,7 @@ def sample_summary_bp_path() -> Path:
 def sample_aurora_bp_path() -> Path:
     """Format complet + onglets Aurora (AU_Store, Source BP, BP Aurora, cas de
     developpement) - donnees fictives, voir README section "Donnees confidentielles"."""
-    path = SAMPLE_DATA_DIR / "160926_BP_Stockage_Standalone__.xlsx"
+    path = SAMPLE_DATA_DIR / "081026_BP_Stockage_Standalone__.xlsx"
     assert path.exists(), "Fixture manquante - voir README pour la provenance du fichier"
     return path
 

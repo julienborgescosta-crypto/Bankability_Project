@@ -161,7 +161,7 @@ def merge_copex_libraries(primary: CopexLibrary, fallback: CopexLibrary) -> Cope
 
 def load_copex_library_q2_2026(path: Path = DEFAULT_COPEX_LIBRARY_Q2_2026_PATH) -> CopexLibrary:
     """Deuxieme jeu d'hypotheses CAPEX/OPEX Aurora, independant du `COPEX_library`
-    lu depuis `sample_data/160926_BP_Stockage_Standalone__.xlsx` (celui-la reste
+    lu depuis `sample_data/081026_BP_Stockage_Standalone__.xlsx` (celui-la reste
     la base par defaut - demande explicite de l'utilisateur, 2026-10-01, de ne
     pas remplacer ses hypotheses existantes). Cette bibliotheque-ci vient du
     databook Aurora Q2 2026 fourni par l'utilisateur (onglet 'Costs assumptions'),

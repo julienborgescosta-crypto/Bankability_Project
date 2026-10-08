@@ -18,7 +18,7 @@ from typing import Any
 
 import yaml
 
-from . import copex_icp, soh_degradation
+from . import copex_icp, opex_grid_charges, soh_degradation
 from .bp_parser import _normalize, load_grid
 from .dev_case import (
     CAPEX_GRID_CONNECTION_LABEL,
@@ -697,19 +697,177 @@ def _opex_with_land_lease_override(
     docs/specs/portfolio.md)."""
     if not land_lease_opex_keur:
         return opex_keur
-    key = voltage_duration_key(tension, duree_h)
-    aurora_land_lease_keur = (
-        escalated_unit_cost(
-            copex_library.opex_unit_costs.get(key, {}).get("Land lease", 0.0),
-            copex_library.opex_escalation.get("Land lease", {}),
-            cod_year,
-        )
-        * power_mw
+    aurora_land_lease_keur = _library_land_lease_keur(
+        tension=tension,
+        duree_h=duree_h,
+        cod_year=cod_year,
+        power_mw=power_mw,
+        copex_library=copex_library,
     )
     return opex_keur - aurora_land_lease_keur + land_lease_opex_keur
 
 
+def _library_opex_line_keur(
+    label: str,
+    *,
+    tension: str,
+    duree_h: int,
+    cod_year: int,
+    power_mw: float,
+    copex_library: CopexLibrary,
+) -> float:
+    """Valeur d'une ligne OPEX generique Aurora (celle sommee dans
+    `OPEX_LINE_ITEMS`/`icp_opex_year1_keur`), isolee pour etre remplacee par
+    un calcul plus precis sans compter le poste 2 fois - voir
+    `_opex_with_land_lease_override`/`_opex_with_grid_charges`."""
+    key = voltage_duration_key(tension, duree_h)
+    return (
+        escalated_unit_cost(
+            copex_library.opex_unit_costs.get(key, {}).get(label, 0.0),
+            copex_library.opex_escalation.get(label, {}),
+            cod_year,
+        )
+        * power_mw
+    )
+
+
+def _library_land_lease_keur(
+    *, tension: str, duree_h: int, cod_year: int, power_mw: float, copex_library: CopexLibrary
+) -> float:
+    return _library_opex_line_keur(
+        "Land lease",
+        tension=tension,
+        duree_h=duree_h,
+        cod_year=cod_year,
+        power_mw=power_mw,
+        copex_library=copex_library,
+    )
+
+
+def _opex_with_grid_charges(
+    opex_keur: float,
+    *,
+    tension: str,
+    duree_h: int,
+    cod_year: int,
+    power_mw: float,
+    copex_library: CopexLibrary,
+) -> float:
+    """`opex_keur` inclut deja les lignes 'Grid charges' (part fixe du TURPE +
+    CTA, voir `_opex_with_turpe_50pct_reduction`) et 'Accise' generiques
+    d'Aurora (toujours sommees dans `OPEX_LINE_ITEMS`, que la source soit ICP
+    ou Aurora seul). Demande de l'utilisateur, 2026-10-08 : les REMPLACE par
+    le calcul precis du BP reel (TURPE Power + CTA + Accise, base
+    auxiliaires+pertes - voir `core/opex_grid_charges.py`) plutot que de
+    l'additionner par-dessus, sous peine de compter ces 2 postes deux fois -
+    meme principe que `_opex_with_land_lease_override`. S'applique toujours
+    (pas un override optionnel comme loyer foncier/abattement TURPE) : c'est
+    une correction du modele de base, pas un levier a activer."""
+    aurora_grid_charges_keur = _library_opex_line_keur(
+        "Grid charges",
+        tension=tension,
+        duree_h=duree_h,
+        cod_year=cod_year,
+        power_mw=power_mw,
+        copex_library=copex_library,
+    )
+    aurora_accise_keur = _library_opex_line_keur(
+        "Accise",
+        tension=tension,
+        duree_h=duree_h,
+        cod_year=cod_year,
+        power_mw=power_mw,
+        copex_library=copex_library,
+    )
+    precise_keur, _ = opex_grid_charges.grid_charges_opex_keur(
+        tension=tension, duree_h=duree_h, power_mw=power_mw, cod_year=cod_year
+    )
+    return opex_keur - aurora_grid_charges_keur - aurora_accise_keur + precise_keur
+
+
+def land_lease_year1_keur(
+    *,
+    tension: str,
+    duree_h: int,
+    cod_year: int,
+    power_mw: float,
+    copex_library: CopexLibrary,
+    land_lease_opex_keur: float = 0.0,
+) -> float:
+    """Loyer foncier effectivement inclus dans l'OPEX de l'op-year 1 : le loyer
+    manuel s'il est renseigne (!=0), sinon la ligne 'Land lease' generique de
+    la bibliotheque - meme regle de remplacement que
+    `_opex_with_land_lease_override`."""
+    if land_lease_opex_keur:
+        return land_lease_opex_keur
+    return _library_land_lease_keur(
+        tension=tension,
+        duree_h=duree_h,
+        cod_year=cod_year,
+        power_mw=power_mw,
+        copex_library=copex_library,
+    )
+
+
+def opex_series_keur(
+    opex_year1_keur: float,
+    *,
+    operating_years: int,
+    land_lease_year1_keur: float = 0.0,
+    land_lease_indexation_pct: float = 0.0,
+) -> list[float]:
+    """OPEX par op-year (magnitudes positives) : plat a la valeur de l'op-year 1
+    (convention Aurora), sauf le loyer foncier quand `land_lease_indexation_pct`
+    est renseigne - demande de l'utilisateur, 2026-10-07 : indexer le loyer au
+    taux choisi. Le loyer saisi est celui de l'op-year 1 (annee de COD), indexe
+    a partir de l'op-year 2 : loyer_N = loyer_1 x (1 + taux)^(N-1). Les autres
+    postes OPEX restent plats."""
+    return [
+        opex_year1_keur + land_lease_year1_keur * ((1 + land_lease_indexation_pct) ** i - 1)
+        for i in range(operating_years)
+    ]
+
+
 def _opex_with_turpe_50pct_reduction(
+    opex_keur: float,
+    *,
+    tension: str,
+    cod_year: int,
+    power_mw: float,
+    turpe_50pct_reduction: bool,
+) -> float:
+    """Reduit de 50% la part TURPE Power + CTA (acheminement) de `opex_keur` -
+    voir docs/specs/turpe_50pct_reduction.md. La reglementation (code de
+    l'energie, annexe art. D.341-9) reduit la "part acheminement" dans son
+    ensemble, jamais le TURPE variable cote revenu (deja reduit separement,
+    courbe AU_Store distincte - meme doc, "Mise en garde TURPE") ni l'Accise
+    (une taxe, pas une charge d'acheminement).
+
+    Depuis le calcul precis du 2026-10-08 (`_opex_with_grid_charges`,
+    `core/opex_grid_charges.py`), `opex_keur` porte TURPE Power + CTA reels
+    (BP) au lieu de la ligne 'Grid charges' generique d'Aurora - cette
+    fonction doit donc s'appliquer APRES `_opex_with_grid_charges` dans la
+    chaine d'ajustements, et reduire ce meme calcul precis, jamais la ligne
+    Aurora desormais remplacee (sous peine de reduire un montant qui n'est
+    plus dans le total - double-compte dans l'autre sens)."""
+    if not turpe_50pct_reduction:
+        return opex_keur
+    icp_escalation = copex_icp.load_icp_library_cached().escalation
+    terms = opex_grid_charges.grid_charges_terms_cached()
+    turpe_power_keur = opex_grid_charges.turpe_power_keur(
+        tension=tension,
+        power_mw=power_mw,
+        cod_year=cod_year,
+        terms=terms,
+        icp_escalation=icp_escalation,
+    )
+    cta_keur = opex_grid_charges.cta_keur(
+        tension=tension, turpe_power_value_keur=turpe_power_keur, terms=terms
+    )
+    return opex_keur - (turpe_power_keur + cta_keur) * 0.5
+
+
+def _opex_with_turpe_50pct_reduction_aurora_only(
     opex_keur: float,
     *,
     tension: str,
@@ -719,30 +877,21 @@ def _opex_with_turpe_50pct_reduction(
     copex_library: CopexLibrary,
     turpe_50pct_reduction: bool,
 ) -> float:
-    """`opex_keur` inclut deja la ligne 'Grid charges' generique d'Aurora
-    (part FIXE du TURPE + CTA - voir docs/specs/copex_comparison.md, "Mise
-    en garde TURPE" - toujours sommee dans `OPEX_LINE_ITEMS`, meme source
-    qu'ICP n'a jamais). Demande de l'utilisateur, 2026-10-01 : l'abattement
-    TURPE 50% (voir docs/specs/turpe_50pct_reduction.md) doit s'appliquer
-    aussi a cette part fixe, pas seulement au TURPE variable cote revenu
-    (`aur_cases.build_project_inputs`, 1ere version du 2026-10-01) - la
-    reglementation (code de l'energie, annexe art. D.341-9) reduit la "part
-    acheminement" dans son ensemble. Isole cette seule ligne (plutot
-    qu'escompter betement tout `opex_keur`, qui contient aussi O&M/
-    Insurance/Land lease/Accise/Other, jamais concernes) pour eviter tout
-    double-compte avec le TURPE variable (deja reduit separement, courbe
-    AU_Store distincte - voir meme doc, "Mise en garde TURPE") - meme
-    mecanisme que `_opex_with_land_lease_override`."""
+    """Variante de `_opex_with_turpe_50pct_reduction` pour
+    `capex_and_opex_keur_aurora_only` UNIQUEMENT : ce chemin reste
+    deliberement Aurora pur (voir `capex_and_opex_keur_aurora_only`, pas de
+    `_opex_with_grid_charges`), donc reduit la ligne 'Grid charges' generique
+    d'Aurora elle-meme, jamais le calcul precis `opex_grid_charges` (qui n'est
+    pas dans ce total)."""
     if not turpe_50pct_reduction:
         return opex_keur
-    key = voltage_duration_key(tension, duree_h)
-    aurora_grid_charges_keur = (
-        escalated_unit_cost(
-            copex_library.opex_unit_costs.get(key, {}).get("Grid charges", 0.0),
-            copex_library.opex_escalation.get("Grid charges", {}),
-            cod_year,
-        )
-        * power_mw
+    aurora_grid_charges_keur = _library_opex_line_keur(
+        "Grid charges",
+        tension=tension,
+        duree_h=duree_h,
+        cod_year=cod_year,
+        power_mw=power_mw,
+        copex_library=copex_library,
     )
     return opex_keur - aurora_grid_charges_keur * 0.5
 
@@ -760,18 +909,42 @@ def capex_and_opex_keur(
     land_lease_opex_keur: float = 0.0,
     turpe_50pct_reduction: bool = False,
     development_capex_keur: float | None = None,
+    revenue_year1_keur: float = 0.0,
 ) -> tuple[float, float]:
     """CAPEX/OPEX total - source primaire `config/copex_icp.xlsx` (couts
     unitaires QEF reels, "ICP", mis a jour mensuellement par l'utilisateur en
     remplacant ce fichier - voir `core/copex_icp.py`), avec repli sur
-    `copex_library` (Aurora `COPEX_library`) pour les postes qu'ICP ne couvre
-    pas : Development cote CAPEX ; Insurance/Grid charges/Land lease
-    (ligne bibliotheque)/Accise/Other cote OPEX ; HTB3 entierement (ICP n'a
-    pas de colonne pour cette tension, tout comme Aurora avant ce changement).
-    Decision de l'utilisateur, 2026-09-24, suite au constat qu'ICP donne des
-    couts reels/a jour la ou Aurora n'a qu'une estimation generique - voir
-    `docs/specs/copex_icp.md` pour le detail du mapping tension/segment et de
-    l'agregation (EPC Margin puis Insurance, sur le total incluant la marge).
+    `copex_library` (Aurora `COPEX_library`) uniquement pour les postes qu'ICP
+    ne couvre toujours pas : Land lease (ligne bibliotheque) cote OPEX quand
+    `land_lease_opex_keur` n'est pas renseigne ; HTB3 entierement (ICP n'a pas
+    de colonne pour cette tension, tout comme Aurora avant ce changement).
+    Decision de l'utilisateur, 2026-09-24 puis 2026-10-08 ("je ne veux plus
+    reprendre aucune hypothese Aurora, tous nos couts viennent de la COPEX
+    Library maintenant") - voir `docs/specs/copex_icp.md` pour le detail du
+    mapping tension/segment et de l'agregation (EPC Margin puis Insurance, sur
+    le total incluant la marge).
+
+    Depuis le 2026-10-08, Asset Management (construction et operation),
+    Insurance (operation) et Other (Admin/Accounting/Communication) sont tous
+    sources ICP directement par `copex_icp` (voir
+    `icp_capex_total_keur`/`icp_opex_year1_keur`) - plus de repli Aurora
+    generique pour ces 4 postes (Development reste a part : source ICP s'il
+    n'y a aucun equivalent, mais toujours pilote par `development_capex_keur`,
+    voir plus bas). "Insurance (operation)" necessite `revenue_year1_keur`
+    (0,45% x (CAPEX total + revenu annee 1), formule ICP "% Capex + 1y
+    incomes") - 0.0 par defaut si l'appelant ne le fournit pas (sous-estime ce
+    seul poste, jamais une erreur silencieuse sur le reste de l'OPEX).
+
+    Les postes "Grid charges" et "Accise" ne viennent plus du repli Aurora
+    generique depuis le 2026-10-08 non plus : `_opex_with_grid_charges` les
+    remplace par un calcul precis (TURPE Power + CTA + Accise sur
+    auxiliaires/pertes, voir `core/opex_grid_charges.py` et
+    `docs/specs/opex_grid_charges.md`).
+
+    Tout ce qui precede est uniquement sur ce chemin (ICP) -
+    `capex_and_opex_keur_aurora_only` garde volontairement les lignes Aurora
+    brutes pour rester une base de comparaison "100% Aurora" pure (sauf quand
+    l'utilisateur coche explicitement cette option de comparaison).
 
     Seuls 2 postes restent challengeables individuellement (demande de
     l'utilisateur, 2026-09-23) : le CAPEX de raccordement
@@ -840,6 +1013,8 @@ def capex_and_opex_keur(
         power_mw=power_mw,
         icp_library=icp_library,
         aurora_library=copex_library,
+        capex_total_keur=capex_generic_keur + connection_keur,
+        revenue_year1_keur=revenue_year1_keur,
     )
     opex_keur = _opex_with_land_lease_override(
         opex_generic_keur,
@@ -850,13 +1025,19 @@ def capex_and_opex_keur(
         copex_library=copex_library,
         land_lease_opex_keur=land_lease_opex_keur,
     )
-    opex_keur = _opex_with_turpe_50pct_reduction(
+    opex_keur = _opex_with_grid_charges(
         opex_keur,
         tension=tension,
         duree_h=duree_h,
         cod_year=cod_year,
         power_mw=power_mw,
         copex_library=copex_library,
+    )
+    opex_keur = _opex_with_turpe_50pct_reduction(
+        opex_keur,
+        tension=tension,
+        cod_year=cod_year,
+        power_mw=power_mw,
         turpe_50pct_reduction=turpe_50pct_reduction,
     )
 
@@ -995,7 +1176,13 @@ def capex_and_opex_keur_aurora_only(
     `capex_and_opex_keur` (les 2 memes postes challengeables
     individuellement - raccordement/loyer foncier - restent source-independants,
     ce sont des valeurs/formules saisies directement, pas une hypothese
-    Aurora vs ICP)."""
+    Aurora vs ICP).
+
+    **Reste volontairement 100% Aurora** (contrairement a `capex_and_opex_keur`
+    depuis le 2026-10-08) : pas de `_opex_with_grid_charges` ici - sinon ce
+    chemin de comparaison "Aurora pur" ne serait plus pur. 'Grid charges'/
+    'Accise' restent donc la ligne generique Aurora, pas le calcul precis
+    `opex_grid_charges` - voir docs/specs/opex_grid_charges.md."""
     key = voltage_duration_key(tension, duree_h)
     if key not in copex_library.capex_unit_costs or key not in copex_library.opex_unit_costs:
         raise AuroraConfigError(
@@ -1052,7 +1239,7 @@ def capex_and_opex_keur_aurora_only(
         copex_library=copex_library,
         land_lease_opex_keur=land_lease_opex_keur,
     )
-    opex_keur = _opex_with_turpe_50pct_reduction(
+    opex_keur = _opex_with_turpe_50pct_reduction_aurora_only(
         opex_keur,
         tension=tension,
         duree_h=duree_h,
@@ -1137,6 +1324,7 @@ def build_project_inputs(
     manual_connection_capex_keur: float = 0.0,
     distance_rte_km: float = 0.0,
     land_lease_opex_keur: float = 0.0,
+    land_lease_indexation_pct: float = 0.0,
     capex_opex_source: str = "icp",
     turpe_50pct_reduction: bool = False,
     development_capex_keur: float | None = None,
@@ -1166,7 +1354,11 @@ def build_project_inputs(
     `ProjectInputs` deja construit. `development_capex_keur` : poste Development
     du CAPEX en mode ICP (le DSA du projet, fourni par `core/portfolio.py`) ;
     ignore en mode "aurora", qui garde la ligne Aurora pour reproduire ses TRI.
-    Le montant retenu est expose dans `ProjectInputs.development_capex_keur`."""
+    Le montant retenu est expose dans `ProjectInputs.development_capex_keur`.
+    `land_lease_indexation_pct` : indexation annuelle du loyer foncier (fraction,
+    0.02 = 2 %/an), appliquee au loyer effectivement retenu (manuel, ou ligne
+    bibliotheque a defaut) dans les 2 modes de `capex_opex_source` - voir
+    `opex_series_keur`. 0 (defaut) = OPEX plat, comme avant."""
     if turpe_50pct_reduction and config.tension not in ("HTB1", "HTB2", "HTB3"):
         raise AuroraConfigError(
             f"turpe_50pct_reduction requires a connection >=50kV (HTB1/HTB2/HTB3), "
@@ -1233,7 +1425,10 @@ def build_project_inputs(
         )
     else:
         capex_initial, opex_year1 = capex_and_opex_keur(
-            cod_year=cod_year, development_capex_keur=development_capex_keur, **cost_kwargs
+            cod_year=cod_year,
+            development_capex_keur=development_capex_keur,
+            revenue_year1_keur=revenue_series[0],
+            **cost_kwargs,
         )
         development_in_capex = (
             development_capex_keur
@@ -1243,10 +1438,25 @@ def build_project_inputs(
             )
         )
 
+    land_lease_year1 = land_lease_year1_keur(
+        tension=config.tension,
+        duree_h=config.duree_h,
+        cod_year=cod_year,
+        power_mw=power_mw,
+        copex_library=cost_library,
+        land_lease_opex_keur=land_lease_opex_keur,
+    )
+    operating_opex = opex_series_keur(
+        opex_year1,
+        operating_years=len(calendar_years),
+        land_lease_year1_keur=land_lease_year1,
+        land_lease_indexation_pct=land_lease_indexation_pct,
+    )
+
     length = len(calendar_years) + 1  # +1 pour l'annee de construction (COD - 1)
     years = [cod_year - 1] + calendar_years
     capex_keur = [-capex_initial] + [0.0] * len(calendar_years)
-    opex_keur = [0.0] + [-opex_year1] * len(calendar_years)
+    opex_keur = [0.0] + [-o for o in operating_opex]
     revenues_keur = [0.0] + revenue_series
     turpe_keur = [0.0] + turpe_series
     end_of_life_keur = [0.0] * length
